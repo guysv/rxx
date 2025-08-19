@@ -331,6 +331,22 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                     } => {
                         session_events.push(Event::Paste(win.clipboard()));
                     }
+                    // Intercept Ctrl+V (non-macOS) or Cmd+V (macOS) for pasting from clipboard
+                    platform::KeyboardInput {
+                        key: Some(platform::Key::V),
+                        state: platform::InputState::Pressed,
+                        modifiers: platform::ModifiersState { ctrl: true, .. },
+                    } => {
+                        session_events.push(Event::Paste(win.clipboard()));
+                    }
+                    #[cfg(target_os = "macos")]
+                    platform::KeyboardInput {
+                        key: Some(platform::Key::V),
+                        state: platform::InputState::Pressed,
+                        modifiers: platform::ModifiersState { meta: true, .. },
+                    } => {
+                        session_events.push(Event::Paste(win.clipboard()));
+                    }
                     _ => session_events.push(Event::KeyboardInput(input)),
                 },
                 WindowEvent::ReceivedCharacter(c, mods) => {
