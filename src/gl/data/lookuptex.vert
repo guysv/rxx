@@ -2,11 +2,11 @@ uniform mat4 ortho;
 uniform mat4 transform;
 
 in vec3  position;
-in vec2  uv;
+in vec2  uv;  // Normalized UV coordinates (0.0-1.0)
 in vec4  color;
 in float opacity;
 
-out vec2  f_uv;
+out vec2  f_uv;  // Pass normalized UVs to fragment shader
 out vec4  f_color;
 out float f_opacity;
 
@@ -21,7 +21,7 @@ vec3 linearize(vec3 srgb) {
 
 void main() {
 	f_color = vec4(linearize(color.rgb), color.a);
-	f_uv = uv;
+	f_uv = uv;  // Pass normalized UVs - fragment shader will convert to pixel coords
 	f_opacity = opacity;
 
 	gl_Position = ortho * transform * vec4(position, 1.0);
