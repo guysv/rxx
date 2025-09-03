@@ -236,6 +236,16 @@ impl<R> View<R> {
         }
     }
 
+    /// View file name, if any. Mutable version.
+    pub fn file_storage_mut(&mut self) -> Option<&mut FileStorage> {
+        match self.file_status {
+            FileStatus::New(ref mut f) => Some(f),
+            FileStatus::Modified(ref mut f) => Some(f),
+            FileStatus::Saved(ref mut f) => Some(f),
+            FileStatus::NoFile => None,
+        }
+    }
+
     /// Extend the view by one frame.
     pub fn extend(&mut self) {
         let w = self.width() as f32;
@@ -252,6 +262,9 @@ impl<R> View<R> {
         // Don't allow the view to have zero frames.
         if self.animation.len() > 1 {
             self.animation.frames.pop();
+            if let Some(storage) = self.file_storage_mut() {
+                storage.pop();
+            }
             self.resized();
         }
     }
@@ -643,6 +656,23 @@ impl FileStorage {
         match self {
             Self::Single(buf) => buf.as_path() == p.as_ref(),
             Self::Range(bufs) => bufs.iter().any(|buf| buf.as_path() == p.as_ref()),
+        }
+    }
+
+    pub fn add_path(&mut self, p: std::path::PathBuf) {
+        match self {
+            Self::Single(buf) => {
+                let bufs = vec![buf.clone(), p];
+                *self = Self::Range(NonEmpty::from_slice(bufs.as_slice()).unwrap());
+            },
+            Self::Range(bufs) => bufs.push(p),
+        }
+    }
+
+    pub fn pop(&mut self) {
+        match self {
+            Self::Single(_) => {}
+            Self::Range(bufs) => { bufs.pop(); }
         }
     }
 }
