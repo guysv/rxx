@@ -415,7 +415,7 @@ pub struct Circle {
 // Batch
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Batch {
     items: Vec<Shape>,
 }

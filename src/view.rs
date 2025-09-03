@@ -107,8 +107,8 @@ pub enum ViewOp {
     Resize(u32, u32),
     /// Paint a single pixel.
     SetPixel(Rgba8, i32, i32),
-    /// Generate initial lookup texture map for given area.
-    GenerateLookupTextureIR(Rect<f32>, Rect<f32>),
+    /// Generate intermediate lookup texture map for given area.
+    LookupTextureImDump,
 }
 
 /// A view on a sprite or image.
@@ -143,7 +143,7 @@ pub struct View<R> {
     saved_snapshot: Option<EditId>,
     /// Which other view is current one's lookup texture
     lookuptexture: Option<ViewId>,
-    lookuptexture_on: bool
+    lookuptexture_on: bool,
 }
 
 /// View animation.
@@ -309,6 +309,7 @@ impl<R> View<R> {
 
     pub fn paint_color(&mut self, color: Rgba8, x: i32, y: i32) {
         self.ops.push(ViewOp::SetPixel(color, x, y));
+        self.touch();
     }
 
     pub fn yank(&mut self, area: Rect<i32>) {
@@ -587,7 +588,10 @@ impl View<ViewResource> {
 
     /// Set another view as current view's lookup texture
     pub fn lookuptexture_set(&mut self, ltid: ViewId) {
-        assert!(self.id != ltid, "cannot set a view as its own lookup texture");
+        assert!(
+            self.id != ltid,
+            "cannot set a view as its own lookup texture"
+        );
         self.lookuptexture = Some(ltid);
     }
 
@@ -595,26 +599,22 @@ impl View<ViewResource> {
     pub fn lookuptexture_on(&mut self) {
         self.lookuptexture_on = true;
 
-        if self.animation.len() == 1 {
-            let width = self.width() as f32;
-            let (fw, fh) = (self.fw as f32, self.fh as f32);
-
-            self.extend();
-            // build initial intermediate map
-            self.ops.push(ViewOp::GenerateLookupTextureIR(
-                Rect::new(0., 0., fw as f32, fh),
-                Rect::new(width, 0., width + fw, fh),
-            ));
-        }
+        // if self.animation.len() == 1 {
+        //     self.extend();
+        // }
     }
 
     /// Set current view as a lookup texture
     pub fn lookuptexture_off(&mut self) {
         self.lookuptexture_on = false;
-        
+
         if self.animation.len() > 1 {
             self.shrink();
         }
+    }
+
+    pub fn lookuptexture_im_dump(&mut self) {
+        self.ops.push(ViewOp::LookupTextureImDump);
     }
 }
 
@@ -850,7 +850,7 @@ impl<R> ViewManager<R> {
     pub fn aftern(&self, id: ViewId, n: usize) -> Option<ViewId> {
         self.range(id..).nth(n)
     }
-    
+
     /// Get `ViewId` *before* given id.
     pub fn before(&self, id: ViewId) -> Option<ViewId> {
         self.range(..id).next_back()
@@ -867,7 +867,8 @@ impl<R> ViewManager<R> {
             self.aftern(id, n as usize)
         } else if n < 0 {
             self.beforen(id, n.abs() as usize - 1)
-        } else { // n == 0
+        } else {
+            // n == 0
             Some(id)
         }
     }

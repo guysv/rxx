@@ -40,7 +40,6 @@ use std::mem;
 use std::time;
 
 type Backend = gl33::GL33;
-type V2 = [f32; 2];
 type M44 = [[f32; 4]; 4];
 
 const SAMPLER: Sampler = Sampler {
@@ -133,18 +132,19 @@ struct Screen2dInterface {
 struct Lookuptex2dInterface {
     tex: Uniform<TextureBinding<Dim2, pixel::NormUnsigned>>,
     ltex: Uniform<TextureBinding<Dim2, pixel::NormUnsigned>>,
-    ltexreg: Uniform<V2>,
+    ltexim: Uniform<TextureBinding<Dim2, pixel::NormUnsigned>>,
+    // ltexreg: Uniform<V2>,
+    lt_tfw: Uniform<u32>,
     ortho: Uniform<M44>,
     transform: Uniform<M44>,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Vertex)]
-#[vertex(sem = "VertexSemantics")]
-#[rustfmt::skip]
-struct Lookuptex2dVertex {
-    #[allow(dead_code)] position: VertexPosition,
-    #[allow(dead_code)] uv: VertexUv,
+#[derive(UniformInterface)]
+struct Lookupmap2dInterface {
+    ortho: Uniform<M44>,
+    transform: Uniform<M44>,
+    tex: Uniform<TextureBinding<Dim2, pixel::NormUnsigned>>,
+    lt_tfw: Uniform<u32>,
 }
 
 pub struct Renderer {
@@ -174,17 +174,21 @@ pub struct Renderer {
     cursor2d: Program<Backend, VertexSemantics, (), Cursor2dInterface>,
     screen2d: Program<Backend, VertexSemantics, (), Screen2dInterface>,
     lookuptex2d: Program<Backend, VertexSemantics, (), Lookuptex2dInterface>,
+    lookupmap2d: Program<Backend, VertexSemantics, (), Lookupmap2dInterface>,
 
     view_data: BTreeMap<ViewId, RefCell<ViewData>>,
 }
 
 struct LayerData {
-    fb: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>,
+    fb: RefCell<Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>>,
+    lt_im: RefCell<Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>>,
+    lt_tfw: u32,
     tess: Tess<Backend, Sprite2dVertex>,
+    lt_tess: Tess<Backend, ()>,
 }
 
 impl LayerData {
-    fn new(w: u32, h: u32, pixels: Option<&[Rgba8]>, ctx: &mut Context) -> Self {
+    fn new(w: u32, h: u32, tfw: u32, pixels: Option<&[Rgba8]>, ctx: &mut Context) -> Self {
         let batch = sprite2d::Batch::singleton(
             w,
             h,
@@ -207,21 +211,40 @@ impl LayerData {
             .build()
             .unwrap();
 
+        let lt_tess = TessBuilder::new(ctx)
+            .set_vertex_nb((w * tfw) as usize)
+            .set_mode(Mode::Point)
+            .build()
+            .unwrap();
+
         let mut fb: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F> =
             Framebuffer::new(ctx, [w, h], 0, self::SAMPLER).unwrap();
+        let mut lt_im: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F> =
+            Framebuffer::new(ctx, [256 * 16, 256 * 16], 0, self::SAMPLER).unwrap();
 
         fb.color_slot().clear(GenMipmaps::No, (0, 0, 0, 0)).unwrap();
+        lt_im
+            .color_slot()
+            .clear(GenMipmaps::No, (0, 0, 0, 0))
+            .unwrap();
 
         if let Some(pixels) = pixels {
             let aligned = util::align_u8(pixels);
             fb.color_slot().upload_raw(GenMipmaps::No, aligned).unwrap();
         }
 
-        Self { fb, tess }
+        Self {
+            fb: RefCell::new(fb),
+            lt_im: RefCell::new(lt_im),
+            lt_tfw: tfw,
+            tess,
+            lt_tess,
+        }
     }
 
     fn clear(&mut self) -> Result<(), RendererError> {
         self.fb
+            .borrow_mut()
             .color_slot()
             .clear(GenMipmaps::No, (0, 0, 0, 0))
             .map_err(RendererError::Texture)
@@ -234,6 +257,7 @@ impl LayerData {
         texels: &[u8],
     ) -> Result<(), RendererError> {
         self.fb
+            .borrow_mut()
             .color_slot()
             .upload_part_raw(GenMipmaps::No, offset, size, texels)
             .map_err(RendererError::Texture)
@@ -241,6 +265,7 @@ impl LayerData {
 
     fn upload(&mut self, texels: &[u8]) -> Result<(), RendererError> {
         self.fb
+            .borrow_mut()
             .color_slot()
             .upload_raw(GenMipmaps::No, texels)
             .map_err(RendererError::Texture)
@@ -249,6 +274,7 @@ impl LayerData {
     fn pixels(&mut self) -> Vec<Rgba8> {
         let texels = self
             .fb
+            .borrow_mut()
             .color_slot()
             .get_raw_texels()
             .expect("getting raw texels never fails");
@@ -265,7 +291,7 @@ struct ViewData {
 }
 
 impl ViewData {
-    fn new(w: u32, h: u32, pixels: Option<&[Rgba8]>, ctx: &mut Context) -> Self {
+    fn new(w: u32, h: u32, tfw: u32, pixels: Option<&[Rgba8]>, ctx: &mut Context) -> Self {
         let mut staging_fb: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F> =
             Framebuffer::new(ctx, [w, h], 0, self::SAMPLER).unwrap();
 
@@ -275,7 +301,7 @@ impl ViewData {
             .unwrap();
 
         Self {
-            layer: LayerData::new(w, h, pixels, ctx),
+            layer: LayerData::new(w, h, tfw, pixels, ctx),
             staging_fb,
             anim_tess: None,
             anim_lt_tess: None,
@@ -426,6 +452,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             include_str!("data/lookuptex.vert"),
             include_str!("data/lookuptex.frag"),
         );
+        let lookupmap2d = ctx.program::<Lookupmap2dInterface>(
+            include_str!("data/lookupmap.vert"),
+            include_str!("data/lookupmap.frag"),
+        );
 
         let physical = win_size.to_physical(scale_factor);
         let present_fb =
@@ -478,6 +508,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             cursor2d,
             screen2d,
             lookuptex2d,
+            lookupmap2d,
             font,
             cursors,
             checker,
@@ -524,6 +555,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             cursor2d,
             screen2d,
             lookuptex2d,
+            lookupmap2d,
             scale_factor,
             present_fb,
             blending,
@@ -582,10 +614,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let final_tess = if self.final_batch.is_empty() {
             None
         } else {
-            Some(
-                self.ctx
-                    .tessellation::<_, Shape2dVertex>(&self.final_batch.vertices()),
-            )
+            let final_vertices = self.final_batch.clone().vertices();
+            Some(self.ctx.tessellation::<_, Shape2dVertex>(&final_vertices))
         };
 
         let help_tess = if session.mode == session::Mode::Help {
@@ -610,6 +640,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             .active()
             .expect("there must always be an active view");
         let view_ortho = Matrix4::ortho(v.width(), v.fh, Origin::TopLeft);
+        let view_ortho_lookup = Matrix4::ortho(4096, 4096, Origin::BottomLeft);
 
         {
             let v_data = view_data.get(&v.id).unwrap().borrow();
@@ -648,7 +679,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render to view final buffer.
             builder.pipeline::<PipelineError, _, _, _, _>(
-                &l_data.fb,
+                &*l_data.fb.borrow(),
                 &pipeline_st.clone().enable_clear_color(false),
                 |pipeline, mut shd_gate| {
                     let bound_paste = pipeline
@@ -690,6 +721,28 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     Ok(())
                 },
             );
+
+            builder.pipeline::<PipelineError, _, _, _, _>(
+                &*l_data.lt_im.borrow(),
+                pipeline_st,
+                |pipeline, mut shd_gate| {
+                    let mut fb = l_data.fb.borrow_mut();
+                    let bound_lt_im = pipeline
+                        .bind_texture(fb.color_slot())
+                        .expect("binding textures never fails. qed.");
+
+                    shd_gate.shade(lookupmap2d, |mut iface, uni, mut rdr_gate| {
+                        iface.set(&uni.tex, bound_lt_im.binding());
+                        iface.set(&uni.ortho, view_ortho_lookup.into());
+                        iface.set(&uni.transform, identity);
+                        iface.set(&uni.lt_tfw, l_data.lt_tfw);
+
+                        rdr_gate
+                            .render(render_st, |mut tess_gate| tess_gate.render(&l_data.lt_tess))
+                    })?;
+                    Ok(())
+                },
+            );
         }
 
         // Render to screen framebuffer.
@@ -726,8 +779,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
                         // Render views.
                         shd_gate.shade(sprite2d, |mut iface, uni, mut rdr_gate| {
+                            let mut fb = v.layer.fb.borrow_mut();
                             let bound_view = pipeline
-                                .bind_texture(v.layer.fb.color_slot())
+                                .bind_texture(fb.color_slot())
                                 .expect("binding textures never fails");
 
                             iface.set(&uni.ortho, ortho);
@@ -737,6 +791,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                             rdr_gate.render(render_st, |mut tess_gate| {
                                 tess_gate.render(&v.layer.tess)
                             })?;
+                            drop(fb);
 
                             // TODO: We only need to render this on the active view.
                             let staging_texture = v.staging_fb.color_slot();
@@ -773,8 +828,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                             let v = &mut *v.borrow_mut();
                             match (&v.anim_tess, session.views.get(*id)) {
                                 (Some(tess), Some(view)) if view.animation.len() > 1 => {
+                                    let mut fb = v.layer.fb.borrow_mut();
                                     let bound_layer = pipeline
-                                        .bind_texture(v.layer.fb.color_slot())
+                                        .bind_texture(fb.color_slot())
                                         .expect("binding textures never fails");
                                     let t = Matrix4::from_translation(
                                         Vector2::new(0., view.zoom).extend(0.),
@@ -822,17 +878,20 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                             match (&v.anim_lt_tess, session.views.get(*id)) {
                                 (Some(tess), Some(view)) if !view.lookuptexture().is_none() => {
                                     let ltid = view.lookuptexture().unwrap();
-                                    match (
-                                        view_data.get(&ltid),
-                                        session.views.get(ltid),
-                                    ) {
-                                        (Some(rcltv), Some(ltview)) => {
-                                            let mut ltv = rcltv.borrow_mut();
+                                    match (view_data.get(&ltid), session.views.get(ltid)) {
+                                        (Some(rcltv), Some(_ltview)) => {
+                                            let mut main_fb = v.layer.fb.borrow_mut();
                                             let bound_layer = pipeline
-                                                .bind_texture(v.layer.fb.color_slot())
+                                                .bind_texture(main_fb.color_slot())
                                                 .expect("binding textures never fails");
+                                            let ltv = rcltv.borrow();
+                                            let mut lookup_fb = ltv.layer.fb.borrow_mut();
+                                            let mut lookup_lt_im = ltv.layer.lt_im.borrow_mut();
                                             let lookup_layer = pipeline
-                                                .bind_texture(ltv.layer.fb.color_slot())
+                                                .bind_texture(lookup_fb.color_slot())
+                                                .expect("binding textures never fails");
+                                            let lookup_map = pipeline
+                                                .bind_texture(lookup_lt_im.color_slot())
                                                 .expect("binding textures never fails");
                                             let t = Matrix4::from_translation(
                                                 Vector2::new(0., view.zoom).extend(0.),
@@ -840,7 +899,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                             // Render layer animation.
                                             iface.set(&uni.tex, bound_layer.binding());
                                             iface.set(&uni.ltex, lookup_layer.binding());
-                                            iface.set(&uni.ltexreg, [0.5, 1.]);
+                                            iface.set(&uni.ltexim, lookup_map.binding());
+                                            // iface.set(&uni.ltexreg, [0.5, 1.]);
+                                            iface.set(&uni.lt_tfw, ltv.layer.lt_tfw);
                                             iface.set(&uni.transform, t.into());
                                             rdr_gate.render(render_st, |mut tess_gate| {
                                                 tess_gate.render(tess)
@@ -1013,11 +1074,11 @@ impl Renderer {
                 Effect::ViewAdded(id) => {
                     // FIXME: This should be done when the view is added in the ViewManager.
                     if let Some((s, pixels)) = session.views.get_snapshot_safe(id) {
-                        let (w, h) = (s.width(), s.height());
+                        let (w, h, tfw) = (s.width(), s.height(), s.extent.fw);
 
                         self.view_data.insert(
                             id,
-                            RefCell::new(ViewData::new(w, h, Some(pixels), &mut self.ctx)),
+                            RefCell::new(ViewData::new(w, h, tfw, Some(pixels), &mut self.ctx)),
                         );
                     }
                 }
@@ -1061,7 +1122,7 @@ impl Renderer {
                     self.resize_view(v, *w, *h)?;
                 }
                 ViewOp::Clear(color) => {
-                    let mut view = self
+                    let view = self
                         .view_data
                         .get(&v.id)
                         .expect("views must have associated view data")
@@ -1069,12 +1130,13 @@ impl Renderer {
 
                     view.layer
                         .fb
+                        .borrow_mut()
                         .color_slot()
                         .clear(GenMipmaps::No, (color.r, color.g, color.b, color.a))
                         .map_err(Error::Texture)?;
                 }
                 ViewOp::Blit(src, dst) => {
-                    let mut view = self
+                    let view = self
                         .view_data
                         .get(&v.id)
                         .expect("views must have associated view data")
@@ -1085,6 +1147,7 @@ impl Renderer {
 
                     view.layer
                         .fb
+                        .borrow_mut()
                         .color_slot()
                         .upload_part_raw(
                             GenMipmaps::No,
@@ -1163,67 +1226,51 @@ impl Renderer {
                     );
                 }
                 ViewOp::SetPixel(rgba, x, y) => {
-                    let fb = &mut self
+                    let layer = &mut self
                         .view_data
                         .get(&v.id)
                         .expect("views must have associated view data")
                         .borrow_mut()
-                        .layer
-                        .fb;
+                        .layer;
                     let texels = &[*rgba];
                     let texels = util::align_u8(texels);
-                    fb.color_slot()
+                    layer
+                        .fb
+                        .borrow_mut()
+                        .color_slot()
                         .upload_part_raw(GenMipmaps::No, [*x as u32, *y as u32], [1, 1], texels)
                         .map_err(Error::Texture)?;
                 }
-                //TODO: could be more generic
-                ViewOp::GenerateLookupTextureIR(src, dst) => {
-                    let mut view = self
+                ViewOp::LookupTextureImDump => {
+                    let layer = &mut self
                         .view_data
                         .get(&v.id)
                         .expect("views must have associated view data")
-                        .borrow_mut();
-
-                    let (_, pixels) = v.layer.get_snapshot_rect(&src.map(|n| n as i32)).unwrap(); // TODO: Handle this nicely?
-
-                    let modified: Vec<Rgba8> = pixels
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| {
-                            if p.a == 0 {
-                                return Rgba8 {
-                                    r: 0,
-                                    g: 0,
-                                    b: 0,
-                                    a: 0,
-                                };
-                            }
-
-                            let x = i as f32 % src.width();
-                            let xf = 256.0 / src.width();
-                            let y = (i as f32 / src.width()).floor();
-                            let yf = 256.0 / src.height();
-                            Rgba8 {
-                                r: (x * xf).floor() as u8,
-                                g: (y * yf).floor() as u8,
-                                b: 0,
-                                a: p.a,
-                            }
-                        })
-                        .collect();
-
-                    let modified = util::align_u8(&modified);
-
-                    view.layer
-                        .fb
-                        .color_slot()
-                        .upload_part_raw(
-                            GenMipmaps::No,
-                            [dst.x1 as u32, dst.y1 as u32],
-                            [src.width() as u32, src.height() as u32],
-                            modified,
-                        )
-                        .map_err(Error::Texture)?;
+                        .borrow_mut()
+                        .layer;
+                    let mut lt_im = layer.lt_im.borrow_mut();
+                    let texels = lt_im.color_slot().get_raw_texels().unwrap();
+                    let pixels = Rgba8::align(&texels).to_vec();
+                    println!("lt_im");
+                    for (i, pixel) in pixels.iter().enumerate() {
+                        // use v.fw and v.fh to decode i into x and y
+                        let x = i as u32 % 4096;
+                        let y = i as u32 / 4096;
+                        if pixel.a != 0 {
+                            println!("pixel {}, {}: {}", x, y, pixel);
+                        }
+                    }
+                    let mut fb = layer.fb.borrow_mut();
+                    let texels = fb.color_slot().get_raw_texels().unwrap();
+                    let pixels = Rgba8::align(&texels).to_vec();
+                    println!("fb");
+                    for (i, pixel) in pixels.iter().enumerate() {
+                        let x = i as u32 % 4;
+                        let y = i as u32 / 4;
+                        if pixel.a != 0 {
+                            println!("pixel {}, {}: {}", x, y, pixel);
+                        }
+                    }
                 }
             }
         }
@@ -1262,16 +1309,17 @@ impl Renderer {
         vh: u32,
     ) -> Result<(), RendererError> {
         // View size changed. Re-create view resources.
-        let (ew, eh) = {
+        let (ew, eh, efw) = {
             let extent = view.resource.extent;
-            (extent.width(), extent.height())
+            (extent.width(), extent.height(), extent.fw)
         };
 
         // Ensure not to transfer more data than can fit in the view buffer.
         let tw = u32::min(ew, vw);
         let th = u32::min(eh, vh);
+        let tfw = u32::min(efw, vw);
 
-        let mut view_data = ViewData::new(vw, vh, None, &mut self.ctx);
+        let mut view_data = ViewData::new(vw, vh, tfw, None, &mut self.ctx);
         let trect = Rect::origin(tw as i32, th as i32);
         // The following sequence of commands will try to copy a rect that isn't contained
         // in the snapshot, hence we must skip the uploading in that case:

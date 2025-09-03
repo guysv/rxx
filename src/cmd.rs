@@ -124,6 +124,7 @@ pub enum Command {
 
     LookupTextureMode(bool),
     LookupTextureSet(i32),
+    LookupTextureImDump,
 
     Noop,
 }
@@ -1064,12 +1065,21 @@ impl Default for Commands {
                     .map(|((_, i), (x, y))| Command::PaintPalette(i, x, y))
             })
             .command("lt/on", "Set current view as lookup texture", |p| {
-                p.value(Command::LookupTextureMode(true)) })
+                p.value(Command::LookupTextureMode(true))
+            })
             .command("lt/off", "Revert view to normal mode", |p| {
-                p.value(Command::LookupTextureMode(false)) })
-            .command("lt/set", "Set another view as lookup texture to current view", |p| {
-                p.then(integer::<i32>().label("<d>"))
-                    .map(|(_, d)| Command::LookupTextureSet(d))
+                p.value(Command::LookupTextureMode(false))
+            })
+            .command(
+                "lt/set",
+                "Set another view as lookup texture to current view",
+                |p| {
+                    p.then(integer::<i32>().label("<d>"))
+                        .map(|(_, d)| Command::LookupTextureSet(d))
+                },
+            )
+            .command("lt/imdump", "Intermediate map dump", |p| {
+                p.value(Command::LookupTextureImDump)
             })
     }
 }

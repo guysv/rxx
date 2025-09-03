@@ -3048,6 +3048,9 @@ impl Session {
                     }
                 }
             }
+            Command::LookupTextureImDump => {
+                self.active_view_mut().lookuptexture_im_dump();
+            }
         };
     }
 
