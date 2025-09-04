@@ -37,15 +37,14 @@ void main() {
 		return;
 	}
 
-	ivec3 texel256 = ivec3(floor(texel.rgb * vec3(255.0)));
+	ivec3 texel256 = ivec3(round(texel.rgb * vec3(255.0)));
 	ivec2 imtex_uv = ivec2(
-		texel256.r + (texel256.b >> 4) * 255,
-		texel256.g + (texel256.b & 15) * 255
+		texel256.r + (texel256.b >> 4) * 256 + 1,
+		texel256.g + (texel256.b & 15) * 256 + 1
 	);
     
     // Use the color value for gl_Position (like lookuptex.frag but in reverse)
-    // Apply a small offset to correct the 2-pixel misalignment
-    gl_Position = ortho * transform * vec4(imtex_uv + ivec2(2, 2), 0.0, 1.0);
+    gl_Position = ortho * transform * vec4(imtex_uv, 0.0, 1.0);
     
     // Set f_color to UV coordinates
 	vec3 intended_srgb = vec3(vec2(uv) / 255.0, 0.0);

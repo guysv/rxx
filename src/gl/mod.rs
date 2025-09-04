@@ -184,12 +184,17 @@ struct LayerData {
     lt_im: RefCell<Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>>,
     lt_tfw: u32,
     lt_tfh: u32,
+    w: u32,
+    h: u32,
     tess: Tess<Backend, Sprite2dVertex>,
     lt_tess: Tess<Backend, ()>,
 }
 
 impl LayerData {
     fn new(w: u32, h: u32, tfw: u32, tfh: u32, pixels: Option<&[Rgba8]>, ctx: &mut Context) -> Self {
+        println!("w: {}, h: {}, tfw: {}, tfh: {}", w, h, tfw, tfh);
+        println!("view orth");
+        println!("{}", Matrix4::ortho(4096, 4096, Origin::BottomLeft));
         let batch = sprite2d::Batch::singleton(
             w,
             h,
@@ -213,7 +218,7 @@ impl LayerData {
             .unwrap();
 
         let lt_tess = TessBuilder::new(ctx)
-            .set_vertex_nb((w * tfw) as usize)
+            .set_vertex_nb((h * tfw) as usize)
             .set_mode(Mode::Point)
             .build()
             .unwrap();
@@ -239,6 +244,8 @@ impl LayerData {
             lt_im: RefCell::new(lt_im),
             lt_tfw: tfw,
             lt_tfh: tfh,
+            w,
+            h,
             tess,
             lt_tess,
         }
@@ -1322,8 +1329,12 @@ impl Renderer {
                         // use v.fw and v.fh to decode i into x and y
                         let x = i as u32 % 4096;
                         let y = i as u32 / 4096;
+                        let r = x % 256;
+                        let g = y % 256;
+                        let b = ((x / 256) << 4) + (y / 256);
+                        let idx_pixel = Rgba8::new(r as u8, g as u8, b as u8, 255);
                         if pixel.a != 0 {
-                            println!("pixel {}, {}: {}", x, y, pixel);
+                            println!("pixel {}, {}: {} ({} => {},{})", x, y, pixel, idx_pixel, pixel.r, pixel.g);
                         }
                     }
                     let mut fb = layer.fb.borrow_mut();
@@ -1331,8 +1342,8 @@ impl Renderer {
                     let pixels = Rgba8::align(&texels).to_vec();
                     println!("fb");
                     for (i, pixel) in pixels.iter().enumerate() {
-                        let x = i as u32 % 4;
-                        let y = i as u32 / 4;
+                        let x = i as u32 % layer.w;
+                        let y = i as u32 / layer.w;
                         if pixel.a != 0 {
                             println!("pixel {}, {}: {}", x, y, pixel);
                         }
@@ -1375,18 +1386,15 @@ impl Renderer {
         vh: u32,
     ) -> Result<(), RendererError> {
         // View size changed. Re-create view resources.
-        let (ew, eh, efw, efh) = {
+        let (ew, eh) = {
             let extent = view.resource.extent;
-            (extent.width(), extent.height(), extent.fw, extent.fh)
+            (extent.width(), extent.height())
         };
 
         // Ensure not to transfer more data than can fit in the view buffer.
         let tw = u32::min(ew, vw);
         let th = u32::min(eh, vh);
-        let tfw = u32::min(efw, vw);
-        let tfh = u32::min(efh, vh);
-
-        let mut view_data = ViewData::new(vw, vh, tfw, tfh, None, &mut self.ctx);
+        let mut view_data = ViewData::new(vw, vh, vw / view.animation.len() as u32, vh, None, &mut self.ctx);
         let trect = Rect::origin(tw as i32, th as i32);
         // The following sequence of commands will try to copy a rect that isn't contained
         // in the snapshot, hence we must skip the uploading in that case:

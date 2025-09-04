@@ -389,6 +389,16 @@ pub struct Matrix4<S> {
     pub w: Vector4<S>,
 }
 
+impl std::fmt::Display for Matrix4<f32> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Matrix4({:?} {:?} {:?} {:?}\n", self.x.x, self.x.y, self.x.z, self.x.w)?;
+        write!(f, "        {:?} {:?} {:?} {:?}\n", self.y.x, self.y.y, self.y.z, self.y.w)?;
+        write!(f, "        {:?} {:?} {:?} {:?}\n", self.z.x, self.z.y, self.z.z, self.z.w)?;
+        write!(f, "        {:?} {:?} {:?} {:?})", self.w.x, self.w.y, self.w.z, self.w.w)?;
+        Ok(())
+    }
+}
+
 impl From<Matrix4<f32>> for [[f32; 4]; 4] {
     fn from(mat: Matrix4<f32>) -> Self {
         unsafe { std::mem::transmute(mat) }

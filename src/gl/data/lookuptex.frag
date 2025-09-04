@@ -30,12 +30,12 @@ void main() {
 
     vec4 imtexel = texelFetch(tex, pixel_coord, 0);
     imtexel = vec4(linearTosRGB(imtexel.rgb), imtexel.a); // Convert to linear space
-    imtexel.rgb = imtexel.rgb + vec3(0.001953125, 0.001953125, 0.001953125);
+    // imtexel.rgb = imtexel.rgb + vec3(0.001953125, 0.001953125, 0.001953125);
     if (imtexel.a > 0.0) {
-        ivec3 imtexel256 = ivec3(floor(imtexel.rgb * vec3(255)));
+        ivec3 imtexel256 = ivec3(round(imtexel.rgb * vec3(255)));
         ivec2 imtex_uv = ivec2(
-            imtexel256.r + (imtexel256.b >> 4) * 255,
-            imtexel256.g + (imtexel256.b & 15) * 255
+            imtexel256.r + (imtexel256.b >> 4) * 256,
+            imtexel256.g + (imtexel256.b & 15) * 256
         );
         vec4 texel = texelFetch(ltexim, imtex_uv, 0);
         texel = vec4(linearTosRGB(texel.rgb), texel.a); // Convert to linear space
