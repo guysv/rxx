@@ -1725,6 +1725,24 @@ impl Session {
         None
     }
 
+    fn shade_selection(&mut self, color: Option<Rgba8>) {
+        let color = color.unwrap_or(self.fg);
+        if let (Mode::Visual(VisualState::Selecting { .. }), Some(s)) = (self.mode, self.selection)
+        {
+            let v = self.active_view_mut();
+            let s = s.abs().bounds();
+
+            if s.intersects(v.layer_bounds()) {
+                let s = s.intersection(v.layer_bounds());
+
+                v.paint_shade(color, s);
+
+                self.selection = Some(Selection::from(s));
+                self.switch_mode(Mode::Normal);
+            }
+        }
+    }
+
     fn undo(&mut self, id: ViewId) {
         self.restore_view_snapshot(id, Direction::Backward);
     }
@@ -2995,6 +3013,9 @@ impl Session {
                     ]);
                     self.active_view_mut().touch();
                 }
+            }
+            Command::SelectionShade(color) => {
+                self.shade_selection(color);
             }
             Command::PaintColor(rgba, x, y) => {
                 self.active_view_mut().paint_color(rgba, x, y);

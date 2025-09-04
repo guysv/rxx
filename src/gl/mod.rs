@@ -11,7 +11,7 @@ use crate::view::resource::ViewResource;
 use crate::view::{View, ViewId, ViewOp, ViewState};
 use crate::{data, data::Assets, image};
 
-use crate::gfx::{shape2d, sprite2d, Origin, Rgba, Rgba8, ZDepth};
+use crate::gfx::{shape2d, sprite2d, Origin, Rgba, Rgba8, ZDepth, color};
 use crate::gfx::{Matrix4, Rect, Repeat, Vector2};
 
 use luminance::context::GraphicsContext;
@@ -183,12 +183,13 @@ struct LayerData {
     fb: RefCell<Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>>,
     lt_im: RefCell<Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>>,
     lt_tfw: u32,
+    lt_tfh: u32,
     tess: Tess<Backend, Sprite2dVertex>,
     lt_tess: Tess<Backend, ()>,
 }
 
 impl LayerData {
-    fn new(w: u32, h: u32, tfw: u32, pixels: Option<&[Rgba8]>, ctx: &mut Context) -> Self {
+    fn new(w: u32, h: u32, tfw: u32, tfh: u32, pixels: Option<&[Rgba8]>, ctx: &mut Context) -> Self {
         let batch = sprite2d::Batch::singleton(
             w,
             h,
@@ -237,6 +238,7 @@ impl LayerData {
             fb: RefCell::new(fb),
             lt_im: RefCell::new(lt_im),
             lt_tfw: tfw,
+            lt_tfh: tfh,
             tess,
             lt_tess,
         }
@@ -291,7 +293,7 @@ struct ViewData {
 }
 
 impl ViewData {
-    fn new(w: u32, h: u32, tfw: u32, pixels: Option<&[Rgba8]>, ctx: &mut Context) -> Self {
+    fn new(w: u32, h: u32, tfw: u32, tfh: u32, pixels: Option<&[Rgba8]>, ctx: &mut Context) -> Self {
         let mut staging_fb: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F> =
             Framebuffer::new(ctx, [w, h], 0, self::SAMPLER).unwrap();
 
@@ -301,7 +303,7 @@ impl ViewData {
             .unwrap();
 
         Self {
-            layer: LayerData::new(w, h, tfw, pixels, ctx),
+            layer: LayerData::new(w, h, tfw, tfh, pixels, ctx),
             staging_fb,
             anim_tess: None,
             anim_lt_tess: None,
@@ -1074,11 +1076,11 @@ impl Renderer {
                 Effect::ViewAdded(id) => {
                     // FIXME: This should be done when the view is added in the ViewManager.
                     if let Some((s, pixels)) = session.views.get_snapshot_safe(id) {
-                        let (w, h, tfw) = (s.width(), s.height(), s.extent.fw);
+                        let (w, h, tfw, tfh) = (s.width(), s.height(), s.extent.fw, s.extent.fh);
 
                         self.view_data.insert(
                             id,
-                            RefCell::new(ViewData::new(w, h, tfw, Some(pixels), &mut self.ctx)),
+                            RefCell::new(ViewData::new(w, h, tfw, tfh, Some(pixels), &mut self.ctx)),
                         );
                     }
                 }
@@ -1241,6 +1243,70 @@ impl Renderer {
                         .upload_part_raw(GenMipmaps::No, [*x as u32, *y as u32], [1, 1], texels)
                         .map_err(Error::Texture)?;
                 }
+                ViewOp::Shade(rect, color) => {
+                    let view = &mut self
+                        .view_data
+                        .get(&v.id)
+                        .expect("views must have associated view data")
+                        .borrow_mut();
+                    
+                    // TODO: fix this, looks ugly
+                    let mut myrect = rect.clone();
+                    myrect.y1 = view.layer.lt_tfh as i32 - myrect.y1;
+                    myrect.y2 = view.layer.lt_tfh as i32 - myrect.y2;
+                    mem::swap(&mut myrect.y1, &mut myrect.y2);
+                    // mem::swap(&mut myrect.x1, &mut myrect.x2);
+                    println!("Shade: {:?}", myrect);
+
+                    let (_, orig_pixels) = v.layer.get_snapshot_rect(&rect.map(|n| n as i32)).unwrap(); // TODO: Handle this nicely?
+
+                    // Convert base color to HSV to get hue for color grid
+                    let base_rgba: Rgba = (*color).into();
+                    let base_hsv: crate::gfx::color::Hsv = base_rgba.into();
+                    
+                    // Generate color grid using the base color's hue
+                    let color_grid: Vec<Rgba8> = color::generate_color_grid(
+                        base_hsv.h, 
+                        rect.width() as u32, 
+                        rect.height() as u32, 
+                        1.0, // gamma for saturation
+                        1.0, // gamma for value
+                        0.3, // s_start: start with low saturation
+                        0.7, // s_end: end with full saturation
+                        0.3, // v_start: start with moderate brightness
+                        1.0  // v_end: end with full brightness
+                    ).collect();
+                    
+                    // Create texels using the color grid
+                    let mut texels = Vec::with_capacity(rect.width() as usize * rect.height() as usize * 4);
+                    for y in 0..rect.height() {
+                        for x in 0..rect.width() {
+                            let grid_index = (y * rect.width() + x) as usize;
+                            let shaded_color = color_grid[grid_index];
+                            let orig_color = orig_pixels[(y * rect.width()) as usize + x as usize];
+                            
+                            if orig_color.a != 0 {
+                                // Use the grid color directly (as per user's edit)
+                                texels.extend_from_slice(&[shaded_color.r, shaded_color.g, shaded_color.b, shaded_color.a]);
+                            } else {
+                                texels.extend_from_slice(&[orig_color.r, orig_color.g, orig_color.b, orig_color.a]);
+                            }
+                        }
+                    }
+                    
+                    let texels = util::align_u8(&texels);
+                    view.layer
+                        .fb
+                        .borrow_mut()
+                        .color_slot()
+                        .upload_part_raw(
+                            GenMipmaps::No,
+                            [myrect.x1 as u32, myrect.y1 as u32],
+                            [myrect.width() as u32, myrect.height() as u32],
+                            texels,
+                        )
+                        .map_err(Error::Texture)?;
+                }
                 ViewOp::LookupTextureImDump => {
                     let layer = &mut self
                         .view_data
@@ -1309,17 +1375,18 @@ impl Renderer {
         vh: u32,
     ) -> Result<(), RendererError> {
         // View size changed. Re-create view resources.
-        let (ew, eh, efw) = {
+        let (ew, eh, efw, efh) = {
             let extent = view.resource.extent;
-            (extent.width(), extent.height(), extent.fw)
+            (extent.width(), extent.height(), extent.fw, extent.fh)
         };
 
         // Ensure not to transfer more data than can fit in the view buffer.
         let tw = u32::min(ew, vw);
         let th = u32::min(eh, vh);
         let tfw = u32::min(efw, vw);
+        let tfh = u32::min(efh, vh);
 
-        let mut view_data = ViewData::new(vw, vh, tfw, None, &mut self.ctx);
+        let mut view_data = ViewData::new(vw, vh, tfw, tfh, None, &mut self.ctx);
         let trect = Rect::origin(tw as i32, th as i32);
         // The following sequence of commands will try to copy a rect that isn't contained
         // in the snapshot, hence we must skip the uploading in that case:

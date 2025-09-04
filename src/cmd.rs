@@ -97,6 +97,7 @@ pub enum Command {
     SelectionErase,
     SelectionJump(Direction),
     SelectionFlip(Axis),
+    SelectionShade(Option<Rgba8>),
 
     // Settings
     Set(String, Value),
@@ -234,6 +235,7 @@ impl fmt::Display for Command {
                 write!(f, "Move selection backward by one frame")
             }
             Self::SelectionErase => write!(f, "Erase selection contents"),
+            Self::SelectionShade(_) => write!(f, "Shade selection with foreground color"),
             Self::SelectionFlip(Axis::Horizontal) => write!(f, "Flip selection horizontally"),
             Self::SelectionFlip(Axis::Vertical) => write!(f, "Flip selection vertically"),
             Self::PaintColor(_, x, y) => write!(f, "Paint {:2},{:2}", x, y),
@@ -1027,6 +1029,10 @@ impl Default for Commands {
                         "y" => Ok(Command::SelectionFlip(Axis::Vertical)),
                         _ => Err(format!("unknown axis {:?}, must be 'x' or 'y'", t)),
                     })
+            })
+            .command("selection/shade", "Shade selection with color", |p| {
+                p.then(optional(color()))
+                    .map(|(_, rgba)| Command::SelectionShade(rgba))
             })
             .command("paint/color", "Paint color", |p| {
                 p.then(color())

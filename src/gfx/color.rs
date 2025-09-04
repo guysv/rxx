@@ -211,3 +211,138 @@ impl From<Rgba8> for Rgba {
         }
     }
 }
+
+impl From<Hsv> for Rgba {
+    fn from(hsv: Hsv) -> Self {
+        let h = hsv.h;
+        let s = hsv.s;
+        let v = hsv.v;
+        
+        let c = v * s;
+        let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+        let m = v - c;
+        
+        let (r, g, b) = match (h / 60.0) as i32 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            5 => (c, 0.0, x),
+            _ => (0.0, 0.0, 0.0),
+        };
+        
+        Rgba {
+            r: r + m,
+            g: g + m,
+            b: b + m,
+            a: 1.0,
+        }
+    }
+}
+
+/// A normalized HSV color.
+#[derive(Copy, Clone, PartialEq, Debug, Default)]
+pub struct Hsv {
+    pub h: f32, // in degrees
+    pub s: f32, // 0-1
+    pub v: f32, // 0-1
+}
+
+impl From<Rgba> for Hsv {
+    fn from(rgba: Rgba) -> Self {
+        let r = rgba.r;
+        let g = rgba.g;
+        let b = rgba.b;
+        
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+        
+        let mut h = 0.0;
+        let s = if max > 0.0 { delta / max } else { 0.0 };
+        let v = max;
+        
+        if delta != 0.0 {
+            h = match max {
+                x if x == r => 60.0 * (((g - b) / delta) % 6.0),
+                x if x == g => 60.0 * (((b - r) / delta) + 2.0),
+                x if x == b => 60.0 * (((r - g) / delta) + 4.0),
+                _ => 0.0,
+            };
+            
+            if h < 0.0 {
+                h += 360.0;
+            }
+        }
+        
+        Hsv { h, s, v }
+    }
+}
+
+pub fn generate_color_grid(
+    hue_deg: f32, 
+    w: u32, 
+    h: u32, 
+    gamma: f32, 
+    gamma_v: f32,
+    s_start: f32,
+    s_end: f32,
+    v_start: f32,
+    v_end: f32
+) -> impl Iterator<Item = Rgba8>
+{
+    // Normalize hue into [0, 360)
+    let mut hue = hue_deg % 360.0;
+    if hue < 0.0 { hue += 360.0; }
+
+    let w = w.max(1);
+    let h = h.max(1);
+    let g  = if gamma   > 0.0 { gamma   } else { 1.0 };
+    let gv = if gamma_v > 0.0 { gamma_v } else { 1.0 };
+
+    // Precompute denominators to avoid div-by-zero.
+    let w_denom = if w > 1 { (w - 1) as f32 } else { 1.0 };
+    let h_denom = if h > 1 { (h - 1) as f32 } else { 1.0 };
+
+    // Build once; return its iterator.
+    let mut out = Vec::with_capacity((w as usize) * (h as usize));
+
+    // Determine which dimension controls S vs V based on width vs height
+    let (s_denom, v_denom) = if w > h {
+        // Width > Height: width controls V, height controls S
+        (h_denom, w_denom)
+    } else {
+        // Height >= Width: height controls V, width controls S
+        (w_denom, h_denom)
+    };
+
+    for row in 0..h {
+        for col in 0..w {
+            // Calculate S and V based on position and dimension mapping
+            let (s, v) = if w > h {
+                // Width > Height: row controls S, col controls V
+                let t_s = (row as f32) / s_denom;        // 0..1
+                let t_v = (col as f32) / v_denom;        // 0..1
+                
+                let s = s_start + (s_end - s_start) * t_s.powf(g).clamp(0.0, 1.0);
+                let v = v_start + (v_end - v_start) * (1.0 - t_v.powf(gv)).clamp(0.0, 1.0);
+                (s, v)
+            } else {
+                // Height >= Width: col controls S, row controls V
+                let t_s = (col as f32) / s_denom;        // 0..1
+                let t_v = (row as f32) / v_denom;        // 0..1
+                
+                let s = s_start + (s_end - s_start) * t_s.powf(g).clamp(0.0, 1.0);
+                let v = v_start + (v_end - v_start) * (1.0 - t_v.powf(gv)).clamp(0.0, 1.0);
+                (s, v)
+            };
+
+            let hsv = Hsv { h: hue, s: s.clamp(0.0, 1.0), v: v.clamp(0.0, 1.0) };
+            let rgba: Rgba = hsv.into();
+            out.push(Rgba8::from(rgba));
+        }
+    }
+
+    out.into_iter()
+}

@@ -107,6 +107,8 @@ pub enum ViewOp {
     Resize(u32, u32),
     /// Paint a single pixel.
     SetPixel(Rgba8, i32, i32),
+    /// Paint shades of color into area
+    Shade(Rect<i32>, Rgba8),
     /// Generate intermediate lookup texture map for given area.
     LookupTextureImDump,
 }
@@ -309,6 +311,11 @@ impl<R> View<R> {
 
     pub fn paint_color(&mut self, color: Rgba8, x: i32, y: i32) {
         self.ops.push(ViewOp::SetPixel(color, x, y));
+        self.touch();
+    }
+
+    pub fn paint_shade(&mut self, color: Rgba8, area: Rect<i32>) {
+        self.ops.push(ViewOp::Shade(area, color));
         self.touch();
     }
 
