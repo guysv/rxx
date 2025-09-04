@@ -1727,6 +1727,7 @@ impl Session {
 
     fn shade_selection(&mut self, color: Option<Rgba8>) {
         let color = color.unwrap_or(self.fg);
+        let target_color = self.bg;
         if let (Mode::Visual(VisualState::Selecting { .. }), Some(s)) = (self.mode, self.selection)
         {
             let v = self.active_view_mut();
@@ -1735,7 +1736,7 @@ impl Session {
             if s.intersects(v.layer_bounds()) {
                 let s = s.intersection(v.layer_bounds());
 
-                v.paint_shade(color, s);
+                v.paint_shade(color, target_color, s);
 
                 self.selection = Some(Selection::from(s));
                 self.switch_mode(Mode::Normal);
@@ -2523,6 +2524,10 @@ impl Session {
             }
             Command::PaletteAdd(rgba) => {
                 self.palette.add(rgba);
+                self.center_palette();
+            }
+            Command::PaletteRemoveFG => {
+                self.palette.remove(self.fg);
                 self.center_palette();
             }
             Command::PaletteClear => {

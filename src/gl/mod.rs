@@ -1250,7 +1250,7 @@ impl Renderer {
                         .upload_part_raw(GenMipmaps::No, [*x as u32, *y as u32], [1, 1], texels)
                         .map_err(Error::Texture)?;
                 }
-                ViewOp::Shade(rect, color) => {
+                ViewOp::Shade(rect, color, target_color) => {
                     let view = &mut self
                         .view_data
                         .get(&v.id)
@@ -1292,7 +1292,7 @@ impl Renderer {
                             let shaded_color = color_grid[grid_index];
                             let orig_color = orig_pixels[(y * rect.width()) as usize + x as usize];
                             
-                            if orig_color.a != 0 {
+                            if orig_color == *target_color {
                                 // Use the grid color directly (as per user's edit)
                                 texels.extend_from_slice(&[shaded_color.r, shaded_color.g, shaded_color.b, shaded_color.a]);
                             } else {

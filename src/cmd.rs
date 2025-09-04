@@ -69,6 +69,7 @@ pub enum Command {
 
     // Palette
     PaletteAdd(Rgba8),
+    PaletteRemoveFG,
     PaletteClear,
     PaletteGradient(Rgba8, Rgba8, usize),
     PaletteSample,
@@ -179,6 +180,7 @@ impl fmt::Display for Command {
             Self::FrameNext => write!(f, "Navigate to next frame"),
             Self::Noop => write!(f, "No-op"),
             Self::PaletteAdd(c) => write!(f, "Add {color} to palette", color = c),
+            Self::PaletteRemoveFG => write!(f, "Remove foreground color from palette"),
             Self::PaletteClear => write!(f, "Clear palette"),
             Self::PaletteGradient(cs, ce, n) => {
                 write!(f, "Create {n} colors gradient from {cs} to {ce}")
@@ -268,6 +270,7 @@ impl From<Command> for String {
             Command::Export(Some(s), path) => format!("export @{}x {}", s, path),
             Command::Noop => format!(""),
             Command::PaletteAdd(c) => format!("p/add {}", c),
+            Command::PaletteRemoveFG => format!("p/remove"),
             Command::PaletteClear => format!("p/clear"),
             Command::PaletteWrite(_) => format!("p/write"),
             Command::PaletteSample => format!("p/sample"),
@@ -918,6 +921,9 @@ impl Default for Commands {
             })
             .command("p/add", "Add a color to the palette", |p| {
                 p.then(color()).map(|(_, rgba)| Command::PaletteAdd(rgba))
+            })
+            .command("p/remove", "Remove a color from the palette", |p| {
+                p.value(Command::PaletteRemoveFG)
             })
             .command("p/clear", "Clear the color palette", |p| {
                 p.value(Command::PaletteClear)
