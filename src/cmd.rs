@@ -124,6 +124,7 @@ pub enum Command {
     ViewNext,
     ViewPrev,
 
+    LookupTextureSample,
     LookupTextureMode(bool),
     LookupTextureSet(i32),
     LookupTextureImDump,
@@ -1092,6 +1093,12 @@ impl Default for Commands {
             )
             .command("lt/imdump", "Intermediate map dump", |p| {
                 p.value(Command::LookupTextureImDump)
+            })
+            .command("lt/sample", "Search lookup texture for matching pixels", |p| {
+                p.value(Command::LookupTextureSample)
+            })
+            .command("lt/sampler", "Switch to lookup texture sampler tool", |p| {
+                p.value(Command::Tool(Tool::LookupTextureSampler))
             })
     }
 }
