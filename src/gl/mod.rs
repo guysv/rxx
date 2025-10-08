@@ -744,6 +744,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 },
             );
 
+            // Render to lookup texture intermediate map buffer.
             builder.pipeline::<PipelineError, _, _, _, _>(
                 &*l_data.lt_im.borrow(),
                 pipeline_st,
@@ -1438,6 +1439,10 @@ impl Renderer {
         // TODO: Does this need to run if the view has only one frame?
         for v in s.views.iter() {
             if v.is_lookuptexture() {
+                if let Some(vd) = self.view_data.get(&v.id) {
+                    vd.borrow_mut().anim_tess = None;
+                    vd.borrow_mut().anim_lt_tess = None;
+                }
                 continue;
             }
             // FIXME: When `v.animation.val()` doesn't change, we don't need
