@@ -214,33 +214,6 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
         }
     }
 
-    // if let (Some(lss), Some(ltid)) = (&session.lookup_sample_state, view.lookuptexture()) {
-    //     match session.mode {
-    //         Mode::Visual(VisualState::LookupSampling) => {
-    //             let ltv = session.view(ltid);
-            
-    //             let offset = session.offset + ltv.offset;
-    //             let t = Matrix4::from_translation(offset.extend(0.)) * Matrix4::from_scale(ltv.zoom);
-
-    //             for (i, c) in lss.candidates.iter().enumerate() {
-    //                 let mut stroke = color::RED;
-    //                 if i as i32 == lss.selected {
-    //                     stroke = color::GREEN;
-    //                 }
-
-    //                 canvas.add(Shape::Rectangle(
-    //                     c.0.transform(t),
-    //                     self::UI_LAYER,
-    //                     Rotation::ZERO,
-    //                     Stroke::new(1., stroke.into()),
-    //                     Fill::Empty,
-    //                 ));    
-    //             }
-    //         }
-    //         _ => ()
-    //     };
-    // }
-
     for v in session.views.iter() {
         let offset = v.offset + session.offset;
 
@@ -304,6 +277,50 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
             }
         }
     }
+
+    // Draw connecting lines between LUT views and their target views
+    for v in session.views.iter() {
+        if v.lookuptexture().is_some() {
+            // Find the target view that uses this view as its LUT
+            if let Some(lut_view) = session.views.iter().find(|tv| tv.id == v.lookuptexture().unwrap()) {
+                let target_rect = Rect::new(
+                    -(v.fw as f32) * 2.,
+                    0.,
+                    -(v.fw as f32),
+                    v.fh as f32)
+                    * v.zoom
+                    + (session.offset + v.offset);        
+                let lut_rect = lut_view.rect() + session.offset;
+
+                let lut_point_y = (lut_rect.y1 + lut_rect.y2) * 0.5;
+                let lut_point_x = lut_rect.x1;
+                let target_anim_point_x = (target_rect.x1 + target_rect.x2) * 0.5;
+                let target_anim_point_y = target_rect.y1;
+                
+                canvas.add(Shape::Line(
+                    Line::new(
+                        [lut_point_x, lut_point_y],
+                        [target_anim_point_x, lut_point_y],
+                    ),
+                    self::UI_LAYER,
+                    Rotation::ZERO,
+                    Stroke::new(1.0, Rgba::new(0., 1., 0., 0.6)),
+                ));
+                
+                canvas.add(Shape::Line(
+                    Line::new(
+                        [target_anim_point_x, lut_point_y],
+                        [target_anim_point_x, target_anim_point_y],
+                    ),
+                    self::UI_LAYER,
+                    Rotation::ZERO,
+                    Stroke::new(1.0, Rgba::new(0., 1., 0., 0.6)),
+                ));
+    
+            }
+        }
+    }
+
     if session.settings["ui/status"].is_set() {
         // Active view status
         text.add(
@@ -803,7 +820,12 @@ pub fn draw_view_lookuptexture_animation<R>(session: &Session, v: &View<R>) -> s
         v.width(),
         v.fh,
         *v.animation.val(),
-        Rect::new(-(v.fw as f32) * 2., -1., -(v.fw as f32), v.fh as f32 - 1.) * v.zoom
+        Rect::new(
+            -(v.fw as f32) * 2.,
+            -1.,
+            -(v.fw as f32),
+            v.fh as f32 - 1.)
+            * v.zoom
             + (session.offset + v.offset),
         self::VIEW_LAYER,
         Rgba::TRANSPARENT,
