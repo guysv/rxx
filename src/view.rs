@@ -146,6 +146,8 @@ pub struct View<R> {
     /// Which other view is current one's lookup texture
     lookuptexture: Option<ViewId>,
     lookuptexture_on: bool,
+    /// Views that serve as lookup layers for this view (one-to-many relationship)
+    pub lookup_layers: Vec<ViewId>,
 }
 
 /// View animation.
@@ -216,6 +218,7 @@ impl<R> View<R> {
             saved_snapshot,
             lookuptexture: None,
             lookuptexture_on: false,
+            lookup_layers: Vec::new(),
             resource,
         }
     }
@@ -623,6 +626,28 @@ impl View<ViewResource> {
 
     pub fn lookuptexture_im_dump(&mut self) {
         self.ops.push(ViewOp::LookupTextureImDump);
+    }
+
+    /// Add a view to the lookup layers
+    pub fn lookup_layer_add(&mut self, view_id: ViewId) {
+        if !self.lookup_layers.contains(&view_id) && self.id != view_id {
+            self.lookup_layers.push(view_id);
+        }
+    }
+
+    /// Remove a view from the lookup layers
+    pub fn lookup_layer_remove(&mut self, view_id: ViewId) {
+        self.lookup_layers.retain(|&id| id != view_id);
+    }
+
+    /// Get the lookup layers
+    pub fn lookup_layers(&self) -> &[ViewId] {
+        &self.lookup_layers
+    }
+
+    /// Check if a view is in the lookup layers
+    pub fn is_lookup_layer(&self, view_id: ViewId) -> bool {
+        self.lookup_layers.contains(&view_id)
     }
 }
 

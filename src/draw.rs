@@ -295,7 +295,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
                 let lut_point_y = (lut_rect.y1 + lut_rect.y2) * 0.5;
                 let lut_point_x = lut_rect.x1;
                 let target_anim_point_x = (target_rect.x1 + target_rect.x2) * 0.5;
-                let target_anim_point_y = target_rect.y1;
+                let target_anim_point_y = if target_rect.y1 > lut_rect.y2 { target_rect.y1 } else { target_rect.y2 };
                 
                 canvas.add(Shape::Line(
                     Line::new(
@@ -315,6 +315,56 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
                     self::UI_LAYER,
                     Rotation::ZERO,
                     Stroke::new(1.0, Rgba::new(0., 1., 0., 0.6)),
+                ));
+    
+            }
+        }
+    }
+
+    // Draw connecting lines between LUT views and their target views
+    for v in session.views.iter() {
+        for lvid in v.lookup_layers.iter() {
+            // Find the target view that uses this view as its LUT
+            if let Some(lut_view) = session.views.iter().find(|tv| tv.id == *lvid) {
+                let target_rect = Rect::new(
+                    -(v.fw as f32) * 3.,
+                    0.,
+                    -(v.fw as f32) * 2.,
+                    v.fh as f32)
+        
+                    * v.zoom
+                    + (session.offset + v.offset);        
+                let lut_anim_rect = Rect::new(
+                    -(lut_view.fw as f32) * 2.,
+                    0.,
+                    -(lut_view.fw as f32),
+                    lut_view.fh as f32)
+                    * lut_view.zoom
+                    + (session.offset + lut_view.offset);
+
+                let lut_point_y = (lut_anim_rect.y1 + lut_anim_rect.y2) * 0.5;
+                let lut_point_x = lut_anim_rect.x1;
+                let target_anim_point_x = (target_rect.x1 + target_rect.x2) * 0.5;
+                let target_anim_point_y = if target_rect.y1 > lut_anim_rect.y2 { target_rect.y1 } else { target_rect.y2 };
+                
+                canvas.add(Shape::Line(
+                    Line::new(
+                        [lut_point_x, lut_point_y],
+                        [target_anim_point_x, lut_point_y],
+                    ),
+                    self::UI_LAYER,
+                    Rotation::ZERO,
+                    Stroke::new(1.0, Rgba::new(1., 1., 0., 0.6)),
+                ));
+                
+                canvas.add(Shape::Line(
+                    Line::new(
+                        [target_anim_point_x, lut_point_y],
+                        [target_anim_point_x, target_anim_point_y],
+                    ),
+                    self::UI_LAYER,
+                    Rotation::ZERO,
+                    Stroke::new(1.0, Rgba::new(1., 1., 0., 0.6)),
                 ));
     
             }

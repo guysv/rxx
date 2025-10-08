@@ -3207,6 +3207,24 @@ impl Session {
 
                 self.effects.push(Effect::LookupTextureQuery(lutv.id, hover));
             }
+            Command::LookupLayerAdd(d) => {
+                let current = self.views.active_id;
+                if let Some(id) = self.views.relativen(current, d) {
+                    self.active_view_mut().lookup_layer_add(id);
+                }
+            }
+            Command::LookupLayerRemove(d) => {
+                let current = self.views.active_id;
+                if let Some(id) = self.views.relativen(current, d) {
+                    self.active_view_mut().lookup_layer_remove(id);
+                }
+            }
+            Command::LookupLayerClear => {
+                let layers = self.active_view_mut().lookup_layers().to_vec();
+                for layer_id in layers {
+                    self.active_view_mut().lookup_layer_remove(layer_id);
+                }
+            }
         };
     }
 

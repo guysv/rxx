@@ -128,6 +128,11 @@ pub enum Command {
     LookupTextureMode(bool),
     LookupTextureSet(i32),
     LookupTextureImDump,
+    
+    // Lookup Layer commands
+    LookupLayerAdd(i32),
+    LookupLayerRemove(i32),
+    LookupLayerClear,
 
     Noop,
 }
@@ -1101,6 +1106,17 @@ impl Default for Commands {
             })
             .command("lt/sampler", "Switch to lookup texture sampler tool", |p| {
                 p.value(Command::Tool(Tool::LookupTextureSampler))
+            })
+            .command("ll/add", "Add view to lookup layers", |p| {
+                p.then(integer::<i32>().label("<d>"))
+                    .map(|(_, d)| Command::LookupLayerAdd(d))
+            })
+            .command("ll/remove", "Remove view from lookup layers", |p| {
+                p.then(integer::<i32>().label("<d>"))
+                    .map(|(_, d)| Command::LookupLayerRemove(d))
+            })
+            .command("ll/clear", "Clear all lookup layers", |p| {
+                p.value(Command::LookupLayerClear)
             })
     }
 }
