@@ -214,6 +214,8 @@ pub enum Effect {
     ViewPaintFinal(Vec<Shape>),
     /// The blend mode used for painting has changed.
     ViewBlendingChanged(Blending),
+    /// Used by session to do lookup map querying
+    LookupTextureQuery(ViewId, Rgba8),
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -673,6 +675,8 @@ pub struct Session {
     pub prev_tool: Option<Tool>,
     /// The brush tool settings.
     pub brush: Brush,
+    /// The current cursor color.
+    pub lookup_result: Option<(ViewId, u32, u32)>,
 
     /// Input state of the mouse.
     mouse_state: InputState,
@@ -682,6 +686,9 @@ pub struct Session {
     /// the command is processed. For example, when displaying a message before
     /// an expensive process is kicked off.
     queue: Vec<InternalCommand>,
+
+    /// Extra window events sourced from the session.
+    pub extra_events: Vec<platform::WindowEvent>,
 }
 
 impl Session {
@@ -756,6 +763,7 @@ impl Session {
             fg: color::WHITE,
             bg: color::BLACK,
             brush: Brush::default(),
+            lookup_result: None,
             settings: Settings::default(),
             settings_changed: HashSet::new(),
             views: ViewManager::new(),
@@ -775,6 +783,7 @@ impl Session {
             avg_time: time::Duration::from_secs(0),
             frame_number: 0,
             queue: Vec::new(),
+            extra_events: Vec::new(),
         }
     }
 
@@ -984,6 +993,8 @@ impl Session {
                             Effect::ViewBlendingChanged(Blending::Alpha),
                             Effect::ViewPaintFinal(output),
                         ]);
+                        println!("RedrawRequested");
+                        self.extra_events.push(platform::WindowEvent::RedrawRequested);
                     }
                     // If the brush output isn't empty, we can't possibly not
                     // be drawing!
@@ -1202,7 +1213,7 @@ impl Session {
     }
 
     /// Switch the session mode.
-    fn switch_mode(&mut self, mode: Mode) {
+    pub fn switch_mode(&mut self, mode: Mode) {
         let (old, new) = (self.mode, mode);
         if old == new {
             return;
@@ -1211,12 +1222,6 @@ impl Session {
         match old {
             Mode::Command => {
                 self.cmdline.clear();
-            }
-            Mode::Visual(VisualState::LookupSampling) => {
-                println!("Mode::Visual(VisualState::LookupSampling)");
-            //     if self.lookup_sample_state.is_some() {
-            //         self.prev_lookup_sample_state = std::mem::replace(&mut self.lookup_sample_state, None);
-            //     }
             }
             _ => {}
         }
@@ -2170,35 +2175,55 @@ impl Session {
                 }
                 Mode::Visual(VisualState::LookupSampling) => {
                     println!("Mode::Visual(VisualState::LookupSampling)");
-                    // if state == InputState::Pressed {
-                    //     match key {
-                    //         platform::Key::Escape => {
-                    //             self.switch_mode(Mode::Normal);
-                    //             return;
-                    //         }
-                    //         platform::Key::Tab => {
-                    //             if let Some(lss) = self.lookup_sample_state.as_mut() {
-                    //                 if modifiers.shift {
-                    //                     lss.next(-1);
-                    //                 } else {
-                    //                     lss.next(1);
-                    //                 }
-                    //             }
-                    //             return;
-                    //         }
-                    //         platform::Key::Return => {
-                    //             if let Some(lss) = &self.lookup_sample_state {
-                    //                 if lss.selected >= 0 {
-                    //                     self.pick_color(lss.candidates[lss.selected as usize].1)
-                    //                 }
-                    //             }
-                    //             self.switch_mode(Mode::Normal);
-                    //             self.tool(Tool::Brush);
-                    //             return;
-                    //         }
-                    //         _ => {}
-                    //     }
-                    // }
+                    if state == InputState::Pressed {
+                        match key {
+                            platform::Key::Escape => {
+                                self.switch_mode(Mode::Normal);
+                                return;
+                            }
+                            platform::Key::W => {
+                                if let Some((id, r, g)) = self.lookup_result.take() {
+                                    self.lookup_result = Some((id, r, (g as i32 - 1).max(0) as u32));
+                                }
+                                return;
+                            }
+                            platform::Key::S => {
+                                if let Some((id, r, g)) = self.lookup_result.take() {
+                                    let v = self.view(id);
+                                    self.lookup_result = Some((id, r, (g + 1).min(v.fh as u32 - 1)));
+                                }
+                                return;
+                            }
+                            platform::Key::A => {
+                                if let Some((id, r, g)) = self.lookup_result.take() {
+                                    self.lookup_result = Some((id, (r as i32 - 1).max(0) as u32, g));
+                                }
+                                return;
+                            }
+                            platform::Key::D => {
+                                if let Some((id, r, g)) = self.lookup_result.take() {
+                                    let v = self.view(id);
+                                    self.lookup_result = Some((id, (r + 1).min(v.fw as u32 - 1), g));
+                                }
+                                return;
+                            }
+                            platform::Key::Return
+                            | platform::Key::Space => {
+                                if let Some((id, x, y)) = self.lookup_result.take() {
+                                    // Sample the color at id, x, y, set it as fg (fg to bg, like in sample)
+                                    let v = self.view(id);
+                                    if let Some(color) = v.color_at(ViewCoords::new(x, v.fh as u32 - 1 - y)) {
+                                        self.pick_color(*color);
+                                    }
+                                };
+
+
+                                self.switch_mode(Mode::Normal);
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 Mode::Command => {
                     if state == InputState::Pressed {
@@ -3173,7 +3198,6 @@ impl Session {
                     .get(lutid)
                     .expect(&format!("view #{} must exist", lutid));
 
-                let (_, pixels) = lutv.layer.current_snapshot();
                 let Some(hover) = self.hover_color else {
                     self.message(format!("Not hovering on any color"), MessageType::Error);
                     return;
@@ -3181,46 +3205,7 @@ impl Session {
 
                 println!("Command::LookupTextureSample {}", hover);
 
-            //     let mut lss = LookupSampleState::new(hover);
-            //     for (i, pixel) in pixels.iter().cloned().enumerate() {
-            //         let vw = lutv.extent.fw * lutv.extent.nframes as u32;
-            //         let x = (i as u32 % vw) as f32;
-            //         let r = (i as u32 % vw) as f32;
-            //         let rf = 256.0 / (lutv.extent.fw as f32);
-            //         let y = (lutv.extent.fh - 1 - i as u32 / vw) as f32;
-            //         let g = (i as f32 / (vw as f32)).floor();
-            //         let gf = 256.0 / (lutv.extent.fh as f32);
-            //         if pixel == hover {
-            //             // register potential candidate
-            //             lss.candidates.push(LookupSampleCandidate(
-            //                 Rect::new(x, y, x + 1., y + 1.),
-            //                 Rgba8::new(
-            //                     (r * rf).floor() as u8,
-            //                     (g * gf).floor() as u8,
-            //                     pixel.r.max(pixel.g).max(pixel.b) as u8,
-            //                     255,
-            //                 ),
-            //             ))
-            //         }
-            //     }
-
-            //     if let Some(prevlss) = &self.prev_lookup_sample_state {
-            //         if prevlss.color == lss.color &&
-            //             (prevlss.selected as usize) < lss.candidates.len() {
-            //             lss.selected = prevlss.selected;
-            //         }
-            //     }
-                
-
-            //     if lss.candidates.len() > 0 {
-            //         self.lookup_sample_state = Some(lss);
-            //         self.switch_mode(Mode::Visual(VisualState::LookupSampling));
-            //     } else {
-            //         self.message(
-            //             format!("No matching pixels in lookup texture"),
-            //             MessageType::Warning,
-            //         );
-            //     }
+                self.effects.push(Effect::LookupTextureQuery(lutv.id, hover));
             }
         };
     }

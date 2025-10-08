@@ -177,7 +177,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         Duration::default(),
         Duration::default(),
     );
-    renderer.init(effects, &session);
+    renderer.init(effects, &mut session);
 
     let mut render_timer = FrameTimer::new();
     let mut update_timer = FrameTimer::new();
@@ -202,8 +202,9 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             _ if wait_events => events.wait(),
             _ => events.poll(),
         }
+        let extra_events = std::mem::replace(&mut session.extra_events, Vec::new());
 
-        for event in events.flush() {
+        for event in events.flush().chain(extra_events) {
             if event.is_input() {
                 debug!("event: {:?}", event);
             }
@@ -251,6 +252,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                     session.transition(State::Paused);
                 }
                 WindowEvent::RedrawRequested => {
+                    println!("RedrawRequested");
                     render_timer.run(|avg| {
                         renderer
                             .frame(&mut session, &mut execution, vec![], &avg)

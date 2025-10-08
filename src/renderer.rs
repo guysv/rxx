@@ -15,7 +15,7 @@ pub trait Renderer<'a>: std::marker::Sized {
         assets: Assets<'a>,
     ) -> std::io::Result<Self>;
 
-    fn init(&mut self, effects: Vec<Effect>, session: &Session);
+    fn init(&mut self, effects: Vec<Effect>, session: &mut Session);
 
     fn frame(
         &mut self,

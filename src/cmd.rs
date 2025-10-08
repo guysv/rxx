@@ -899,6 +899,7 @@ impl Default for Commands {
                     Mode::Normal,
                     Mode::Visual(VisualState::selecting()),
                     Mode::Visual(VisualState::Pasting),
+                    Mode::Visual(VisualState::LookupSampling),
                 ]))
                 .map(|(_, km)| Command::Map(Box::new(km)))
             })
@@ -906,6 +907,7 @@ impl Default for Commands {
                 p.then(KeyMapping::parser(&[
                     Mode::Visual(VisualState::selecting()),
                     Mode::Visual(VisualState::Pasting),
+                    Mode::Visual(VisualState::LookupSampling),
                 ]))
                 .map(|(_, km)| Command::Map(Box::new(km)))
             })

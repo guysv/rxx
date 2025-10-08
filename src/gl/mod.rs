@@ -147,6 +147,12 @@ struct Lookupmap2dInterface {
     lt_tfw: Uniform<u32>,
 }
 
+#[derive(UniformInterface)]
+struct Lookupquery2dInterface {
+    ltexim: Uniform<TextureBinding<Dim2, pixel::NormUnsigned>>,
+    pixel_coords: Uniform<[i32; 2]>,
+}
+
 pub struct Renderer {
     pub win_size: LogicalSize,
 
@@ -175,6 +181,7 @@ pub struct Renderer {
     screen2d: Program<Backend, VertexSemantics, (), Screen2dInterface>,
     lookuptex2d: Program<Backend, VertexSemantics, (), Lookuptex2dInterface>,
     lookupmap2d: Program<Backend, VertexSemantics, (), Lookupmap2dInterface>,
+    lookupquery2d: Program<Backend, VertexSemantics, (), Lookupquery2dInterface>,
 
     view_data: BTreeMap<ViewId, RefCell<ViewData>>,
 }
@@ -185,7 +192,7 @@ struct LayerData {
     lt_tfw: u32,
     lt_tfh: u32,
     w: u32,
-    h: u32,
+    _h: u32,
     tess: Tess<Backend, Sprite2dVertex>,
     lt_tess: Tess<Backend, ()>,
 }
@@ -245,7 +252,7 @@ impl LayerData {
             lt_tfw: tfw,
             lt_tfh: tfh,
             w,
-            h,
+            _h: h,
             tess,
             lt_tess,
         }
@@ -466,6 +473,11 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             include_str!("data/lookupmap.frag"),
         );
 
+        let lookupquery2d = ctx.program::<Lookupquery2dInterface>(
+            include_str!("data/lookupquery.vert"),
+            include_str!("data/lookupquery.frag"),
+        );
+
         let physical = win_size.to_physical(scale_factor);
         let present_fb =
             Framebuffer::back_buffer(&mut ctx, [physical.width as u32, physical.height as u32])
@@ -518,6 +530,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             screen2d,
             lookuptex2d,
             lookupmap2d,
+            lookupquery2d,
             font,
             cursors,
             checker,
@@ -529,7 +542,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         })
     }
 
-    fn init(&mut self, effects: Vec<Effect>, session: &Session) {
+    fn init(&mut self, effects: Vec<Effect>, session: &mut Session) {
         self.handle_effects(effects, session).unwrap();
     }
 
@@ -1069,7 +1082,7 @@ impl Renderer {
     fn handle_effects(
         &mut self,
         mut effects: Vec<Effect>,
-        session: &Session,
+        session: &mut Session,
     ) -> Result<(), RendererError> {
         for eff in effects.drain(..) {
             match eff {
@@ -1113,6 +1126,9 @@ impl Renderer {
                     shapes.into_iter().for_each(|s| self.final_batch.add(s));
                 }
                 Effect::ViewTouched(_) => {}
+                Effect::LookupTextureQuery(id, color) => {
+                    self.handle_lookup_texture_query(session, id, color)?;
+                }
             }
         }
         Ok(())
@@ -1458,6 +1474,73 @@ impl Renderer {
                 );
             }
         }
+    }
+
+    fn handle_lookup_texture_query(&mut self, session: &mut Session, id: ViewId, color: Rgba8) -> Result<(), RendererError> {
+        let lookup_layer = &mut self
+            .view_data
+            .get(&id)
+            .expect("views must have associated view data")
+            .borrow_mut()
+            .layer;
+        
+
+        let mut fb: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F> =
+            Framebuffer::new(&mut self.ctx, [1, 1], 0, self::SAMPLER).unwrap();
+
+        let tess: Tess<Backend, Sprite2dVertex> = TessBuilder::new(&mut self.ctx)
+            .set_vertex_nb(1)
+            .set_mode(Mode::Point)
+            .build()
+            .unwrap();
+        
+        let render_st = RenderState::default()
+            .set_blending(blending::Blending {
+                equation: Equation::Additive,
+                src: Factor::SrcAlpha,
+                dst: Factor::SrcAlphaComplement,
+            })
+            .set_depth_test(Some(DepthComparison::LessOrEqual));
+        let pipeline_st = PipelineState::default()
+            .set_clear_color([0., 0., 0., 0.])
+            .enable_srgb(true)
+            .enable_clear_depth(true)
+            .enable_clear_color(true);
+
+        // decode color into pixel_coords
+        let pixel_coords = [
+            color.r as i32 + (color.b as i32 >> 4) * 256,
+            color.g as i32 + (color.b as i32 & 15) * 256
+        ];
+
+        let mut builder = self.ctx.new_pipeline_gate();
+        builder.pipeline::<PipelineError, _, _, _, _>(
+            &fb,
+            &pipeline_st,
+            |pipeline, mut shd_gate| {
+                let mut lt_im = lookup_layer.lt_im.borrow_mut();
+                let bound_lookup_layer = pipeline
+                    .bind_texture(lt_im.color_slot())
+                    .expect("binding textures never fails");
+                shd_gate.shade(&mut self.lookupquery2d, |mut iface, uni, mut rdr_gate| {
+                    // iface.set(&uni., view_ortho_lookup.into());
+                    // iface.set(&uni.transform, identity);
+                    // iface.set(&uni.tex, bound_lookup_layer.binding());
+                    iface.set(&uni.ltexim, bound_lookup_layer.binding());
+                    iface.set(&uni.pixel_coords, pixel_coords);
+                    rdr_gate.render(&render_st, |mut tess_gate| tess_gate.render(&tess))
+                })?;
+                Ok(())
+            }
+        );
+
+        let texels = fb.color_slot().get_raw_texels().unwrap();
+        let pixels = Rgba8::align(&texels).to_vec();
+        println!("lookup query: {}, {}", pixels[0].r, pixels[0].g);
+        session.lookup_result = Some((id, pixels[0].r as u32, pixels[0].g as u32));
+        session.switch_mode(session::Mode::Visual(session::VisualState::LookupSampling));
+
+        Ok(())
     }
 }
 
