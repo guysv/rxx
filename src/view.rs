@@ -336,11 +336,12 @@ impl<R> View<R> {
     pub fn slice(&mut self, nframes: usize) -> bool {
         if nframes > 0 && self.width() % nframes as u32 == 0 {
             let fw = self.width() / nframes as u32;
-            self.reset(ViewExtent::new(fw, self.fh, nframes));
+            let extent = ViewExtent::new(fw, self.fh, nframes);
+            self.reset(extent);
             // FIXME: This is very inefficient. Since the actual frame contents
             // haven't changed, we don't need to create a full snapshot. We just
             // have to record how many frames are in this snapshot.
-            self.touch();
+            self.damaged(Some(extent));
 
             return true;
         }
