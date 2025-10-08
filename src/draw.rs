@@ -790,7 +790,7 @@ pub fn draw_view_animation<R>(session: &Session, v: &View<R>) -> sprite2d::Batch
         v.width(),
         v.fh,
         *v.animation.val(),
-        Rect::new(-(v.fw as f32), 0., 0., v.fh as f32) * v.zoom + (session.offset + v.offset),
+        Rect::new(-(v.fw as f32), -1., 0., v.fh as f32 - 1.) * v.zoom + (session.offset + v.offset),
         self::VIEW_LAYER,
         Rgba::TRANSPARENT,
         1.,
@@ -803,7 +803,7 @@ pub fn draw_view_lookuptexture_animation<R>(session: &Session, v: &View<R>) -> s
         v.width(),
         v.fh,
         *v.animation.val(),
-        Rect::new(-(v.fw as f32) * 2., 0., -(v.fw as f32), v.fh as f32) * v.zoom
+        Rect::new(-(v.fw as f32) * 2., -1., -(v.fw as f32), v.fh as f32 - 1.) * v.zoom
             + (session.offset + v.offset),
         self::VIEW_LAYER,
         Rgba::TRANSPARENT,
