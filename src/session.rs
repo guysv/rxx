@@ -867,15 +867,26 @@ impl Session {
             self.brush.update();
         }
 
+        let mut sync_map: HashMap<ViewId, usize> = HashMap::new();
+
         if let Some(delay) = self.animation_delay() {
             self.accumulator += delta;
             if self.accumulator >= delay {
                 for v in self.views.iter_mut() {
                     v.animation.step();
+                    for id in v.lookup_layers() {
+                        sync_map.insert(*id, v.animation.index);
+                    }
                 }
                 self.accumulator = time::Duration::from_secs(0);
             }
         }
+
+        for (id, index) in sync_map.iter() {
+            let v = self.views.get_mut(*id).unwrap();
+            v.animation.index = *index;
+        }
+
         if self.ignore_received_characters {
             self.ignore_received_characters = false;
         }
