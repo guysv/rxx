@@ -29,6 +29,7 @@ void main() {
     pixel_coord = clamp(pixel_coord, ivec2(0), tex_size - ivec2(1));
 
     vec4 imtexel = texelFetch(tex, pixel_coord, 0);
+    vec4 imtexel_raw = imtexel;
     imtexel = vec4(linearTosRGB(imtexel.rgb), imtexel.a); // Convert to linear space
     // imtexel.rgb = imtexel.rgb + vec3(0.001953125, 0.001953125, 0.001953125);
     if (imtexel.a > 0.0) {
@@ -74,9 +75,9 @@ void main() {
                 lt_texel.a * f_opacity
             );
         } else {
-            fragColor = vec4(0.0);
+            fragColor = imtexel_raw;
         }
     } else {
-        fragColor = vec4(0.0);
+        fragColor = imtexel_raw;
     }
 }
