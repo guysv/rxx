@@ -865,11 +865,24 @@ pub fn draw_view_animation<R>(session: &Session, v: &View<R>) -> sprite2d::Batch
     )
 }
 
-pub fn draw_view_lookuptexture_animation<R>(session: &Session, v: &View<R>) -> sprite2d::Batch {
+pub fn draw_view_lookuptexture_animation<R>(v: &View<R>) -> sprite2d::Batch {
     sprite2d::Batch::singleton(
         v.width(),
         v.fh,
         *v.animation.val(),
+        Rect::origin(v.fw as f32, v.fh as f32),
+        self::VIEW_LAYER,
+        Rgba::TRANSPARENT,
+        1.,
+        Repeat::default(),
+    )
+}
+
+pub fn draw_view_lookuptexture_fb<R>(session: &Session, v: &View<R>) -> sprite2d::Batch {
+    sprite2d::Batch::singleton(
+        v.fw,
+        v.fh,
+        Rect::origin(v.fw as f32, v.fh as f32),
         Rect::new(
             -(v.fw as f32) * 2.,
             -1.,
@@ -877,6 +890,25 @@ pub fn draw_view_lookuptexture_animation<R>(session: &Session, v: &View<R>) -> s
             v.fh as f32 - 1.)
             * v.zoom
             + (session.offset + v.offset),
+        self::VIEW_LAYER,
+        Rgba::TRANSPARENT,
+        1.,
+        Repeat::default(),
+    )
+}
+
+pub fn draw_view_lookuptexture_layer<R>(session: &Session, source_view: &View<R>, target_view: &View<R>) -> sprite2d::Batch {
+    sprite2d::Batch::singleton(
+        source_view.fw,
+        source_view.fh,
+        Rect::origin(source_view.fw as f32, source_view.fh as f32),
+        Rect::new(
+            -(target_view.fw as f32) * 3.,
+            -1.,
+            -(target_view.fw as f32) * 2.,
+            target_view.fh as f32 - 1.)
+            * target_view.zoom
+            + (session.offset + target_view.offset),
         self::VIEW_LAYER,
         Rgba::TRANSPARENT,
         1.,

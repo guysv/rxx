@@ -189,6 +189,7 @@ pub struct Renderer {
 struct LayerData {
     fb: RefCell<Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>>,
     lt_im: RefCell<Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>>,
+    lookup_anim_fb: RefCell<Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>>,
     lt_tfw: u32,
     lt_tfh: u32,
     w: u32,
@@ -234,6 +235,14 @@ impl LayerData {
             Framebuffer::new(ctx, [w, h], 0, self::SAMPLER).unwrap();
         let mut lt_im: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F> =
             Framebuffer::new(ctx, [256 * 16, 256 * 16], 0, self::SAMPLER).unwrap();
+                    // Create intermediate framebuffer for lookup animation output (sized to frame height)
+        let mut lookup_anim_fb: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F> =
+        Framebuffer::new(ctx, [tfw, h], 0, self::SAMPLER).unwrap();
+    
+        lookup_anim_fb
+            .color_slot()
+            .clear(GenMipmaps::No, (0, 0, 0, 0))
+            .unwrap();
 
         fb.color_slot().clear(GenMipmaps::No, (0, 0, 0, 0)).unwrap();
         lt_im
@@ -255,6 +264,7 @@ impl LayerData {
             _h: h,
             tess,
             lt_tess,
+            lookup_anim_fb: RefCell::new(lookup_anim_fb),
         }
     }
 
@@ -303,6 +313,8 @@ struct ViewData {
     staging_fb: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F>,
     anim_tess: Option<Tess<Backend, Sprite2dVertex>>,
     anim_lt_tess: Option<Tess<Backend, Sprite2dVertex>>,
+    lt_fb_tess: Option<Tess<Backend, Sprite2dVertex>>,
+    lookup_layer_tess: Vec<(ViewId, Tess<Backend, Sprite2dVertex>)>,
     layer_tess: Option<Tess<Backend, Sprite2dVertex>>,
 }
 
@@ -321,6 +333,8 @@ impl ViewData {
             staging_fb,
             anim_tess: None,
             anim_lt_tess: None,
+            lt_fb_tess: None,
+            lookup_layer_tess: Vec::new(),
             layer_tess: None,
         }
     }
@@ -768,6 +782,61 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             );
         }
 
+        // Render lookup texture animations to intermediate framebuffers
+        if session.settings["animation"].is_set() {
+            for (id, _rcv) in view_data.iter() {
+                let v = view_data.get(&id).unwrap();
+                let view = session.views.get(*id).unwrap();
+                let Some(ltid) = view.lookuptexture() else {
+                    continue;
+                };
+                let rcltv = view_data.get(&ltid).unwrap();
+                // if let Some(tess) = rcltv.borrow().lt_fb_tess {
+                // Render to intermediate framebuffer
+                builder.pipeline::<PipelineError, _, _, _, _>(
+                    &*v.borrow().layer.lookup_anim_fb.borrow(),
+                    pipeline_st,
+                    |pipeline, mut shd_gate| {
+                        let v_inner = v.borrow();
+                        let Some(tess) = &v_inner.lt_fb_tess else {
+                            return Ok(());
+                        };
+                        let lookup_anim_ortho: M44 = Matrix4::ortho(v_inner.layer.lt_tfw, v_inner.layer._h, Origin::TopLeft).into();
+                        
+                        let mut main_fb = v_inner.layer.fb.borrow_mut();
+                        let bound_layer = pipeline
+                            .bind_texture(main_fb.color_slot())
+                            .expect("binding textures never fails");
+                        
+                        let ltv_inner = rcltv.borrow();
+                        let mut lookup_fb = ltv_inner.layer.fb.borrow_mut();
+                        let mut lookup_lt_im = ltv_inner.layer.lt_im.borrow_mut();
+                        let lookup_layer = pipeline
+                            .bind_texture(lookup_fb.color_slot())
+                            .expect("binding textures never fails");
+                        let lookup_map = pipeline
+                            .bind_texture(lookup_lt_im.color_slot())
+                            .expect("binding textures never fails");
+                        
+                        shd_gate.shade(lookuptex2d, |mut iface, uni, mut rdr_gate| {
+                            iface.set(&uni.ortho, lookup_anim_ortho);
+                            iface.set(&uni.transform, identity);
+                            iface.set(&uni.tex, bound_layer.binding());
+                            iface.set(&uni.ltex, lookup_layer.binding());
+                            iface.set(&uni.ltexim, lookup_map.binding());
+                            iface.set(&uni.lt_tfw, ltv_inner.layer.lt_tfw);
+                            
+                            rdr_gate.render(render_st, |mut tess_gate| {
+                                tess_gate.render(tess)
+                            })
+                        })?;
+                        
+                        Ok(())
+                    },
+                );
+            }
+        }
+
         // Render to screen framebuffer.
         let bg = Rgba::from(session.settings["background"].to_rgba8());
         let screen_st = &pipeline_st
@@ -893,50 +962,60 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     Ok(())
                 })?;
 
-                shd_gate.shade(lookuptex2d, |mut iface, uni, mut rdr_gate| {
+                // Composite lookup animations to screen using sprite2d
+                shd_gate.shade(sprite2d, |mut iface, uni, mut rdr_gate| {
                     iface.set(&uni.ortho, ortho);
+                    iface.set(&uni.transform, identity);
+                    
                     if session.settings["animation"].is_set() {
                         for (id, v) in view_data.iter() {
-                            let v = &mut *v.borrow_mut();
-                            match (&v.anim_lt_tess, session.views.get(*id)) {
+                            let v_borrow = v.borrow();
+                            let Some(view) = session.views.get(*id) else {
+                                continue;
+                            };
+                            
+                            // Render the main lookup animation
+                            match (&v_borrow.anim_lt_tess, Some(view)) {
                                 (Some(tess), Some(view)) if !view.lookuptexture().is_none() => {
-                                    let ltid = view.lookuptexture().unwrap();
-                                    match (view_data.get(&ltid), session.views.get(ltid)) {
-                                        (Some(rcltv), Some(_ltview)) => {
-                                            let mut main_fb = v.layer.fb.borrow_mut();
-                                            let bound_layer = pipeline
-                                                .bind_texture(main_fb.color_slot())
-                                                .expect("binding textures never fails");
-                                            let ltv = rcltv.borrow();
-                                            let mut lookup_fb = ltv.layer.fb.borrow_mut();
-                                            let mut lookup_lt_im = ltv.layer.lt_im.borrow_mut();
-                                            let lookup_layer = pipeline
-                                                .bind_texture(lookup_fb.color_slot())
-                                                .expect("binding textures never fails");
-                                            let lookup_map = pipeline
-                                                .bind_texture(lookup_lt_im.color_slot())
-                                                .expect("binding textures never fails");
-                                            let t = Matrix4::from_translation(
-                                                Vector2::new(0., view.zoom).extend(0.),
-                                            );
-                                            // Render layer animation.
-                                            iface.set(&uni.tex, bound_layer.binding());
-                                            iface.set(&uni.ltex, lookup_layer.binding());
-                                            iface.set(&uni.ltexim, lookup_map.binding());
-                                            // iface.set(&uni.ltexreg, [0.5, 1.]);
-                                            iface.set(&uni.lt_tfw, ltv.layer.lt_tfw);
-                                            iface.set(&uni.transform, t.into());
-                                            rdr_gate.render(render_st, |mut tess_gate| {
-                                                tess_gate.render(tess)
-                                            })?;
-                                        }
-                                        _ => (),
-                                    }
+                                    let mut lookup_anim_fb = v_borrow.layer.lookup_anim_fb.borrow_mut();
+                                    let bound_lookup_anim = pipeline
+                                        .bind_texture(lookup_anim_fb.color_slot())
+                                        .expect("binding textures never fails");
+                                    
+                                    let t = Matrix4::from_translation(
+                                        Vector2::new(0., view.zoom).extend(0.),
+                                    );
+                                    
+                                    iface.set(&uni.tex, bound_lookup_anim.binding());
+                                    iface.set(&uni.transform, t.into());
+                                    rdr_gate.render(render_st, |mut tess_gate| {
+                                        tess_gate.render(tess)
+                                    })?;
                                 }
                                 _ => (),
                             }
+
+                            // Render lookup layered animations
+                            for (llid, tess) in v_borrow.lookup_layer_tess.iter() {
+                                let ltv = view_data.get(&llid).unwrap().borrow();
+                                let mut lookup_anim_fb = ltv.layer.lookup_anim_fb.borrow_mut();
+                                let bound_lookup_anim = pipeline
+                                    .bind_texture(lookup_anim_fb.color_slot())
+                                    .expect("binding textures never fails");
+                                
+                                let t = Matrix4::from_translation(
+                                    Vector2::new(0., view.zoom).extend(0.),
+                                );
+                                
+                                iface.set(&uni.tex, bound_lookup_anim.binding());
+                                iface.set(&uni.transform, t.into());
+                                rdr_gate.render(render_st, |mut tess_gate| {
+                                    tess_gate.render(tess)
+                                })?;
+                            }
                         }
                     }
+                    
                     Ok(())
                 })?;
 
@@ -1365,6 +1444,18 @@ impl Renderer {
                             println!("pixel {}, {}: {}", x, y, pixel);
                         }
                     }
+
+                    let mut fb = layer.lookup_anim_fb.borrow_mut();
+                    let texels = fb.color_slot().get_raw_texels().unwrap();
+                    let pixels = Rgba8::align(&texels).to_vec();
+                    println!("lookup_anim_fb");
+                    for (i, pixel) in pixels.iter().enumerate() {
+                        let x = i as u32 % layer.w;
+                        let y = i as u32 / layer.w;
+                        if pixel.a != 0 {
+                            println!("pixel {}, {}: {}", x, y, pixel);
+                        }
+                    }
                 }
             }
         }
@@ -1457,14 +1548,40 @@ impl Renderer {
 
             // lookup-texture animation enabled
             if let Some(_) = v.lookuptexture() {
-                let ltbatch = draw::draw_view_lookuptexture_animation(s, v);
+                let ltbatch = draw::draw_view_lookuptexture_fb(s, v);
+                let ltfbbatch = draw::draw_view_lookuptexture_animation(v);
                 if let Some(vd) = self.view_data.get(&v.id) {
                     vd.borrow_mut().anim_lt_tess = Some(
                         self.ctx
                             .tessellation::<_, Sprite2dVertex>(ltbatch.vertices().as_slice()),
                     );
+                    vd.borrow_mut().lt_fb_tess = Some(
+                        self.ctx
+                            .tessellation::<_, Sprite2dVertex>(ltfbbatch.vertices().as_slice()),
+                    );
                 }
             }
+
+            if !v.lookup_layers().is_empty() {
+                let vd = self.view_data.get(&v.id).unwrap();
+                vd.borrow_mut().lookup_layer_tess.clear();
+                let batch = draw::draw_view_lookuptexture_layer(s, v, v);
+                vd.borrow_mut().lookup_layer_tess.push((
+                    v.id,
+                    self.ctx
+                        .tessellation::<_, Sprite2dVertex>(batch.vertices().as_slice()),
+                ));
+                for llid in v.lookup_layers() {
+                    let ltv = s.views.get(*llid).unwrap();
+                    let batch = draw::draw_view_lookuptexture_layer(s, ltv, v);
+                    vd.borrow_mut().lookup_layer_tess.push((
+                        *llid,
+                        self.ctx
+                            .tessellation::<_, Sprite2dVertex>(batch.vertices().as_slice()),
+                    ));
+                }
+            }
+
         }
     }
 
