@@ -3193,6 +3193,17 @@ impl Session {
             Command::LookupTextureImDump => {
                 self.active_view_mut().lookuptexture_im_dump();
             }
+            Command::LookupTextureExport(path) => {
+                let v = self.active_view();
+                if v.lookuptexture().is_none() {
+                    self.message(
+                        format!("Current view has no lookup texture"),
+                        MessageType::Error,
+                    );
+                    return;
+                }
+                self.active_view_mut().lookuptexture_export(path);
+            }
             Command::LookupTextureSample => {
                 let v = self.active_view();
                 if v.lookuptexture().is_none() {

@@ -226,7 +226,7 @@ impl LayerData {
             .unwrap();
 
         let lt_tess = TessBuilder::new(ctx)
-            .set_vertex_nb((h * tfw) as usize)
+            .set_vertex_nb((h * w) as usize)
             .set_mode(Mode::Point)
             .build()
             .unwrap();
@@ -235,9 +235,9 @@ impl LayerData {
             Framebuffer::new(ctx, [w, h], 0, self::SAMPLER).unwrap();
         let mut lt_im: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F> =
             Framebuffer::new(ctx, [256 * 16, 256 * 16], 0, self::SAMPLER).unwrap();
-                    // Create intermediate framebuffer for lookup animation output (sized to frame height)
+                    // Create intermediate framebuffer for lookup animation output (sized to full spritesheet)
         let mut lookup_anim_fb: Framebuffer<Backend, Dim2, pixel::SRGBA8UI, pixel::Depth32F> =
-        Framebuffer::new(ctx, [tfw, h], 0, self::SAMPLER).unwrap();
+        Framebuffer::new(ctx, [w, h], 0, self::SAMPLER).unwrap();
     
         lookup_anim_fb
             .color_slot()
@@ -300,6 +300,16 @@ impl LayerData {
     fn pixels(&mut self) -> Vec<Rgba8> {
         let texels = self
             .fb
+            .borrow_mut()
+            .color_slot()
+            .get_raw_texels()
+            .expect("getting raw texels never fails");
+        Rgba8::align(&texels).to_vec()
+    }
+
+    fn lookup_anim_pixels(&mut self) -> Vec<Rgba8> {
+        let texels = self
+            .lookup_anim_fb
             .borrow_mut()
             .color_slot()
             .get_raw_texels()
@@ -801,7 +811,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                         let Some(tess) = &v_inner.lt_fb_tess else {
                             return Ok(());
                         };
-                        let lookup_anim_ortho: M44 = Matrix4::ortho(v_inner.layer.lt_tfw, v_inner.layer._h, Origin::TopLeft).into();
+                        let lookup_anim_ortho: M44 = Matrix4::ortho(v_inner.layer.w, v_inner.layer._h, Origin::TopLeft).into();
                         
                         let mut main_fb = v_inner.layer.fb.borrow_mut();
                         let bound_layer = pipeline
@@ -1455,6 +1465,23 @@ impl Renderer {
                         if pixel.a != 0 {
                             println!("pixel {}, {}: {}", x, y, pixel);
                         }
+                    }
+                }
+                ViewOp::LookupTextureExport(path) => {
+                    let layer = &mut self
+                        .view_data
+                        .get(&v.id)
+                        .expect("views must have associated view data")
+                        .borrow_mut()
+                        .layer;
+                    
+                    let pixels = layer.lookup_anim_pixels();
+                    
+                    // Save using the existing image module
+                    if let Err(e) = image::save_as(&path, layer.w, layer._h, 1, &pixels) {
+                        eprintln!("Failed to save lookup texture export to {}: {}", path, e);
+                    } else {
+                        println!("Lookup texture exported to: {}", path);
                     }
                 }
             }

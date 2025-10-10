@@ -111,6 +111,8 @@ pub enum ViewOp {
     Shade(Rect<i32>, Rgba8, Rgba8),
     /// Generate intermediate lookup texture map for given area.
     LookupTextureImDump,
+    /// Export lookup texture spritesheet to file.
+    LookupTextureExport(String),
 }
 
 /// A view on a sprite or image.
@@ -626,6 +628,10 @@ impl View<ViewResource> {
 
     pub fn lookuptexture_im_dump(&mut self) {
         self.ops.push(ViewOp::LookupTextureImDump);
+    }
+
+    pub fn lookuptexture_export(&mut self, path: String) {
+        self.ops.push(ViewOp::LookupTextureExport(path));
     }
 
     /// Add a view to the lookup layers

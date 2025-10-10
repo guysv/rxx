@@ -128,6 +128,7 @@ pub enum Command {
     LookupTextureMode(bool),
     LookupTextureSet(i32),
     LookupTextureImDump,
+    LookupTextureExport(String),
     
     // Lookup Layer commands
     LookupLayerAdd(i32),
@@ -1100,6 +1101,9 @@ impl Default for Commands {
             )
             .command("lt/imdump", "Intermediate map dump", |p| {
                 p.value(Command::LookupTextureImDump)
+            })
+            .command("lt/export", "Export lookup texture spritesheet", |p| {
+                p.then(path()).map(|(_, path)| Command::LookupTextureExport(path))
             })
             .command("lt/sample", "Search lookup texture for matching pixels", |p| {
                 p.value(Command::LookupTextureSample)
