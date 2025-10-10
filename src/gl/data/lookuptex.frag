@@ -54,7 +54,7 @@ void main() {
             // Walk from right to left to find first non-zero alpha pixel
             vec4 lt_texel = vec4(0.0);
             int max_n = int(ltex_size.x) / int(lt_tfw);
-            for (int n = max_n - 1; n >= 0; n--) {
+            for (int n = max_n - 1; n > 0; n--) {
                 ivec2 check_coord = ivec2(
                     n * int(lt_tfw) + ltex_pixel_coord.x,
                     ltex_pixel_coord.y
@@ -78,6 +78,7 @@ void main() {
             fragColor = imtexel_raw;
         }
     } else {
+        // color is not mapped in ltexim, fall back to original
         fragColor = imtexel_raw;
     }
 }
