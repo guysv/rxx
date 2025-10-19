@@ -1144,7 +1144,7 @@ impl Session {
     /// Re-compute state related to the cursor position. This is useful
     /// when the cursor hasn't moved relative to the session, but things
     /// within the session have moved relative to the cursor.
-    fn cursor_dirty(&mut self) {
+    pub fn cursor_dirty(&mut self) {
         if !self.settings["input/mouse"].is_set() {
             return;
         }

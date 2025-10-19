@@ -1122,6 +1122,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             }
         }
 
+        if !self.final_batch.is_empty() {
+            session.cursor_dirty();
+        }
+
         if !execution.is_normal() {
             let texels = screen_fb
                 .color_slot()
