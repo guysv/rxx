@@ -655,6 +655,8 @@ pub struct Session {
 
     /// Views loaded in the session.
     pub views: ViewManager<ViewResource>,
+    /// Optional miniview view id displayed as a read-only overlay.
+    pub miniview: Option<ViewId>,
     /// Effects produced by the session. Cleared at the beginning of every
     /// update.
     pub effects: Vec<Effect>,
@@ -767,6 +769,7 @@ impl Session {
             settings: Settings::default(),
             settings_changed: HashSet::new(),
             views: ViewManager::new(),
+            miniview: None,
             effects: Vec::new(),
             accumulator: time::Duration::from_secs(0),
             palette: Palette::new(Self::PALETTE_CELL_SIZE, Self::PALETTE_HEIGHT as usize),
@@ -2517,6 +2520,21 @@ impl Session {
         debug!("command: {:?}", cmd);
 
         match cmd {
+            Command::MiniviewSet(dopt) => {
+                match dopt {
+                    Some(d) => {
+                        let current = self.views.active_id;
+                        if let Some(id) = self.views.relativen(current, d) {
+                            if self.views.get(id).is_some() {
+                                self.miniview = Some(id);
+                            }
+                        }
+                    }
+                    None => {
+                        self.miniview = None;
+                    }
+                }
+            }
             Command::Mode(m) => {
                 self.toggle_mode(m);
             }

@@ -135,6 +135,9 @@ pub enum Command {
     LookupLayerRemove(i32),
     LookupLayerClear,
 
+    // Miniview
+    MiniviewSet(Option<i32>),
+
     Noop,
 }
 
@@ -1121,6 +1124,15 @@ impl Default for Commands {
             })
             .command("ll/clear", "Clear all lookup layers", |p| {
                 p.value(Command::LookupLayerClear)
+            })
+            .command("miniview", "Show miniview for <id> or 'off'", |p| {
+                p.then(
+                    integer::<i32>().label("<id>")
+                        .map(|id| Command::MiniviewSet(Some(id)))
+                        .or(string("off").value(Command::MiniviewSet(None)))
+                        .label("<id|off>")
+                )
+                .map(|(_, cmd)| cmd)
             })
     }
 }
