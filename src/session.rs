@@ -13,7 +13,7 @@ use crate::palette::*;
 use crate::platform::{self, InputState, Key, KeyboardInput, LogicalSize, ModifiersState};
 use crate::util;
 use crate::view::path;
-use crate::view::resource::ViewResource;
+use crate::view::resource::{MiniviewResource, ViewResource};
 use crate::view::{
     self, FileStatus, FileStorage, View, ViewCoords, ViewExtent, ViewId, ViewManager, ViewOp,
     ViewState,
@@ -656,7 +656,7 @@ pub struct Session {
     /// Views loaded in the session.
     pub views: ViewManager<ViewResource>,
     /// Optional miniview view id displayed as a read-only overlay.
-    pub miniview: Option<ViewId>,
+    pub miniview: Option<(ViewId, View<MiniviewResource>)>,
     /// Effects produced by the session. Cleared at the beginning of every
     /// update.
     pub effects: Vec<Effect>,
@@ -1889,6 +1889,7 @@ impl Session {
         // TODO: Reset session cursor coordinates
         self.center_palette();
         self.center_active_view();
+        self.update_miniview_layout();
     }
 
     pub fn rescale(&mut self, old: f64, new: f64) {
@@ -2377,6 +2378,34 @@ impl Session {
     /// Centering
     ///////////////////////////////////////////////////////////////////////////
 
+    /// Update the layout of the miniview.
+    fn update_miniview_layout(&mut self) {
+        let id = if let Some((id, _)) = &self.miniview {
+            *id
+        } else {
+            return;
+        };
+
+        if let Some(src_view) = self.views.get(id) {
+            let target_h = self.height * 0.40;
+            let scale = (if src_view.fh == 0 {
+                1.0
+            } else {
+                target_h / src_view.fh as f32
+            })
+            .floor();
+            let target_w = src_view.width() as f32 * scale;
+
+            let dst_x = self.width - 12.0 - target_w;
+            let dst_y = (self.height - target_h) * 0.5;
+
+            if let Some((_, ref mut view)) = &mut self.miniview {
+                view.offset = Vector2::new(dst_x, dst_y);
+                view.zoom = scale;
+            }
+        }
+    }
+
     /// Center the palette in the workspace.
     fn center_palette(&mut self) {
         let h = self.settings["p/height"].to_u64() as usize;
@@ -2525,8 +2554,19 @@ impl Session {
                     Some(d) => {
                         let current = self.views.active_id;
                         if let Some(id) = self.views.relativen(current, d) {
-                            if self.views.get(id).is_some() {
-                                self.miniview = Some(id);
+                            if let Some(v) = self.views.get(id) {
+                                self.miniview = Some((
+                                    id,
+                                    View::new(
+                                        id,
+                                        FileStatus::NoFile,
+                                        v.fw,
+                                        v.fh,
+                                        v.animation.len(),
+                                        MiniviewResource,
+                                    ),
+                                ));
+                                self.update_miniview_layout();
                             }
                         }
                     }

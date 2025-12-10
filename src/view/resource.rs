@@ -23,6 +23,8 @@ pub struct ViewResource {
     pub extent: ViewExtent,
 }
 
+pub struct MiniviewResource;
+
 impl ViewResource {
     pub fn new(pixels: Vec<Rgba8>, extent: ViewExtent) -> Self {
         Self {

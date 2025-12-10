@@ -683,26 +683,25 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         // Precompute miniview tessellation and geometry
         let mut miniview_tess: Option<Tess<Backend, Sprite2dVertex>> = None;
         let mut miniview_id_and_pos: Option<(ViewId, f32, f32)> = None;
-        if let Some(mini_id) = session.miniview {
-            if let Some(mini_view) = session.views.get(mini_id) {
-                let target_h = (screen_h as f32) * 0.40;
-                let miniview_scale = if mini_view.fh == 0 { 1.0 } else { target_h / (mini_view.fh as f32) };
-                let target_w = (mini_view.width() as f32) * miniview_scale;
-                let dst_x = (screen_w as f32) - 12.0 - target_w;
-                let dst_y = ((screen_h as f32) - target_h) * 0.5;
+        if let Some((mini_id, miniview)) = &session.miniview {
+            if let Some(mini_view) = session.views.get(*mini_id) {
+                let dst_x = miniview.offset.x;
+                let dst_y = miniview.offset.y;
+                let target_w = mini_view.width() as f32 * miniview.zoom;
+                let target_h = mini_view.fh as f32 * miniview.zoom;
 
                 let batch = sprite2d::Batch::singleton(
                     mini_view.width(),
                     mini_view.fh,
                     Rect::origin(mini_view.width() as f32, mini_view.fh as f32),
                     Rect::new(dst_x, dst_y, dst_x + target_w, dst_y + target_h),
-                    ZDepth::default(),
+                    draw::VIEW_LAYER,
                     Rgba::TRANSPARENT,
                     1.0,
                     Repeat::default(),
                 );
                 miniview_tess = Some(self.ctx.tessellation::<_, Sprite2dVertex>(&batch.vertices()));
-                miniview_id_and_pos = Some((mini_id, dst_x, dst_y));
+                miniview_id_and_pos = Some((*mini_id, dst_x, dst_y));
             }
         }
 
@@ -1250,8 +1249,10 @@ impl Renderer {
                 }
                 Effect::ViewRemoved(id) => {
                     self.view_data.remove(&id);
-                    if session.miniview == Some(id) {
-                        session.miniview = None;
+                    if let Some((vid, _)) = &session.miniview {
+                        if *vid == id {
+                            session.miniview = None;
+                        }
                     }
                 }
                 Effect::ViewOps(id, ops) => {
