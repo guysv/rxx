@@ -254,6 +254,18 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
             Fill::Empty,
         ));
 
+        if session.settings["animation"].is_set() && v.animation.len() > 1 {
+            let frame_num = v.animation.index + 1;
+            text.add(
+                &format!("{}", frame_num),
+                offset.x - v.fw as f32 * v.zoom,
+                offset.y,
+                self::TEXT_LAYER,
+                color::WHITE,
+                TextAlign::Left,
+            );
+        }
+
         if session.settings["ui/view-info"].is_set() {
             // View info
             let x = text.add(
