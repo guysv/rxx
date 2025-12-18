@@ -968,59 +968,6 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     rdr_gate.render(render_st, |mut tess_gate| tess_gate.render(&ui_tess))
                 })?;
 
-                // Render text, tool & view animations.
-                shd_gate.shade(sprite2d, |mut iface, uni, mut rdr_gate| {
-                    iface.set(&uni.ortho, ortho);
-                    iface.set(&uni.transform, identity);
-
-                    // Render view animations.
-                    if session.settings["animation"].is_set() {
-                        for (id, v) in view_data.iter() {
-                            let v = &mut *v.borrow_mut();
-                            match (&v.anim_tess, session.views.get(*id)) {
-                                (Some(tess), Some(view)) if view.animation.len() > 1 => {
-                                    let mut fb = v.layer.fb.borrow_mut();
-                                    let bound_layer = pipeline
-                                        .bind_texture(fb.color_slot())
-                                        .expect("binding textures never fails");
-                                    let t = Matrix4::from_translation(
-                                        Vector2::new(0., view.zoom).extend(0.),
-                                    );
-
-                                    // Render layer animation.
-                                    iface.set(&uni.tex, bound_layer.binding());
-                                    iface.set(&uni.transform, t.into());
-                                    rdr_gate.render(render_st, |mut tess_gate| {
-                                        tess_gate.render(tess)
-                                    })?;
-                                }
-                                _ => (),
-                            }
-                        }
-                    }
-
-                    {
-                        let bound_font = pipeline
-                            .bind_texture(font)
-                            .expect("binding textures never fails");
-                        iface.set(&uni.tex, bound_font.binding());
-                        iface.set(&uni.transform, identity);
-
-                        // Render text.
-                        rdr_gate.render(render_st, |mut tess_gate| tess_gate.render(&text_tess))?;
-                    }
-                    {
-                        let bound_tool = pipeline
-                            .bind_texture(cursors)
-                            .expect("binding textures never fails");
-                        iface.set(&uni.tex, bound_tool.binding());
-
-                        // Render tool.
-                        rdr_gate.render(render_st, |mut tess_gate| tess_gate.render(&tool_tess))?;
-                    }
-                    Ok(())
-                })?;
-
                 // Composite lookup animations to screen using sprite2d
                 shd_gate.shade(sprite2d, |mut iface, uni, mut rdr_gate| {
                     iface.set(&uni.ortho, ortho);
@@ -1077,6 +1024,60 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     
                     Ok(())
                 })?;
+
+                // Render text, tool & view animations.
+                shd_gate.shade(sprite2d, |mut iface, uni, mut rdr_gate| {
+                    iface.set(&uni.ortho, ortho);
+                    iface.set(&uni.transform, identity);
+
+                    // Render view animations.
+                    if session.settings["animation"].is_set() {
+                        for (id, v) in view_data.iter() {
+                            let v = &mut *v.borrow_mut();
+                            match (&v.anim_tess, session.views.get(*id)) {
+                                (Some(tess), Some(view)) if view.animation.len() > 1 => {
+                                    let mut fb = v.layer.fb.borrow_mut();
+                                    let bound_layer = pipeline
+                                        .bind_texture(fb.color_slot())
+                                        .expect("binding textures never fails");
+                                    let t = Matrix4::from_translation(
+                                        Vector2::new(0., view.zoom).extend(0.),
+                                    );
+
+                                    // Render layer animation.
+                                    iface.set(&uni.tex, bound_layer.binding());
+                                    iface.set(&uni.transform, t.into());
+                                    rdr_gate.render(render_st, |mut tess_gate| {
+                                        tess_gate.render(tess)
+                                    })?;
+                                }
+                                _ => (),
+                            }
+                        }
+                    }
+
+                    {
+                        let bound_font = pipeline
+                            .bind_texture(font)
+                            .expect("binding textures never fails");
+                        iface.set(&uni.tex, bound_font.binding());
+                        iface.set(&uni.transform, identity);
+
+                        // Render text.
+                        rdr_gate.render(render_st, |mut tess_gate| tess_gate.render(&text_tess))?;
+                    }
+                    {
+                        let bound_tool = pipeline
+                            .bind_texture(cursors)
+                            .expect("binding textures never fails");
+                        iface.set(&uni.tex, bound_tool.binding());
+
+                        // Render tool.
+                        rdr_gate.render(render_st, |mut tess_gate| tess_gate.render(&tool_tess))?;
+                    }
+                    Ok(())
+                })?;
+
 
                 // Render help.
                 if let Some((win_tess, text_tess)) = help_tess {
