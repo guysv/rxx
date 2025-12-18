@@ -589,6 +589,14 @@ impl std::ops::Index<&str> for Settings {
 ///////////////////////////////////////////////////////////////////////////////
 
 /// The user session.
+#[derive(Clone, Debug)]
+pub struct LookupResult {
+    pub view_id: ViewId,
+    pub cursor_x: u32,
+    pub cursor_y: u32,
+    pub other_queries: Vec<(u32, u32)>,
+}
+
 ///
 /// Stores all relevant session state.
 pub struct Session {
@@ -678,7 +686,7 @@ pub struct Session {
     /// The brush tool settings.
     pub brush: Brush,
     /// The current cursor color.
-    pub lookup_result: Option<(ViewId, u32, u32)>,
+    pub lookup_result: Option<LookupResult>,
 
     /// Input state of the mouse.
     mouse_state: InputState,
@@ -2003,8 +2011,9 @@ impl Session {
                                 self.command(Command::SelectionPaste);
                             }
                             Mode::Visual(VisualState::LookupSampling) => {
-                                println!("Mode::Visual(VisualState::LookupSampling)");
-                                // TODO
+                                if state == InputState::Pressed {
+                                    self.command(Command::LookupTextureSample);
+                                }
                             }
                             Mode::Present | Mode::Help => {}
                         }
@@ -2197,34 +2206,41 @@ impl Session {
                                 return;
                             }
                             platform::Key::W => {
-                                if let Some((id, r, g)) = self.lookup_result.take() {
-                                    self.lookup_result = Some((id, r, (g as i32 - 1).max(0) as u32));
+                                if let Some(mut res) = self.lookup_result.take() {
+                                    res.cursor_y = (res.cursor_y as i32 - 1).max(0) as u32;
+                                    self.lookup_result = Some(res);
                                 }
                                 return;
                             }
                             platform::Key::S => {
-                                if let Some((id, r, g)) = self.lookup_result.take() {
-                                    let v = self.view(id);
-                                    self.lookup_result = Some((id, r, (g + 1).min(v.fh as u32 - 1)));
+                                if let Some(mut res) = self.lookup_result.take() {
+                                    let v = self.view(res.view_id);
+                                    res.cursor_y = (res.cursor_y + 1).min(v.fh as u32 - 1);
+                                    self.lookup_result = Some(res);
                                 }
                                 return;
                             }
                             platform::Key::A => {
-                                if let Some((id, r, g)) = self.lookup_result.take() {
-                                    self.lookup_result = Some((id, (r as i32 - 1).max(0) as u32, g));
+                                if let Some(mut res) = self.lookup_result.take() {
+                                    res.cursor_x = (res.cursor_x as i32 - 1).max(0) as u32;
+                                    self.lookup_result = Some(res);
                                 }
                                 return;
                             }
                             platform::Key::D => {
-                                if let Some((id, r, g)) = self.lookup_result.take() {
-                                    let v = self.view(id);
-                                    self.lookup_result = Some((id, (r + 1).min(v.fw as u32 - 1), g));
+                                if let Some(mut res) = self.lookup_result.take() {
+                                    let v = self.view(res.view_id);
+                                    res.cursor_x = (res.cursor_x + 1).min(v.fw as u32 - 1);
+                                    self.lookup_result = Some(res);
                                 }
                                 return;
                             }
                             platform::Key::Return
                             | platform::Key::Space => {
-                                if let Some((id, x, y)) = self.lookup_result.take() {
+                                if let Some(res) = self.lookup_result.take() {
+                                    let id = res.view_id;
+                                    let x = res.cursor_x;
+                                    let y = res.cursor_y;
                                     // Sample the color at id, x, y, set it as fg (fg to bg, like in sample)
                                     let v = self.view(id);
                                     if let Some(color) = v.color_at(ViewCoords::new(x, v.fh as u32 - 1 - y)) {
@@ -3263,6 +3279,9 @@ impl Session {
                 self.active_view_mut().lookuptexture_export(path);
             }
             Command::LookupTextureSample => {
+                if !matches!(self.mode, Mode::Visual(VisualState::LookupSampling)) {
+                    self.lookup_result = None;
+                }
                 let v = self.active_view();
                 if v.lookuptexture().is_none() {
                     self.message(

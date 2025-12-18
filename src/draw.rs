@@ -730,10 +730,50 @@ fn draw_brush(session: &Session, brush: &Brush, shapes: &mut shape2d::Batch) {
             }
         }
         Mode::Visual(VisualState::LookupSampling) => {
-            if let Some((id, r, g)) = session.lookup_result {
-                let v = session.view(id);
-                let r = r as f32;
-                let g = g as f32;
+            if let Some(res) = &session.lookup_result {
+                let v = session.view(res.view_id);
+                for &(ox, oy) in &res.other_queries {
+                    let r = ox as f32;
+                    let g = oy as f32;
+                    let p = SessionCoords::new(
+                        session.offset.x + v.offset.x + r * z,
+                        session.offset.y + v.offset.y + (v.fh as f32 - 1.0 - g) * z,
+                    );
+                    let c = session.snap(p, v.offset.x, v.offset.y, z);
+                    shapes.add(Shape::Rectangle(
+                        Rect::new(c.x, c.y, c.x + z, c.y + z),
+                        self::UI_LAYER,
+                        Rotation::ZERO,
+                        Stroke::new(1.0, color::YELLOW.into()),
+                        Fill::Empty,
+                    ));
+
+                    if let Some((mini_id, mini_view)) = &session.miniview {
+                        if *mini_id == res.view_id {
+                            let z = mini_view.zoom;
+                            let x = mini_view.offset.x + r * z;
+                            let y = mini_view.offset.y + (mini_view.fh as f32 - 1.0 - g) * z;
+
+                            let c = session.snap(
+                                SessionCoords::new(x, y),
+                                mini_view.offset.x - session.offset.x,
+                                mini_view.offset.y - session.offset.y,
+                                z,
+                            );
+
+                            shapes.add(Shape::Rectangle(
+                                Rect::new(c.x, c.y, c.x + z, c.y + z),
+                                self::UI_LAYER,
+                                Rotation::ZERO,
+                                Stroke::new(1.0, color::YELLOW.into()),
+                                Fill::Empty,
+                            ));
+                        }
+                    }
+                }
+
+                let r = res.cursor_x as f32;
+                let g = res.cursor_y as f32;
                 let z = v.zoom;
                 let p = SessionCoords::new(
                     session.offset.x + v.offset.x + r * z,
@@ -749,7 +789,7 @@ fn draw_brush(session: &Session, brush: &Brush, shapes: &mut shape2d::Batch) {
                 ));
 
                 if let Some((mini_id, mini_view)) = &session.miniview {
-                    if *mini_id == id {
+                    if *mini_id == res.view_id {
                         let z = mini_view.zoom;
                         let x = mini_view.offset.x + r * z;
                         let y = mini_view.offset.y + (mini_view.fh as f32 - 1.0 - g) * z;

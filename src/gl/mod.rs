@@ -1744,7 +1744,31 @@ impl Renderer {
         let texels = fb.color_slot().get_raw_texels().unwrap();
         let pixels = Rgba8::align(&texels).to_vec();
         println!("lookup query: {}, {}", pixels[0].r, pixels[0].g);
-        session.lookup_result = Some((id, pixels[0].r as u32, pixels[0].g as u32));
+
+        let cursor_x = pixels[0].r as u32;
+        let cursor_y = pixels[0].g as u32;
+
+        if let Some(mut res) = session.lookup_result.take() {
+            if res.view_id == id {
+                res.other_queries.push((cursor_x, cursor_y));
+                session.lookup_result = Some(res);
+            } else {
+                session.lookup_result = Some(session::LookupResult {
+                    view_id: id,
+                    cursor_x,
+                    cursor_y,
+                    other_queries: vec![],
+                });
+            }
+        } else {
+            session.lookup_result = Some(session::LookupResult {
+                view_id: id,
+                cursor_x,
+                cursor_y,
+                other_queries: vec![],
+            });
+        }
+
         session.switch_mode(session::Mode::Visual(session::VisualState::LookupSampling));
 
         Ok(())
