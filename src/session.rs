@@ -215,7 +215,7 @@ pub enum Effect {
     /// The blend mode used for painting has changed.
     ViewBlendingChanged(Blending),
     /// Used by session to do lookup map querying
-    LookupTextureQuery(ViewId, Rgba8),
+    LookupTextureQuery(ViewId, Rgba8, Point<ViewExtent, f32>, ViewId),
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -595,6 +595,9 @@ pub struct LookupResult {
     pub view_id: ViewId,
     pub cursor_x: u32,
     pub cursor_y: u32,
+    pub pixel_x: i32,
+    pub pixel_y: i32,
+    pub source_view_id: ViewId,
     pub other_queries: Vec<(u32, u32)>,
 }
 
@@ -1096,8 +1099,8 @@ impl Session {
     #[allow(dead_code)]
     pub fn snap(&self, p: SessionCoords, offx: f32, offy: f32, zoom: f32) -> SessionCoords {
         SessionCoords::new(
-            p.x - ((p.x - offx - self.offset.x) % zoom),
-            p.y - ((p.y - offy - self.offset.y) % zoom),
+            p.x - (p.x - offx - self.offset.x).rem_euclid(zoom),
+            p.y - (p.y - offy - self.offset.y).rem_euclid(zoom),
         )
         .floor()
     }
@@ -1191,7 +1194,9 @@ impl Session {
 
         for v in self.views.iter_mut() {
             let p = cursor - self.offset;
-            if v.contains(p) {
+            let min = if v.offset.y > v.offset.y + v.height() as f32 * v.zoom { v.offset.y + v.height() as f32 * v.zoom } else { v.offset.y };
+            let max = if v.offset.y > v.offset.y + v.height() as f32 * v.zoom { v.offset.y } else { v.offset.y + v.height() as f32 * v.zoom };
+            if v.contains(p) || matches!(self.tool, Tool::LookupTextureSampler) && p.y >= min && p.y < max {
                 self.hover_view = Some(v.id);
                 break;
             }
@@ -3329,6 +3334,8 @@ impl Session {
                     .get(lutid)
                     .expect(&format!("view #{} must exist", lutid));
 
+                let view_coords =  self.view_coords(v.id, self.cursor);
+                println!("view_coords: {}, {}", view_coords.x, view_coords.y);
                 let Some(hover) = self.hover_color else {
                     self.message(format!("Not hovering on any color"), MessageType::Error);
                     return;
@@ -3336,7 +3343,7 @@ impl Session {
 
                 println!("Command::LookupTextureSample {}", hover);
 
-                self.effects.push(Effect::LookupTextureQuery(lutv.id, hover));
+                self.effects.push(Effect::LookupTextureQuery(lutv.id, hover, view_coords, v.id));
             }
             Command::LookupLayerAdd(d) => {
                 let current = self.views.active_id;

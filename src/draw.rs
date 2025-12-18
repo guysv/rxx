@@ -741,8 +741,53 @@ fn draw_brush(session: &Session, brush: &Brush, shapes: &mut shape2d::Batch) {
                 ));
             }
         }
-        Mode::Visual(VisualState::LookupSampling) => {
+        Mode::Visual(VisualState::LookupSampling) => {            
             if let Some(res) = &session.lookup_result {
+                {
+                    println!("res.pixel_x: {}, res.pixel_y: {}", res.pixel_x, res.pixel_y);
+                    let v = session.view(res.source_view_id);
+                    let z = v.zoom;
+
+                    let mut x = res.pixel_x as f32;
+                    let mut y = res.pixel_y as f32;
+
+                    // Check if pixel is in lookup animation preview pane.
+                    // The pane is located at x: [-2*fw, -fw], y: [0, fh] (relative to view offset).
+                    let fw = v.fw as i32;
+                    let fh = v.fh as i32;
+
+                    if res.pixel_x >= -2 * fw
+                        && res.pixel_x < -fw
+                        && res.pixel_y >= 0
+                        && res.pixel_y < fh
+                    {
+                        // Resolve to current frame.
+                        let frame_rect = v.animation.val();
+                        let frame_offset_x = frame_rect.x1;
+                        let frame_offset_y = frame_rect.y1;
+
+                        // Offset within the pane.
+                        let local_x = (res.pixel_x + 2 * fw) as f32;
+                        let local_y = res.pixel_y as f32;
+
+                        // Map to spritesheet coordinates.
+                        x = frame_offset_x + local_x;
+                        y = frame_offset_y + local_y;
+                    }
+
+                    let p = SessionCoords::new(
+                        session.offset.x + v.offset.x + x * z,
+                        session.offset.y + v.offset.y + y * z,
+                    );
+                    let c = session.snap(p, v.offset.x, v.offset.y, z);
+                    shapes.add(Shape::Rectangle(
+                        Rect::new(c.x, c.y, c.x + z, c.y + z),
+                        self::UI_LAYER,
+                        Rotation::ZERO,
+                        Stroke::new(1.0, color::RED.into()),
+                        Fill::Empty,
+                    ));
+                }
                 let v = session.view(res.view_id);
                 for &(ox, oy) in &res.other_queries {
                     let r = ox as f32;
@@ -902,16 +947,16 @@ fn draw_brush(session: &Session, brush: &Brush, shapes: &mut shape2d::Batch) {
                     ));
                 }
             } else if Tool::LookupTextureSampler == session.tool {
-                if v.contains(c - session.offset) {
-                    let c = session.snap(c, v.offset.x, v.offset.y, z);
-                    shapes.add(Shape::Rectangle(
-                        Rect::new(c.x, c.y, c.x + z, c.y + z),
-                        self::UI_LAYER,
-                        Rotation::ZERO,
-                        Stroke::new(1.0, color::RED.into()),
-                        Fill::Empty,
-                    ));
-                }    
+                let c = session.snap(c, v.offset.x, v.offset.y, z);
+                shapes.add(Shape::Rectangle(
+                    Rect::new(c.x, c.y, c.x + z, c.y + z),
+                    self::UI_LAYER,
+                    Rotation::ZERO,
+                    Stroke::new(1.0, color::RED.into()),
+                    Fill::Empty,
+                ));
+                // if v.contains(c - session.offset) {
+                // }    
             }
         }
         _ => {}

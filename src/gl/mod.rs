@@ -8,10 +8,10 @@ use crate::session::{self, Blending, Effect, Session};
 use crate::sprite;
 use crate::util;
 use crate::view::resource::ViewResource;
-use crate::view::{View, ViewId, ViewOp, ViewState};
+use crate::view::{View, ViewExtent, ViewId, ViewOp, ViewState};
 use crate::{data, data::Assets, image};
 
-use crate::gfx::{shape2d, sprite2d, Origin, Rgba, Rgba8, ZDepth, color};
+use crate::gfx::{Origin, Point, Rgba, Rgba8, ZDepth, color, shape2d, sprite2d};
 use crate::gfx::{Matrix4, Rect, Repeat, Vector2};
 
 use luminance::context::GraphicsContext;
@@ -1275,8 +1275,8 @@ impl Renderer {
                     shapes.into_iter().for_each(|s| self.final_batch.add(s));
                 }
                 Effect::ViewTouched(_) => {}
-                Effect::LookupTextureQuery(id, color) => {
-                    self.handle_lookup_texture_query(session, id, color)?;
+                Effect::LookupTextureQuery(id, color, view_coords, source_view_id) => {
+                    self.handle_lookup_texture_query(session, id, color, view_coords, source_view_id)?;
                 }
             }
         }
@@ -1684,7 +1684,8 @@ impl Renderer {
         }
     }
 
-    fn handle_lookup_texture_query(&mut self, session: &mut Session, id: ViewId, color: Rgba8) -> Result<(), RendererError> {
+    fn handle_lookup_texture_query(&mut self, session: &mut Session, id: ViewId, color: Rgba8, view_coords: Point<ViewExtent, f32>, source_view_id: ViewId) -> Result<(), RendererError> {
+        println!("view_coords: {}, {}", view_coords.x, view_coords.y);
         let lookup_layer = &mut self
             .view_data
             .get(&id)
@@ -1758,6 +1759,9 @@ impl Renderer {
                     view_id: id,
                     cursor_x,
                     cursor_y,
+                    pixel_x: view_coords.x as i32,
+                    pixel_y: view_coords.y as i32,
+                    source_view_id: source_view_id,
                     other_queries: vec![],
                 });
             }
@@ -1766,9 +1770,14 @@ impl Renderer {
                 view_id: id,
                 cursor_x,
                 cursor_y,
+                pixel_x: view_coords.x as i32,
+                pixel_y: view_coords.y as i32,
+                source_view_id: source_view_id,
                 other_queries: vec![],
             });
         }
+
+        println!("session.lookup_result: {:?}", session.lookup_result);
 
         session.switch_mode(session::Mode::Visual(session::VisualState::LookupSampling));
 
