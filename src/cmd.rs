@@ -65,6 +65,8 @@ pub enum Command {
     FrameRemove,
     FramePrev,
     FrameNext,
+    AnimNext,
+    AnimPrev,
     FrameResize(u32, u32),
 
     // Palette
@@ -152,6 +154,8 @@ impl Command {
                 | Self::Redo
                 | Self::ViewNext
                 | Self::ViewPrev
+                | Self::AnimNext
+                | Self::AnimPrev
                 | Self::SelectionMove(_, _)
                 | Self::SelectionJump(_)
                 | Self::SelectionResize(_, _)
@@ -188,6 +192,8 @@ impl fmt::Display for Command {
             Self::FrameRemove => write!(f, "Remove the last frame of the view"),
             Self::FramePrev => write!(f, "Navigate to previous frame"),
             Self::FrameNext => write!(f, "Navigate to next frame"),
+            Self::AnimNext => write!(f, "Next animation frame"),
+            Self::AnimPrev => write!(f, "Previous animation frame"),
             Self::Noop => write!(f, "No-op"),
             Self::PaletteAdd(c) => write!(f, "Add {color} to palette", color = c),
             Self::PaletteRemoveFG => write!(f, "Remove foreground color from palette"),
@@ -289,6 +295,10 @@ impl From<Command> for String {
             Command::Quit => format!("q"),
             Command::Redo => format!("redo"),
             Command::FrameResize(w, h) => format!("f/resize {} {}", w, h),
+            Command::FrameNext => format!("f/next"),
+            Command::FramePrev => format!("f/prev"),
+            Command::AnimNext => format!("a/next"),
+            Command::AnimPrev => format!("a/prev"),
             Command::Set(s, v) => format!("set {} = {}", s, v),
             Command::Slice(Some(n)) => format!("slice {}", n),
             Command::Slice(None) => format!("slice"),
@@ -979,6 +989,12 @@ impl Default for Commands {
             })
             .command("f/next", "Navigate to next frame", |p| {
                 p.value(Command::FrameNext)
+            })
+            .command("a/next", "Next animation frame", |p| {
+                p.value(Command::AnimNext)
+            })
+            .command("a/prev", "Previous animation frame", |p| {
+                p.value(Command::AnimPrev)
             })
             .command("f/resize", "Resize the active view frame(s)", |p| {
                 p.then(tuple::<u32>(

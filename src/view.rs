@@ -172,6 +172,10 @@ impl<T> Animation<T> {
         self.index = (self.index + 1) % self.len();
     }
 
+    pub fn step_back(&mut self) {
+        self.index = (self.index + self.len() - 1) % self.len();
+    }
+
     pub fn val(&self) -> &T {
         &self.frames[self.index % self.len()]
     }

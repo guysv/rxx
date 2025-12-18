@@ -553,6 +553,7 @@ impl Default for Settings {
                 "input/mouse" => Value::Bool(true),
                 "scale" => Value::F64(1.0),
                 "animation" => Value::Bool(true),
+                "animation/manual" => Value::Bool(false),
                 "animation/delay" => Value::U32(160),
                 "ui/palette" => Value::Bool(true),
                 "ui/status" => Value::Bool(true),
@@ -1107,6 +1108,9 @@ impl Session {
         let animations = self.views.iter().any(|v| v.animation.len() > 1);
 
         if self.settings["animation"].is_set() && animations {
+            if self.settings["animation/manual"].is_set() {
+                return None;
+            }
             let delay = self.settings["animation/delay"].to_u64();
             Some(time::Duration::from_millis(delay))
         } else {
@@ -2682,6 +2686,34 @@ impl Session {
                     self.center_active_view_frame(0);
                 } else if frame < v.nframes {
                     self.center_active_view_frame((frame + 1).min(v.nframes - 1));
+                }
+            }
+            Command::AnimNext => {
+                let mut sync_map: HashMap<ViewId, usize> = HashMap::new();
+                for v in self.views.iter_mut() {
+                    v.animation.step();
+                    for id in v.lookup_layers() {
+                        sync_map.insert(*id, v.animation.index);
+                    }
+                }
+                for (id, index) in sync_map.iter() {
+                    if let Some(v) = self.views.get_mut(*id) {
+                        v.animation.index = *index;
+                    }
+                }
+            }
+            Command::AnimPrev => {
+                let mut sync_map: HashMap<ViewId, usize> = HashMap::new();
+                for v in self.views.iter_mut() {
+                    v.animation.step_back();
+                    for id in v.lookup_layers() {
+                        sync_map.insert(*id, v.animation.index);
+                    }
+                }
+                for (id, index) in sync_map.iter() {
+                    if let Some(v) = self.views.get_mut(*id) {
+                        v.animation.index = *index;
+                    }
                 }
             }
             Command::ForceQuit => self.quit_view(self.views.active_id),
