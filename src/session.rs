@@ -2268,6 +2268,37 @@ impl Session {
                                 }
                                 return;
                             }
+                            platform::Key::E => {
+                                if let Some(res) = self.lookup_result.clone() {
+                                    let v = self.view(res.view_id);
+                                    let fw = v.fw;
+                                    let nframes = v.animation.len();
+
+                                    if nframes > 1 {
+                                        let id = res.view_id;
+                                        // We need to use paint_color because the batch renderer might not support
+                                        // true "replace" blending correctly with the way texture alpha is handled,
+                                        // or there might be an issue with how the shapes are batched and drawn
+                                        // relative to the existing content. Using the ViewOp::SetPixel (via paint_color)
+                                        // guarantees a direct write to the texture/framebuffer.
+                                        
+                                        // Collect all operations first to avoid borrowing issues
+                                        let mut pixels_to_clear = Vec::new();
+                                        for i in 1..nframes {
+                                            let x = res.cursor_x as i32 + i as i32 * fw as i32;
+                                            let y = res.cursor_y as i32;
+                                            pixels_to_clear.push((x, y));
+                                        }
+
+                                        // Now apply them to the view
+                                        let v = self.view_mut(id);
+                                        for (x, y) in pixels_to_clear {
+                                            v.paint_color(Rgba8::TRANSPARENT, x, y);
+                                        }
+                                    }
+                                }
+                                return;
+                            }
                             platform::Key::Return
                             | platform::Key::Space => {
                                 if let Some(res) = self.lookup_result.take() {
