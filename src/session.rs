@@ -1204,9 +1204,33 @@ impl Session {
 
         self.hover_color = if self.palette.hover.is_some() {
             self.palette.hover
-        } else if let Some(v) = self.hover_view {
-            let p = self.view_coords(v, cursor).into();
-            self.view(v).color_at(p).cloned()
+        } else if let Some(id) = self.hover_view {
+            let v = self.view(id);
+            let mut p = self.view_coords(id, cursor);
+
+            // Check if we are hovering over the lookup animation pane.
+            // The pane is located at x: [-2*fw, -fw], y: [0, fh] (relative to view offset).
+            if v.lookuptexture().is_some() {
+                let fw = v.fw as f32;
+                let fh = v.fh as f32;
+
+                if p.x >= -2. * fw && p.x < -fw && p.y >= 0. && p.y < fh {
+                    // Resolve to current frame.
+                    let frame_rect = v.animation.val();
+                    let frame_offset_x = frame_rect.x1;
+                    let frame_offset_y = frame_rect.y1;
+
+                    // Offset within the pane.
+                    let local_x = p.x + 2. * fw;
+                    let local_y = p.y;
+
+                    // Map to spritesheet coordinates.
+                    p.point.x = frame_offset_x + local_x;
+                    p.point.y = frame_offset_y + local_y;
+                }
+            }
+
+            v.color_at(p.into()).cloned()
         } else {
             None
         };
