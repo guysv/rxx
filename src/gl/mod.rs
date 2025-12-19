@@ -1149,25 +1149,26 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             },
         );
 
-        // If active view is dirty, record a snapshot of it.
-        if v.is_dirty() {
-            // FIXME: This is ugly.
-            let id = v.id;
-            let state = v.state;
-            let is_resized = v.is_resized();
-            let extent = v.extent();
+                // If any view is dirty, record a snapshot of it.
+        for v in session.views.iter_mut() {
+            if v.is_dirty() {
+                let id = v.id;
+                let state = v.state;
+                let is_resized = v.is_resized();
+                let extent = v.extent();
 
-            if let Some(vr) = session.views.get_mut(id) {
-                let mut v_data = view_data.get(&id).unwrap().borrow_mut();
+                if let Some(vd_rc) = view_data.get(&id) {
+                    let mut v_data = vd_rc.borrow_mut();
 
-                match state {
-                    ViewState::Dirty(_) if is_resized => {
-                        vr.record_view_resized(v_data.layer.pixels(), extent);
+                    match state {
+                        ViewState::Dirty(_) if is_resized => {
+                            v.record_view_resized(v_data.layer.pixels(), extent);
+                        }
+                        ViewState::Dirty(_) => {
+                            v.record_view_painted(v_data.layer.pixels());
+                        }
+                        ViewState::Okay | ViewState::Damaged(_) => {}
                     }
-                    ViewState::Dirty(_) => {
-                        vr.record_view_painted(v_data.layer.pixels());
-                    }
-                    ViewState::Okay | ViewState::Damaged(_) => {}
                 }
             }
         }
