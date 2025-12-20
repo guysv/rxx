@@ -2324,6 +2324,22 @@ impl Session {
                                 }
                                 return;
                             }
+                            platform::Key::T => {
+                                if let Some(res) = self.lookup_result.clone() {
+                                    let color = self.fg;
+                                    let v = self.view_mut(res.source_view_id);
+                                    let x = if res.pixel_x < 0 {
+                                        let fw = v.fw as i32;
+                                        let current_frame = v.animation.index as i32;
+                                        (res.pixel_x % fw + fw) % fw + current_frame * fw
+                                    } else {
+                                        res.pixel_x
+                                    };
+                                    let y = v.fh as i32 - 1 - res.pixel_y;
+                                    v.paint_color(color, x, y);
+                                }
+                                return;
+                            }
                             platform::Key::Return => {
                                 if let Some(res) = self.lookup_result.take() {
                                     let id = res.view_id;
@@ -2346,8 +2362,9 @@ impl Session {
                                     let id = res.view_id;
                                     let x = res.cursor_x;
                                     let y = res.cursor_y;
-                                    // Sample the color at id, x+w, y (frame 1)
-                                    let color = {
+                                    
+                                    let color = if modifiers.shift {
+                                        // Shift+Space: Sample the color at id, x+w, y (frame 1)
                                         let v = self.view(id);
                                         let fw = v.fw as u32;
                                         // Ensure we have at least 2 frames to sample from the second one
@@ -2356,7 +2373,12 @@ impl Session {
                                         } else {
                                             None
                                         }
+                                    } else {
+                                        // Space: Sample the color at id, x, y (frame 0)
+                                        let v = self.view(id);
+                                        v.color_at(ViewCoords::new(x, v.fh as u32 - 1 - y)).copied()
                                     };
+
                                     if let Some(color) = color {
                                         self.pick_color(color);
                                     }
