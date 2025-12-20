@@ -2299,21 +2299,68 @@ impl Session {
                                 }
                                 return;
                             }
-                            platform::Key::Return
-                            | platform::Key::Space => {
+                            platform::Key::R => {
+                                if let Some(res) = self.lookup_result.clone() {
+                                    let v = self.view(res.view_id);
+                                    let fw = v.fw;
+                                    let nframes = v.animation.len();
+
+                                    if nframes > 1 {
+                                        let id = res.view_id;
+                                        
+                                        let mut pixels_to_paint = Vec::new();
+                                        for i in 1..nframes {
+                                            let x = res.cursor_x as i32 + i as i32 * fw as i32;
+                                            let y = res.cursor_y as i32;
+                                            pixels_to_paint.push((x, y));
+                                        }
+
+                                        let color = self.fg;
+                                        let v = self.view_mut(id);
+                                        for (x, y) in pixels_to_paint {
+                                            v.paint_color(color, x, y);
+                                        }
+                                    }
+                                }
+                                return;
+                            }
+                            platform::Key::Return => {
                                 if let Some(res) = self.lookup_result.take() {
                                     let id = res.view_id;
                                     let x = res.cursor_x;
                                     let y = res.cursor_y;
-                                    // Sample the color at id, x, y, set it as fg (fg to bg, like in sample)
-                                    let v = self.view(id);
-                                    if let Some(color) = v.color_at(ViewCoords::new(x, v.fh as u32 - 1 - y)) {
-                                        self.pick_color(*color);
+                                    // Sample the color at id, x, y (frame 0)
+                                    let color = {
+                                        let v = self.view(id);
+                                        v.color_at(ViewCoords::new(x, v.fh as u32 - 1 - y)).copied()
+                                    };
+                                    if let Some(color) = color {
+                                        self.pick_color(color);
                                     }
-                                };
-
-
+                                }
                                 self.switch_mode(Mode::Normal);
+                                return;
+                            }
+                            platform::Key::Space => {
+                                if let Some(res) = &self.lookup_result {
+                                    let id = res.view_id;
+                                    let x = res.cursor_x;
+                                    let y = res.cursor_y;
+                                    // Sample the color at id, x+w, y (frame 1)
+                                    let color = {
+                                        let v = self.view(id);
+                                        let fw = v.fw as u32;
+                                        // Ensure we have at least 2 frames to sample from the second one
+                                        if v.animation.len() > 1 {
+                                            v.color_at(ViewCoords::new(x + fw, v.fh as u32 - 1 - y)).copied()
+                                        } else {
+                                            None
+                                        }
+                                    };
+                                    if let Some(color) = color {
+                                        self.pick_color(color);
+                                    }
+                                }
                                 return;
                             }
                             _ => {}
