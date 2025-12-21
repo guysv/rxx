@@ -2282,19 +2282,14 @@ impl Session {
                                         // relative to the existing content. Using the ViewOp::SetPixel (via paint_color)
                                         // guarantees a direct write to the texture/framebuffer.
                                         
-                                        // Collect all operations first to avoid borrowing issues
-                                        let mut pixels_to_clear = Vec::new();
-                                        for i in 1..nframes {
-                                            let x = res.cursor_x as i32 + i as i32 * fw as i32;
-                                            let y = res.cursor_y as i32;
-                                            pixels_to_clear.push((x, y));
-                                        }
+                                        // Calculate position in the last frame
+                                        let last_frame_idx = nframes - 1;
+                                        let x = res.cursor_x as i32 + last_frame_idx as i32 * fw as i32;
+                                        let y = res.cursor_y as i32;
 
                                         // Now apply them to the view
                                         let v = self.view_mut(id);
-                                        for (x, y) in pixels_to_clear {
-                                            v.paint_color(Rgba8::TRANSPARENT, x, y);
-                                        }
+                                        v.paint_color(Rgba8::TRANSPARENT, x, y);
                                     }
                                 }
                                 return;
@@ -2308,18 +2303,14 @@ impl Session {
                                     if nframes > 1 {
                                         let id = res.view_id;
                                         
-                                        let mut pixels_to_paint = Vec::new();
-                                        for i in 1..nframes {
-                                            let x = res.cursor_x as i32 + i as i32 * fw as i32;
-                                            let y = res.cursor_y as i32;
-                                            pixels_to_paint.push((x, y));
-                                        }
+                                        // Calculate position in the last frame
+                                        let last_frame_idx = nframes - 1;
+                                        let x = res.cursor_x as i32 + last_frame_idx as i32 * fw as i32;
+                                        let y = res.cursor_y as i32;
 
                                         let color = self.fg;
                                         let v = self.view_mut(id);
-                                        for (x, y) in pixels_to_paint {
-                                            v.paint_color(color, x, y);
-                                        }
+                                        v.paint_color(color, x, y);
                                     }
                                 }
                                 return;
