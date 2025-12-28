@@ -570,6 +570,8 @@ impl Default for Settings {
 
                 "debug/crosshair" => Value::Bool(false),
 
+                "lookup/framemask" => Value::U32(0xFFFFFFFF),
+
                 // Deprecated.
                 "frame_delay" => Value::F64(0.0),
                 "input/delay" => Value::F64(8.0)

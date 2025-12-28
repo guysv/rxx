@@ -135,6 +135,7 @@ struct Lookuptex2dInterface {
     ltexim: Uniform<TextureBinding<Dim2, pixel::NormUnsigned>>,
     // ltexreg: Uniform<V2>,
     lt_tfw: Uniform<u32>,
+    frame_mask: Uniform<u32>,
     ortho: Uniform<M44>,
     transform: Uniform<M44>,
 }
@@ -819,6 +820,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Render lookup texture animations to intermediate framebuffers
         if session.settings["animation"].is_set() {
+            let frame_mask = session.settings["lookup/framemask"].to_u64() as u32;
             for (id, _rcv) in view_data.iter() {
                 let v = view_data.get(&id).unwrap();
                 let view = session.views.get(*id).unwrap();
@@ -860,6 +862,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                             iface.set(&uni.ltex, lookup_layer.binding());
                             iface.set(&uni.ltexim, lookup_map.binding());
                             iface.set(&uni.lt_tfw, ltv_inner.layer.lt_tfw);
+                            iface.set(&uni.frame_mask, frame_mask);
                             
                             rdr_gate.render(render_st, |mut tess_gate| {
                                 tess_gate.render(tess)

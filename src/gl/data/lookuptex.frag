@@ -2,6 +2,7 @@ uniform sampler2D tex;
 uniform sampler2D ltex;
 uniform sampler2D ltexim;
 uniform uint lt_tfw;
+uniform uint frame_mask;
 // uniform vec2 ltexreg; // lookup texture region normalization vector
 
 in  vec2  f_uv;
@@ -55,6 +56,12 @@ void main() {
             vec4 lt_texel = vec4(0.0);
             int max_n = int(ltex_size.x) / int(lt_tfw);
             for (int n = max_n - 1; n > 0; n--) {
+                // Skip frame if the corresponding bit in frame_mask is off
+                uint frame_bit = 1u << uint(n);
+                if ((frame_mask & frame_bit) == 0u) {
+                    continue;
+                }
+                
                 ivec2 check_coord = ivec2(
                     n * int(lt_tfw) + ltex_pixel_coord.x,
                     ltex_pixel_coord.y
