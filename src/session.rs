@@ -3422,7 +3422,7 @@ impl Session {
                 self.active_view_mut().lookuptexture_im_dump();
             }
             Command::LookupTextureExport(path) => {
-                let v = self.active_view();
+                let v = self.active_view_mut();
                 if v.lookuptexture().is_none() {
                     self.message(
                         format!("Current view has no lookup texture"),
@@ -3430,7 +3430,99 @@ impl Session {
                     );
                     return;
                 }
-                self.active_view_mut().lookuptexture_export(path);
+                self.active_view_mut().lookuptexture_export(path, None);
+            }
+            Command::LookupTextureExportMap(output_dir, frame_names) => {
+                let active_id = self.views.active_id;
+                let active_view = self.view(active_id);
+                
+                if !active_view.is_lookuptexture() {
+                    self.message(
+                        format!("Current view is not a lookup texture"),
+                        MessageType::Error,
+                    );
+                    return;
+                }
+                
+                // Find all child views that use active view as lookup texture
+                let child_views: Vec<ViewId> = self.views
+                    .iter()
+                    .filter(|v| v.lookuptexture() == Some(active_id))
+                    .map(|v| v.id)
+                    .collect();
+                
+                if child_views.is_empty() {
+                    self.message(
+                        format!("No views use the current view as lookup texture"),
+                        MessageType::Error,
+                    );
+                    return;
+                }
+                
+                // Get lookup texture frame count
+                let lookup_frame_count = active_view.animation.len();
+                
+                // Get basename for lookup texture
+                let lookup_basename = active_view.file_storage()
+                    .and_then(|fs| match fs {
+                        view::FileStorage::Single(path) => path.file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.to_string()),
+                        view::FileStorage::Range(paths) => paths.first()
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.to_string()),
+                    })
+                    .unwrap_or_else(|| format!("view{}", active_id));
+                
+                // Process each child view
+                for child_id in child_views {
+                    let child_view = self.view(child_id);
+                    
+                    // Get basename for child view
+                    let child_basename = child_view.file_storage()
+                        .and_then(|fs| match fs {
+                            view::FileStorage::Single(path) => path.file_stem()
+                                .and_then(|s| s.to_str())
+                                .map(|s| s.to_string()),
+                            view::FileStorage::Range(paths) => paths.first()
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .map(|s| s.to_string()),
+                        })
+                        .unwrap_or_else(|| format!("view{}", child_id));
+                    
+                    if lookup_frame_count == 1 {
+                        self.message(
+                            format!("Lookup texture must have at least 2 frames"),
+                            MessageType::Error,
+                        );
+                        return;
+                    } else if lookup_frame_count == 2 {
+                        // Two frames: export with frame mask for frame 2 (bit 1 = 1 << 1 = 2)
+                        // Shader checks frames from max_n-1 down to > 0, so for 2 frames it only checks frame 1
+                        let frame_mask = 1u32 << 1; // Frame 1 (0-indexed), which is frame 2 (1-indexed)
+                        // Use frame_names[0] (one element back from index 1)
+                        let frame_name = frame_names.get(0)
+                            .cloned()
+                            .unwrap_or_else(|| "frame2".to_string());
+                        let export_path = format!("{}/{}-{}-{}.png", output_dir, lookup_basename, child_basename, frame_name);
+                        self.view_mut(child_id).lookuptexture_export(export_path, Some(frame_mask));
+                    } else {
+                        // Three or more frames: export frames 3, 4, ... (frames 2, 3, ... 0-indexed)
+                        // Shader checks frames from max_n-1 down to > 0
+                        for frame_idx in 2..lookup_frame_count {
+                            let frame_mask = 1u32 << frame_idx;
+                            // Use frame_names starting from index 0 (two elements back from index 2)
+                            let frame_name_idx = frame_idx - 2;
+                            let frame_name = frame_names.get(frame_name_idx)
+                                .cloned()
+                                .unwrap_or_else(|| format!("frame{}", frame_idx + 1));
+                            let export_path = format!("{}/{}-{}-{}.png", output_dir, lookup_basename, child_basename, frame_name);
+                            self.view_mut(child_id).lookuptexture_export(export_path, Some(frame_mask));
+                        }
+                    }
+                }
             }
             Command::LookupTextureSample => {
                 if !matches!(self.mode, Mode::Visual(VisualState::LookupSampling)) {

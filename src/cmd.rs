@@ -131,6 +131,7 @@ pub enum Command {
     LookupTextureSet(i32),
     LookupTextureImDump,
     LookupTextureExport(String),
+    LookupTextureExportMap(String, Vec<String>),
     
     // Lookup Layer commands
     LookupLayerAdd(i32),
@@ -1123,6 +1124,12 @@ impl Default for Commands {
             })
             .command("lt/export", "Export lookup texture spritesheet", |p| {
                 p.then(path()).map(|(_, path)| Command::LookupTextureExport(path))
+            })
+            .command("lt/exportmap", "Export lookup texture map for child views", |p| {
+                p.then(path())
+                    .skip(optional(whitespace()))
+                    .then(optional(paths()))
+                    .map(|((_, dir), frame_names)| Command::LookupTextureExportMap(dir, frame_names.unwrap_or_default()))
             })
             .command("lt/sample", "Search lookup texture for matching pixels", |p| {
                 p.value(Command::LookupTextureSample)

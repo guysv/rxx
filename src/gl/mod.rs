@@ -1261,7 +1261,7 @@ impl Renderer {
                     }
                 }
                 Effect::ViewOps(id, ops) => {
-                    self.handle_view_ops(session.view(id), &ops)?;
+                    self.handle_view_ops(session, id, &ops)?;
                 }
                 Effect::ViewDamaged(id, Some(extent)) => {
                     self.handle_view_resized(session.view(id), extent.width(), extent.height())?;
@@ -1289,9 +1289,11 @@ impl Renderer {
 
     fn handle_view_ops(
         &mut self,
-        v: &View<ViewResource>,
+        session: &mut Session,
+        id: ViewId,
         ops: &[ViewOp],
     ) -> Result<(), RendererError> {
+        let v = session.view(id);
         use RendererError as Error;
 
         for op in ops {
@@ -1530,18 +1532,90 @@ impl Renderer {
                         }
                     }
                 }
-                ViewOp::LookupTextureExport(path) => {
-                    let layer = &mut self
+                ViewOp::LookupTextureExport(path, frame_mask_override) => {
+                    let v_inner = self
                         .view_data
                         .get(&v.id)
                         .expect("views must have associated view data")
-                        .borrow_mut()
-                        .layer;
+                        .borrow();
                     
-                    let pixels = layer.lookup_anim_pixels();
+                    let Some(ltid) = v.lookuptexture() else {
+                        eprintln!("View {} does not have a lookup texture", v.id);
+                        continue;
+                    };
+                    
+                    let Some(tess) = &v_inner.lt_fb_tess else {
+                        eprintln!("View {} does not have lookup texture tessellation", v.id);
+                        continue;
+                    };
+                    
+                    let rcltv = self.view_data.get(&ltid)
+                        .expect("lookup texture view must have associated view data");
+                    
+                    let frame_mask = frame_mask_override.unwrap_or_else(|| {
+                        session.settings["lookup/framemask"].to_u64() as u32
+                    });
+                    let lookup_anim_ortho: M44 = Matrix4::ortho(v_inner.layer.w, v_inner.layer._h, Origin::TopLeft).into();
+                    let identity: M44 = Matrix4::identity().into();
+                    
+                    let render_st = RenderState::default()
+                        .set_blending(blending::Blending {
+                            equation: Equation::Additive,
+                            src: Factor::SrcAlpha,
+                            dst: Factor::SrcAlphaComplement,
+                        })
+                        .set_depth_test(Some(DepthComparison::LessOrEqual));
+                    let pipeline_st = PipelineState::default()
+                        .set_clear_color([0., 0., 0., 0.])
+                        .enable_srgb(true)
+                        .enable_clear_depth(true)
+                        .enable_clear_color(true);
+                    
+                    let mut builder = self.ctx.new_pipeline_gate();
+                    let lookuptex2d = &mut self.lookuptex2d;
+                    builder.pipeline::<PipelineError, _, _, _, _>(
+                        &*v_inner.layer.lookup_anim_fb.borrow(),
+                        &pipeline_st,
+                        |pipeline, mut shd_gate| {
+                            let mut main_fb = v_inner.layer.fb.borrow_mut();
+                            let bound_layer = pipeline
+                                .bind_texture(main_fb.color_slot())
+                                .expect("binding textures never fails");
+                            
+                            let ltv_inner = rcltv.borrow();
+                            let mut lookup_fb = ltv_inner.layer.fb.borrow_mut();
+                            let mut lookup_lt_im = ltv_inner.layer.lt_im.borrow_mut();
+                            let lookup_layer = pipeline
+                                .bind_texture(lookup_fb.color_slot())
+                                .expect("binding textures never fails");
+                            let lookup_map = pipeline
+                                .bind_texture(lookup_lt_im.color_slot())
+                                .expect("binding textures never fails");
+                            
+                            shd_gate.shade(lookuptex2d, |mut iface, uni, mut rdr_gate| {
+                                iface.set(&uni.ortho, lookup_anim_ortho);
+                                iface.set(&uni.transform, identity);
+                                iface.set(&uni.tex, bound_layer.binding());
+                                iface.set(&uni.ltex, lookup_layer.binding());
+                                iface.set(&uni.ltexim, lookup_map.binding());
+                                iface.set(&uni.lt_tfw, ltv_inner.layer.lt_tfw);
+                                iface.set(&uni.frame_mask, frame_mask);
+                                
+                                rdr_gate.render(&render_st, |mut tess_gate| {
+                                    tess_gate.render(tess)
+                                })
+                            })?;
+                            
+                            Ok(())
+                        },
+                    );
+                    
+                    let mut lookup_anim_fb = v_inner.layer.lookup_anim_fb.borrow_mut();
+                    let texels = lookup_anim_fb.color_slot().get_raw_texels().unwrap();
+                    let pixels = Rgba8::align(&texels).to_vec();
                     
                     // Save using the existing image module
-                    if let Err(e) = image::save_as(&path, layer.w, layer._h, 1, &pixels) {
+                    if let Err(e) = image::save_as(&path, v_inner.layer.w, v_inner.layer._h, 1, &pixels) {
                         eprintln!("Failed to save lookup texture export to {}: {}", path, e);
                     } else {
                         println!("Lookup texture exported to: {}", path);
