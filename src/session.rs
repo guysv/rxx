@@ -29,7 +29,7 @@ use arrayvec::ArrayVec;
 use directories as dirs;
 use nonempty::NonEmpty;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::fmt;
 use std::fs::File;
@@ -601,6 +601,7 @@ pub struct LookupResult {
     pub pixel_y: i32,
     pub source_view_id: ViewId,
     pub other_queries: Vec<(u32, u32)>,
+    pub cartridge: VecDeque<(Rgba8, u32, u32)>,
 }
 
 ///
@@ -2047,7 +2048,27 @@ impl Session {
                             }
                             Mode::Visual(VisualState::LookupSampling) => {
                                 if state == InputState::Pressed {
-                                    self.command(Command::LookupTextureSample);
+                                    // Pop from cartridge (FIFO - pop_front) and get coordinates to remove
+                                    let popped = if let Some(res) = &mut self.lookup_result {
+                                        res.cartridge.pop_front()
+                                    } else {
+                                        None
+                                    };
+                                    
+                                    if let Some((color, cart_x, cart_y)) = popped {
+                                        // Get view height before borrowing for painting
+                                        let h = self.active_view().fh as i32;
+                                        
+                                        // Paint the popped color at the click location
+                                        let p = p.map(|n| n as i32);
+                                        self.active_view_mut().paint_color(color, p.x, h - 1 - p.y);
+                                        self.active_view_mut().touch();
+                                        
+                                        // Remove the corresponding entry from other_queries
+                                        if let Some(res) = &mut self.lookup_result {
+                                            res.other_queries.retain(|&(ox, oy)| !(ox == cart_x && oy == cart_y));
+                                        }
+                                    }
                                 }
                             }
                             Mode::Present | Mode::Help => {}
@@ -2351,29 +2372,45 @@ impl Session {
                                 return;
                             }
                             platform::Key::Space => {
-                                if let Some(res) = &self.lookup_result {
-                                    let id = res.view_id;
-                                    let x = res.cursor_x;
-                                    let y = res.cursor_y;
-                                    
-                                    let color = if modifiers.shift {
-                                        // Shift+Space: Sample the color at id, x+w, y (frame 1)
-                                        let v = self.view(id);
-                                        let fw = v.fw as u32;
-                                        // Ensure we have at least 2 frames to sample from the second one
-                                        if v.animation.len() > 1 {
-                                            v.color_at(ViewCoords::new(x + fw, v.fh as u32 - 1 - y)).copied()
-                                        } else {
-                                            None
-                                        }
+                                // Get view_id, x, y first to avoid borrowing conflicts
+                                let (id, x, y) = if let Some(res) = &self.lookup_result {
+                                    (res.view_id, res.cursor_x, res.cursor_y)
+                                } else {
+                                    return;
+                                };
+                                
+                                let color = if modifiers.shift {
+                                    // Shift+Space: Sample the color at id, x+w, y (frame 1)
+                                    let v = self.view(id);
+                                    let fw = v.fw as u32;
+                                    // Ensure we have at least 2 frames to sample from the second one
+                                    if v.animation.len() > 1 {
+                                        v.color_at(ViewCoords::new(x + fw, v.fh as u32 - 1 - y)).copied()
                                     } else {
-                                        // Space: Sample the color at id, x, y (frame 0)
-                                        let v = self.view(id);
-                                        v.color_at(ViewCoords::new(x, v.fh as u32 - 1 - y)).copied()
-                                    };
+                                        None
+                                    }
+                                } else {
+                                    // Space: Sample the color at id, x, y (frame 0)
+                                    let v = self.view(id);
+                                    v.color_at(ViewCoords::new(x, v.fh as u32 - 1 - y)).copied()
+                                };
 
-                                    if let Some(color) = color {
-                                        self.pick_color(color);
+                                if let Some(color) = color {
+                                    // Add to cartridge (FIFO - push_back)
+                                    if let Some(res) = &mut self.lookup_result {
+                                        res.cartridge.push_back((color, x, y));
+                                        // Add to other_queries to mark the pixel
+                                        res.other_queries.push((x, y));
+                                    }
+                                }
+                                return;
+                            }
+                            platform::Key::Backspace => {
+                                if let Some(res) = &mut self.lookup_result {
+                                    // Pop from cartridge (pop_back to remove last inserted)
+                                    if let Some((_, cart_x, cart_y)) = res.cartridge.pop_back() {
+                                        // Remove the corresponding entry from other_queries
+                                        res.other_queries.retain(|&(ox, oy)| !(ox == cart_x && oy == cart_y));
                                     }
                                 }
                                 return;

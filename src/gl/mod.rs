@@ -1828,9 +1828,17 @@ impl Renderer {
         let cursor_x = pixels[0].r as u32;
         let cursor_y = pixels[0].g as u32;
 
+        // Check if we're already in LookupSampling mode - if so, don't add to other_queries
+        // (mouse clicks in LookupSampling mode should pop from cartridge instead)
+        let is_lookup_sampling = matches!(session.mode, session::Mode::Visual(session::VisualState::LookupSampling));
+        
         if let Some(mut res) = session.lookup_result.take() {
             if res.view_id == id {
-                res.other_queries.push((cursor_x, cursor_y));
+                // Only add to other_queries if not already in LookupSampling mode
+                // (initial query or query from outside LookupSampling mode)
+                if !is_lookup_sampling {
+                    res.other_queries.push((cursor_x, cursor_y));
+                }
                 session.lookup_result = Some(res);
             } else {
                 session.lookup_result = Some(session::LookupResult {
@@ -1841,6 +1849,7 @@ impl Renderer {
                     pixel_y: view_coords.y as i32,
                     source_view_id: source_view_id,
                     other_queries: vec![],
+                    cartridge: std::collections::VecDeque::new(),
                 });
             }
         } else {
@@ -1852,6 +1861,7 @@ impl Renderer {
                 pixel_y: view_coords.y as i32,
                 source_view_id: source_view_id,
                 other_queries: vec![],
+                cartridge: std::collections::VecDeque::new(),
             });
         }
 

@@ -873,6 +873,38 @@ fn draw_brush(session: &Session, brush: &Brush, shapes: &mut shape2d::Batch) {
                     }
                 }
             }
+            
+            // Draw cartridge on the right side of the screen
+            if let Some(res) = &session.lookup_result {
+                const CARTRIDGE_SIZE: f32 = 20.0;
+                const CARTRIDGE_SPACING: f32 = 4.0;
+                const CARTRIDGE_MARGIN: f32 = 10.0;
+                
+                let start_x = session.width - CARTRIDGE_SIZE - CARTRIDGE_MARGIN;
+                let mut y = CARTRIDGE_MARGIN;
+                
+                // Draw each cartridge item as a color swatch
+                // FIFO order: first added at top, last added at bottom
+                for (color, _, _) in &res.cartridge {
+                    let rect = Rect::new(
+                        start_x,
+                        y,
+                        start_x + CARTRIDGE_SIZE,
+                        y + CARTRIDGE_SIZE,
+                    );
+                    
+                    // Draw filled rectangle with the color
+                    shapes.add(Shape::Rectangle(
+                        rect,
+                        self::UI_LAYER,
+                        Rotation::ZERO,
+                        Stroke::new(1.0, color::WHITE.into()),
+                        Fill::Solid((*color).into()),
+                    ));
+                    
+                    y += CARTRIDGE_SIZE + CARTRIDGE_SPACING;
+                }
+            }
         }
         Mode::Normal => {
             if let Tool::Brush = session.tool {
