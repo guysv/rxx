@@ -2539,7 +2539,7 @@ impl Session {
             let target_w = src_view.width() as f32 * scale;
 
             let dst_x = self.width - 12.0 - target_w;
-            let dst_y = (self.height - target_h) * 0.5;
+            let dst_y = self.height - target_h - 12.0;
 
             if let Some((_, ref mut view)) = &mut self.miniview {
                 view.offset = Vector2::new(dst_x, dst_y);
