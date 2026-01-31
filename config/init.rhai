@@ -1,7 +1,8 @@
 /// Initialize script state (event-handler style).
+/// session: width, height, offset_x, offset_y (same as draw).
 /// Variables defined here persist for later event handlers.
-fn init() {
-    print("Rhai script loaded: init() ran.");
+fn init(session) {
+    print(`Rhai script loaded: init(session) ran. width=${session.width} height=${session.height}`);
 }
 
 /// Draw event: called every frame. Use draw_line to add lines to the screen.

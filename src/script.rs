@@ -1,7 +1,7 @@
 //! Rhai script loading and event-handler lifecycle.
 //!
 //! Follows the [event-handler pattern](https://rhai.rs/book/patterns/events-1.html):
-//! one main script with `init()`; custom Scope + CallFnOptions (eval_ast false,
+//! one main script with `init(session)`; custom Scope + CallFnOptions (eval_ast false,
 //! rewind_scope false) so variables defined in `init()` persist.
 
 use crate::draw::USER_LAYER;
@@ -53,9 +53,9 @@ impl ScriptState {
         self.script_path = Some(path);
     }
 
-    /// Load or reload the main Rhai script: compile, create scope, call init().
+    /// Load or reload the main Rhai script: compile, create scope, call init(session).
     /// Returns an error message for the caller to display (e.g. via session.message).
-    pub fn load_script(&mut self) -> Result<(), String> {
+    pub fn load_script(&mut self, session_handle: &Rc<RefCell<Session>>) -> Result<(), String> {
         let path = match &self.script_path {
             Some(p) => p.clone(),
             None => return Ok(()),
@@ -69,7 +69,7 @@ impl ScriptState {
         let ast = compile_file(&engine, &path)
             .map_err(|e| format!("Script compile error: {}", e))?;
         let mut scope = Scope::new();
-        call_init(&engine, &mut scope, &ast)
+        call_init(&engine, &mut scope, &ast, session_handle)
             .map_err(|e| format!("Script init error: {}", e))?;
         self.script_engine = Some(engine);
         self.script_scope = Some(scope);
@@ -99,10 +99,10 @@ impl ScriptState {
         self.script_path.as_ref()
     }
 
-    /// Reload the main Rhai script: recompile and call init() again.
+    /// Reload the main Rhai script: recompile and call init(session) again.
     /// Errors are ignored (e.g. for hot-reload); use load_script() for explicit feedback.
-    pub fn reload_script(&mut self) {
-        let _ = self.load_script();
+    pub fn reload_script(&mut self, session_handle: &Rc<RefCell<Session>>) {
+        let _ = self.load_script(session_handle);
     }
 
     /// Call the script's `draw()` event handler.
@@ -170,7 +170,7 @@ pub fn register_draw_primitives(engine: &mut Engine, user_batch: UserBatch) {
     });
 }
 
-/// Call the script's `init()` function with options so that new variables
+/// Call the script's `init(session)` function with options so that new variables
 /// introduced in the scope are retained (rewind_scope false) and the AST
 /// is not re-evaluated (eval_ast false).
 ///
@@ -179,12 +179,14 @@ pub fn call_init(
     engine: &Engine,
     scope: &mut Scope,
     ast: &AST,
+    session_handle: &Rc<RefCell<Session>>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     let options = CallFnOptions::new()
         .eval_ast(false)
         .rewind_scope(false);
 
-    match engine.call_fn_with_options::<()>(options, scope, ast, "init", ()) {
+    let session = session_handle.clone();
+    match engine.call_fn_with_options::<()>(options, scope, ast, "init", (session,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e) => Ok(()),
         Err(e) => Err(e),

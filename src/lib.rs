@@ -135,22 +135,24 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
     let base_dirs = dirs::BaseDirs::new()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "home directory not found"))?;
     let cwd = std::env::current_dir()?;
-    let mut session = Session::new(win_w, win_h, cwd, proj_dirs, base_dirs)
+    let session = Session::new(win_w, win_h, cwd, proj_dirs, base_dirs)
         .with_blank(
             FileStatus::NoFile,
             Session::DEFAULT_VIEW_W,
             Session::DEFAULT_VIEW_H,
         )
         .init(options.source.clone())?;
+    let session_handle = Rc::new(RefCell::new(session));
 
     let mut script_state = ScriptState::new();
     if let Some(path) = options.script.clone() {
         script_state.set_path(path);
-        if let Err(e) = script_state.load_script() {
-            session.message(e, MessageType::Error);
+        if let Err(e) = script_state.load_script(&session_handle) {
+            log::error!("Error loading script: {}", e);
         }
     }
 
+    let mut session = session_handle.borrow_mut();
     if options.debug {
         session
             .settings
@@ -250,8 +252,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
     let mut hovering = false;
     let mut delta;
 
-    let session_handle = Rc::new(RefCell::new(session));
-
+    drop(session);
     while !win.is_closing() {
         let mut session = session_handle.borrow_mut();
         match session.animation_delay() {
@@ -272,7 +273,9 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         if let Some(ref flag) = script_reload_pending {
             if flag.swap(false, Ordering::Relaxed) && script_state.script_file_modified_since_load()
             {
-                script_state.reload_script();
+                drop(session);
+                script_state.reload_script(&session_handle);
+                session = session_handle.borrow_mut();
             }
         }
 
@@ -393,7 +396,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
         if let Some(path) = session.take_pending_script_path() {
             script_state.set_path(path);
-            match script_state.load_script() {
+            match script_state.load_script(&session_handle) {
                 Ok(()) => session.message("Script loaded".to_string(), MessageType::Info),
                 Err(e) => session.message(e, MessageType::Error),
             }
