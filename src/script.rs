@@ -9,8 +9,9 @@ use crate::gfx::color::Rgba;
 use crate::gfx::math::Point2;
 use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
 use crate::session::Session;
+use crate::view::ViewId;
 
-use rhai::{CallFnOptions, Engine, Scope, AST};
+use rhai::{Array, CallFnOptions, Dynamic, Engine, Scope, AST};
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,12 @@ use std::time::SystemTime;
 
 /// Type alias for the user batch shared between script and session.
 pub type UserBatch = Rc<RefCell<shape2d::Batch>>;
+
+/// Read-only view handle exposed to Rhai scripts.
+#[derive(Debug, Clone)]
+struct ScriptView {
+    id: ViewId,
+}
 
 /// State for the main Rhai script (event-handler style).
 /// Built in lib.rs and passed to renderer.frame() and draw_ctx.draw().
@@ -150,7 +157,16 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_get("width", |s: &mut Rc<RefCell<Session>>| s.borrow().width as f64)
         .register_get("height", |s: &mut Rc<RefCell<Session>>| s.borrow().height as f64)
         .register_get("offset_x", |s: &mut Rc<RefCell<Session>>| s.borrow().offset.x as f64)
-        .register_get("offset_y", |s: &mut Rc<RefCell<Session>>| s.borrow().offset.y as f64);
+        .register_get("offset_y", |s: &mut Rc<RefCell<Session>>| s.borrow().offset.y as f64)
+        .register_type_with_name::<ScriptView>("View")
+        .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
+        .register_fn("views", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow()
+                .views
+                .iter()
+                .map(|v| Dynamic::from(ScriptView { id: v.id }))
+                .collect::<Array>()
+        });
 }
 
 /// Register draw primitives on the engine. Call this once when loading a script.

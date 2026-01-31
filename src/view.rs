@@ -22,6 +22,13 @@ use std::io;
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Debug, Default)]
 pub struct ViewId(u16);
 
+impl ViewId {
+    /// Raw numeric id (for scripting / serialization).
+    pub fn raw(self) -> u16 {
+        self.0
+    }
+}
+
 impl fmt::Display for ViewId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
