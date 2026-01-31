@@ -20,7 +20,7 @@ use std::io;
 
 /// View identifier.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Debug, Default)]
-pub struct ViewId(u16);
+pub struct ViewId(pub u16);
 
 impl ViewId {
     /// Raw numeric id (for scripting / serialization).

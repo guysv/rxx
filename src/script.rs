@@ -11,8 +11,8 @@ use crate::gfx::rect::Rect;
 use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
 use crate::gfx::sprite2d;
 use crate::gfx::{Repeat, Rgba8};
-use crate::session::{Effect, Session};
-use crate::view::ViewId;
+use crate::session::{Effect, MessageType, Session};
+use crate::view::{View, ViewId, ViewResource};
 
 use rhai::{Array, CallFnOptions, Dynamic, Engine, Scope, AST};
 
@@ -29,6 +29,13 @@ pub type UserBatch = (Rc<RefCell<shape2d::Batch>>, Rc<RefCell<Option<sprite2d::B
 #[derive(Debug, Clone)]
 struct ScriptView {
     id: ViewId,
+    offset: Vector2<f32>,
+}
+
+impl From<&View<ViewResource>> for ScriptView {
+    fn from(view: &View<ViewResource>) -> Self {
+        ScriptView { id: view.id, offset: view.offset }
+    }
 }
 
 /// State for the main Rhai script (event-handler style).
@@ -141,28 +148,55 @@ impl ScriptState {
         let _ = self.load_script(session_handle);
     }
 
-    /// Traverse view effects and call the script's `view_added` / `view_removed` handlers.
-    /// No-op if the script does not define those functions.
-    pub fn call_view_effects(&mut self, effects: &[Effect]) {
-        let (engine, scope, ast) = match (
-            self.script_engine.as_ref(),
-            self.script_scope.as_mut(),
-            self.script_ast.as_ref(),
-        ) {
-            (Some(e), Some(s), Some(a)) => (e, s, a),
-            _ => return,
-        };
-        for eff in effects {
-            match eff {
-                Effect::ViewAdded(id) => {
-                    let _ = call_view_added(engine, scope, &ast.borrow(), id.raw() as i64);
+    /// Traverse effects: call script's `view_added` / `view_removed` handlers and run script
+    /// commands (with session messages on error). Returns effects not consumed for the renderer.
+    pub fn call_view_effects(
+        &mut self,
+        effects: &[Effect],
+        session_handle: &Rc<RefCell<Session>>,
+    ) -> Vec<Effect> {
+        let mut renderer_effects = Vec::new();
+        let mut script_commands = Vec::new();
+        {
+            let (engine, scope, ast) = match (
+                self.script_engine.as_ref(),
+                self.script_scope.as_mut(),
+                self.script_ast.as_ref(),
+            ) {
+                (Some(e), Some(s), Some(a)) => (e, s, a),
+                _ => return effects.to_vec(),
+            };
+            for eff in effects {
+                match eff {
+                    Effect::ViewAdded(id) => {
+                        let _ = call_view_added(engine, scope, &ast.borrow(), id.raw() as i64);
+                    }
+                    Effect::ViewRemoved(id) => {
+                        let _ = call_view_removed(engine, scope, &ast.borrow(), id.raw() as i64);
+                    }
+                    Effect::RunScriptCommand(name, args) => script_commands.push((name.clone(), args.clone())),
+                    other => renderer_effects.push(other.clone()),
                 }
-                Effect::ViewRemoved(id) => {
-                    let _ = call_view_removed(engine, scope, &ast.borrow(), id.raw() as i64);
-                }
-                _ => {}
             }
         }
+        for (name, args) in script_commands {
+            match self.call_script_command(&name, args) {
+                Ok(true) => {}
+                Ok(false) => {
+                    session_handle.borrow_mut().message(
+                        format!("Script command '{}' has no handler cmd_{}", name, name),
+                        MessageType::Error,
+                    );
+                }
+                Err(e) => {
+                    session_handle.borrow_mut().message(
+                        format!("Script command '{}' error: {}", name, e),
+                        MessageType::Error,
+                    );
+                }
+            }
+        }
+        renderer_effects
     }
 
     /// Call the script's `draw()` event handler.
@@ -229,7 +263,7 @@ impl ScriptState {
             _ => return Ok(false),
         };
 
-        let handler_name = format!("cmd_{}", name);
+        let handler_name = format!("cmd_{}", name.replace('/', "_"));
         let rhai_args: Array = args.into_iter().map(Dynamic::from).collect();
 
         match engine.call_fn::<()>(scope, &ast.borrow(), &handler_name, (rhai_args,)) {
@@ -263,12 +297,17 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_get("active_view_id", |s: &mut Rc<RefCell<Session>>| s.borrow().views.active_id.raw() as i64)
         .register_type_with_name::<ScriptView>("View")
         .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
+        .register_get("offset", |v: &mut ScriptView| Vector2::new(v.offset.x as f32, v.offset.y as f32))
         .register_fn("views", |s: &mut Rc<RefCell<Session>>| {
             s.borrow()
                 .views
                 .iter()
-                .map(|v| Dynamic::from(ScriptView { id: v.id }))
+                .map(|v| Dynamic::from(ScriptView::from(v)))
                 .collect::<Array>()
+        })
+        .register_fn("view", |s: &mut Rc<RefCell<Session>>, id: i64| {
+            let id = ViewId(id as u16);
+            Dynamic::from(ScriptView::from(s.borrow().view(id)))
         });
 }
 

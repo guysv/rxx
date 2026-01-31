@@ -402,34 +402,9 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             }
         }
 
-        script_state.call_view_effects(&effects);
-
-        // Handle script command effects before passing to renderer
-        let mut renderer_effects = Vec::new();
-        for eff in effects {
-            match eff {
-                Effect::RunScriptCommand(name, args) => {
-                    match script_state.call_script_command(&name, args) {
-                        Ok(true) => {} // Handler found and called
-                        Ok(false) => {
-                            session.message(
-                                format!("Script command '{}' has no handler cmd_{}", name, name),
-                                MessageType::Error,
-                            );
-                        }
-                        Err(e) => {
-                            session.message(
-                                format!("Script command '{}' error: {}", name, e),
-                                MessageType::Error,
-                            );
-                        }
-                    }
-                }
-                other => renderer_effects.push(other),
-            }
-        }
-
         drop(session);
+        let renderer_effects = script_state.call_view_effects(&effects, &session_handle);
+
         render_timer.run(|avg| {
             renderer
                     .frame(&session_handle, &mut script_state, &mut execution, renderer_effects, &avg)
