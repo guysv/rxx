@@ -402,6 +402,8 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             }
         }
 
+        script_state.call_view_effects(&effects);
+
         drop(session);
         render_timer.run(|avg| {
             renderer

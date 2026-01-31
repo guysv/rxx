@@ -8,7 +8,7 @@ use crate::draw::USER_LAYER;
 use crate::gfx::color::Rgba;
 use crate::gfx::math::Point2;
 use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
-use crate::session::Session;
+use crate::session::{Effect, Session};
 use crate::view::ViewId;
 
 use rhai::{Array, CallFnOptions, Dynamic, Engine, Scope, AST};
@@ -110,6 +110,30 @@ impl ScriptState {
     /// Errors are ignored (e.g. for hot-reload); use load_script() for explicit feedback.
     pub fn reload_script(&mut self, session_handle: &Rc<RefCell<Session>>) {
         let _ = self.load_script(session_handle);
+    }
+
+    /// Traverse view effects and call the script's `view_added` / `view_removed` handlers.
+    /// No-op if the script does not define those functions.
+    pub fn call_view_effects(&mut self, effects: &[Effect]) {
+        let (engine, scope, ast) = match (
+            self.script_engine.as_ref(),
+            self.script_scope.as_mut(),
+            self.script_ast.as_ref(),
+        ) {
+            (Some(e), Some(s), Some(a)) => (e, s, a),
+            _ => return,
+        };
+        for eff in effects {
+            match eff {
+                Effect::ViewAdded(id) => {
+                    let _ = call_view_added(engine, scope, &ast.borrow(), id.raw() as i64);
+                }
+                Effect::ViewRemoved(id) => {
+                    let _ = call_view_removed(engine, scope, &ast.borrow(), id.raw() as i64);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Call the script's `draw()` event handler.
@@ -219,6 +243,34 @@ pub fn call_draw(
     ast: &AST,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "draw", ()) {
+        Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Call the script's `view_added(view_id)` handler.
+fn call_view_added(
+    engine: &Engine,
+    scope: &mut Scope,
+    ast: &AST,
+    view_id: i64,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    match engine.call_fn::<()>(scope, ast, "view_added", (view_id,)) {
+        Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Call the script's `view_removed(view_id)` handler.
+fn call_view_removed(
+    engine: &Engine,
+    scope: &mut Scope,
+    ast: &AST,
+    view_id: i64,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    match engine.call_fn::<()>(scope, ast, "view_removed", (view_id,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e) => Ok(()),
         Err(e) => Err(e),
