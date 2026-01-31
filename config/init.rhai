@@ -3,10 +3,11 @@
 /// Variables defined here persist for later event handlers.
 fn init(session) {
     let global_session = session;
+    print("script initialized");
 }
 
 /// Draw event: called every frame. Use draw_line to add lines to the screen.
-/// session: width, height, offset_x, offset_y
-fn draw(session) {
+/// Use global_session (set in init) for width, height, offset_x, offset_y.
+fn draw() {
     draw_line(10.0, 10.0, 500.0, 200.0);
 }

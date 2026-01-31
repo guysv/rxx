@@ -114,7 +114,7 @@ impl ScriptState {
 
     /// Call the script's `draw()` event handler.
     /// The script's draw primitives (e.g. `draw_line`) mutate the user batch directly.
-    pub fn call_draw_event(&mut self, session_handle: &Rc<RefCell<Session>>) -> Result<(), Box<rhai::EvalAltResult>> {
+    pub fn call_draw_event(&mut self) -> Result<(), Box<rhai::EvalAltResult>> {
         self.script_user_batch.borrow_mut().clear();
         let (engine, scope, ast) = match (
             self.script_engine.as_ref(),
@@ -124,7 +124,7 @@ impl ScriptState {
             (Some(e), Some(s), Some(a)) => (e, s, a),
             _ => return Ok(()),
         };
-        call_draw(engine, scope, &ast.borrow(), session_handle)
+        call_draw(engine, scope, &ast.borrow())
     }
 
     /// Get the user batch vertices for rendering.
@@ -149,7 +149,7 @@ pub fn compile_file(engine: &Engine, path: &Path) -> Result<AST, Box<rhai::EvalA
     engine.compile_file(path.into())
 }
 
-/// Register session handle type so scripts can use it in draw(session).
+/// Register session handle type so scripts can use it in init(session).
 /// Exposes width, height, offset_x, offset_y from the session.
 pub fn register_session_handle(engine: &mut Engine) {
     engine
@@ -210,17 +210,15 @@ pub fn call_init(
 }
 
 /// Call the script's `draw()` event handler.
-/// Unlike `init`, this uses the default call_fn (scope is rewound after the call).
+/// Script uses global_session (set in init); no session argument.
 ///
 /// If the script does not define `draw`, this is a no-op (no error).
 pub fn call_draw(
     engine: &Engine,
     scope: &mut Scope,
     ast: &AST,
-    session_handle: &Rc<RefCell<Session>>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    let session = session_handle.clone();
-    match engine.call_fn::<()>(scope, ast, "draw", (session,)) {
+    match engine.call_fn::<()>(scope, ast, "draw", ()) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e) => Ok(()),
         Err(e) => Err(e),

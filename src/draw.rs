@@ -143,7 +143,7 @@ impl Context {
 
         drop(session);
         // User script draw event (populates script_state's user batch directly)
-        if let Err(e) = script_state.call_draw_event(session_handle) {
+        if let Err(e) = script_state.call_draw_event() {
             warn!("Script draw error: {}", e);
         }
     }
