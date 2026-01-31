@@ -124,6 +124,9 @@ pub enum Command {
     ViewPrev,
 
     Noop,
+
+    /// Script command registered by Rhai init(). (name, args)
+    ScriptCommand(String, Vec<String>),
 }
 
 impl Command {
@@ -235,6 +238,7 @@ impl fmt::Display for Command {
             Self::SelectionFlip(Axis::Horizontal) => write!(f, "Flip selection horizontally"),
             Self::SelectionFlip(Axis::Vertical) => write!(f, "Flip selection vertically"),
             Self::PaintColor(_, x, y) => write!(f, "Paint {:2},{:2}", x, y),
+            Self::ScriptCommand(name, _) => write!(f, "Script command: {}", name),
             _ => write!(f, "..."),
         }
     }
@@ -263,6 +267,13 @@ impl From<Command> for String {
             Command::Export(None, path) => format!("export {}", path),
             Command::Export(Some(s), path) => format!("export @{}x {}", s, path),
             Command::Noop => format!(""),
+            Command::ScriptCommand(name, args) => {
+                if args.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{} {}", name, args.join(" "))
+                }
+            }
             Command::PaletteAdd(c) => format!("p/add {}", c),
             Command::PaletteClear => format!("p/clear"),
             Command::PaletteWrite(_) => format!("p/write"),
@@ -526,6 +537,17 @@ impl CommandLine {
         self.autocomplete = Autocomplete::new(CommandCompleter::new(path, exts.as_slice()));
     }
 
+    /// Set script commands registered by Rhai init() and rebuild the parser.
+    pub fn set_script_commands(&mut self, cmds: Vec<(String, String)>) {
+        self.commands.set_script_commands(cmds);
+        self.parser = self.commands.line_parser();
+    }
+
+    /// Get script commands (name, help) for help display.
+    pub fn script_commands(&self) -> &[(String, String)] {
+        self.commands.script_commands()
+    }
+
     pub fn parse(&self, input: &str) -> Result<Command, Error> {
         match self.parser.parse(input) {
             Ok((cmd, _)) => Ok(cmd),
@@ -670,6 +692,8 @@ impl CommandLine {
 
 pub struct Commands {
     commands: Vec<(&'static str, &'static str, Parser<Command>)>,
+    /// Script commands registered by Rhai init(). (name, help)
+    script_commands: Vec<(String, String)>,
 }
 
 impl Commands {
@@ -680,7 +704,23 @@ impl Commands {
                 "Add color to palette",
                 color().map(Command::PaletteAdd),
             )],
+            script_commands: Vec::new(),
         }
+    }
+
+    /// Set/replace script commands registered by Rhai init().
+    pub fn set_script_commands(&mut self, cmds: Vec<(String, String)>) {
+        self.script_commands = cmds;
+    }
+
+    /// Get script command names (for autocomplete).
+    pub fn script_command_names(&self) -> Vec<String> {
+        self.script_commands.iter().map(|(n, _)| n.clone()).collect()
+    }
+
+    /// Get script commands (name, help) for help display.
+    pub fn script_commands(&self) -> &[(String, String)] {
+        &self.script_commands
     }
 
     pub fn parser(&self) -> Parser<Command> {
@@ -688,11 +728,47 @@ impl Commands {
 
         let noop = expect(|s| s.is_empty(), "<empty>").value(Command::Noop);
         let commands = self.commands.iter().map(|(_, _, v)| v.clone());
-        let choices = commands.chain(iter::once(noop)).collect();
+
+        // Build parsers for script commands
+        // Clone the script commands to avoid lifetime issues with the parser closures
+        let script_commands_owned: Vec<(String, String)> = self.script_commands.clone();
+        let script_parsers: Vec<Parser<Command>> = script_commands_owned
+            .into_iter()
+            .map(|(name, _)| {
+                let name_for_map = name.clone();
+                Parser::new(
+                    move |input: &str| {
+                        // Check if input starts with the command name
+                        if !input.starts_with(&name) {
+                            return Err((format!("expected {}", name).into(), input));
+                        }
+                        let rest_after_name = &input[name.len()..];
+                        // Check that command name is followed by whitespace or end
+                        if !rest_after_name.is_empty() && !rest_after_name.starts_with(char::is_whitespace) {
+                            return Err((format!("expected {} followed by whitespace", name).into(), input));
+                        }
+                        // Skip optional whitespace and get rest of line
+                        let rest = rest_after_name.trim_start();
+                        let args: Vec<String> = rest
+                            .split_whitespace()
+                            .map(|s| s.to_string())
+                            .collect();
+                        Ok((Command::ScriptCommand(name_for_map.clone(), args), ""))
+                    },
+                    "<script-cmd>",
+                )
+            })
+            .collect();
+
+        // Combine: static commands, then script commands, then noop
+        let all_choices: Vec<Parser<Command>> = commands
+            .chain(script_parsers.into_iter())
+            .chain(iter::once(noop))
+            .collect();
 
         symbol(':')
             .then(
-                choice(choices).or(peek(
+                choice(all_choices).or(peek(
                     until(hush(whitespace()).or(end()))
                         .try_map(|cmd| Err(format!("unknown command: {}", cmd))),
                 )),

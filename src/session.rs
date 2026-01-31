@@ -188,6 +188,8 @@ pub enum Effect {
     ViewPaintFinal(Vec<Shape>),
     /// The blend mode used for painting has changed.
     ViewBlendingChanged(Blending),
+    /// Run a script command registered by Rhai init(). (name, args)
+    RunScriptCommand(String, Vec<String>),
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -778,6 +780,11 @@ impl Session {
     /// Lib applies it to ScriptState and shows feedback.
     pub fn take_pending_script_path(&mut self) -> Option<PathBuf> {
         self.pending_script_path.take()
+    }
+
+    /// Set script commands registered by Rhai init() and rebuild the parser.
+    pub fn set_script_commands(&mut self, cmds: Vec<(String, String)>) {
+        self.cmdline.set_script_commands(cmds);
     }
 
     // Reset to factory defaults.
@@ -2692,6 +2699,10 @@ impl Session {
             },
             Command::Noop => {
                 // Nothing happening!
+            }
+            Command::ScriptCommand(name, args) => {
+                // Dispatch to script handler via effect
+                self.effects.push(Effect::RunScriptCommand(name, args));
             }
             Command::ChangeDir(dir) => {
                 let home = self.base_dirs.home_dir().to_path_buf();

@@ -91,11 +91,22 @@ impl ScriptState {
             self.script_user_batch.1.clone(),
         );
         register_session_handle(&mut engine);
+
+        // Collector for script commands registered during init()
+        let script_commands: Rc<RefCell<Vec<(String, String)>>> =
+            Rc::new(RefCell::new(Vec::new()));
+        register_command_api(&mut engine, script_commands.clone());
+
         let ast = compile_file(&engine, &path)
             .map_err(|e| format!("Script compile error: {}", e))?;
         let mut scope = Scope::new();
         call_init(&engine, &mut scope, &ast, session_handle)
             .map_err(|e| format!("Script init error: {}", e))?;
+
+        // Apply collected script commands to session's command line
+        let cmds = script_commands.borrow().clone();
+        session_handle.borrow_mut().set_script_commands(cmds);
+
         self.script_engine = Some(engine);
         self.script_scope = Some(scope);
         self.script_ast = Some(Rc::new(RefCell::new(ast)));
@@ -201,6 +212,32 @@ impl ScriptState {
             .map(|b| b.is_empty())
             .unwrap_or(true)
     }
+
+    /// Call a script command handler `cmd_<name>(args)`.
+    /// Returns Ok(true) if handler was found and called, Ok(false) if no handler exists.
+    pub fn call_script_command(
+        &mut self,
+        name: &str,
+        args: Vec<String>,
+    ) -> Result<bool, Box<rhai::EvalAltResult>> {
+        let (engine, scope, ast) = match (
+            self.script_engine.as_ref(),
+            self.script_scope.as_mut(),
+            self.script_ast.as_ref(),
+        ) {
+            (Some(e), Some(s), Some(a)) => (e, s, a),
+            _ => return Ok(false),
+        };
+
+        let handler_name = format!("cmd_{}", name);
+        let rhai_args: Array = args.into_iter().map(Dynamic::from).collect();
+
+        match engine.call_fn::<()>(scope, &ast.borrow(), &handler_name, (rhai_args,)) {
+            Ok(()) => Ok(true),
+            Err(ref e) if is_function_not_found(e) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl Default for ScriptState {
@@ -277,6 +314,14 @@ pub fn register_draw_primitives(
                 sx += gw;
             }
         }
+    });
+}
+
+/// Register the `register_command(name, help)` function for scripts to register custom commands.
+/// Commands are collected in the provided `Rc<RefCell<Vec<(String, String)>>>`.
+fn register_command_api(engine: &mut Engine, commands: Rc<RefCell<Vec<(String, String)>>>) {
+    engine.register_fn("register_command", move |name: &str, help: &str| {
+        commands.borrow_mut().push((name.to_string(), help.to_string()));
     });
 }
 
