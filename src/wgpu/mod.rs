@@ -1117,6 +1117,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Prepare draw context
         drop(session);
+        let [font_w, font_h] = self.font.size;
+        script_state.ensure_user_sprite_batch(font_w, font_h);
         self.draw_ctx.clear();
         self.draw_ctx.draw(session_handle, script_state, avg_frametime, execution);
         let mut session = session_handle.borrow_mut();
@@ -1131,6 +1133,11 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             None
         } else {
             self.create_shape_vertices(&script_state.user_batch_vertices())
+        };
+        let user_sprite_tess = if script_state.user_sprite_batch_is_empty() {
+            None
+        } else {
+            self.create_sprite_vertices(&script_state.user_sprite_batch_vertices())
         };
         let text_vertices = self.create_sprite_vertices(&self.draw_ctx.text_batch.vertices());
         let tool_vertices = self.create_sprite_vertices(&self.draw_ctx.tool_batch.vertices());
@@ -1500,6 +1507,15 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             if let Some((buffer, count)) = &user_vertices {
                 pass.set_pipeline(&self.shape_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*count, 0..1);
+            }
+
+            // Render user script text (sprite batch, same font as UI text).
+            if let Some((buffer, count)) = &user_sprite_tess {
+                pass.set_pipeline(&self.sprite_pipeline);
+                pass.set_bind_group(0, &transform_bind_group, &[]);
+                pass.set_bind_group(1, &font_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*count, 0..1);
             }

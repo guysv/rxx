@@ -8,10 +8,11 @@ fn init(session) {
     }
 }
 
-/// Draw event: called every frame. Use draw_line to add lines to the screen.
+/// Draw event: called every frame. Use draw_line to add lines, draw_text to add text.
 /// Use global_session (set in init) for width, height, offset_x, offset_y.
 fn draw() {
     draw_line(10.0, 10.0, 500.0, 200.0);
+    draw_text(50.0, 50.0, "Hello from script");
 }
 
 fn view_added(view_id) {

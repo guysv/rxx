@@ -4,10 +4,13 @@
 //! one main script with `init(session)`; custom Scope + CallFnOptions (eval_ast false,
 //! rewind_scope false) so variables defined in `init()` persist.
 
-use crate::draw::USER_LAYER;
+use crate::draw::{self, USER_LAYER};
 use crate::gfx::color::Rgba;
 use crate::gfx::math::Point2;
+use crate::gfx::rect::Rect;
 use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
+use crate::gfx::sprite2d;
+use crate::gfx::Repeat;
 use crate::session::{Effect, Session};
 use crate::view::ViewId;
 
@@ -18,8 +21,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
 
-/// Type alias for the user batch shared between script and session.
-pub type UserBatch = Rc<RefCell<shape2d::Batch>>;
+/// Type alias for the user batches shared between script and session.
+/// (shape batch, sprite batch for text). Sprite batch is created lazily with font size.
+pub type UserBatch = (Rc<RefCell<shape2d::Batch>>, Rc<RefCell<Option<sprite2d::Batch>>>);
 
 /// Read-only view handle exposed to Rhai scripts.
 #[derive(Debug, Clone)]
@@ -40,7 +44,7 @@ pub struct ScriptState {
     pub script_scope: Option<Scope<'static>>,
     /// Compiled script AST.
     pub script_ast: Option<Rc<RefCell<AST>>>,
-    /// User batch for script's draw() event, shared with Rhai closures.
+    /// User batches for script's draw() event (shape + sprite for text), shared with Rhai closures.
     pub script_user_batch: UserBatch,
 }
 
@@ -52,7 +56,17 @@ impl ScriptState {
             script_engine: None,
             script_scope: None,
             script_ast: None,
-            script_user_batch: Rc::new(RefCell::new(shape2d::Batch::new())),
+            script_user_batch: (
+                Rc::new(RefCell::new(shape2d::Batch::new())),
+                Rc::new(RefCell::new(None)),
+            ),
+        }
+    }
+
+    /// Ensure the user sprite batch exists (created with font texture size). Call from renderer each frame.
+    pub fn ensure_user_sprite_batch(&mut self, w: u32, h: u32) {
+        if self.script_user_batch.1.borrow().is_none() {
+            *self.script_user_batch.1.borrow_mut() = Some(sprite2d::Batch::new(w, h));
         }
     }
 
@@ -71,7 +85,11 @@ impl ScriptState {
             return Err(format!("Script not found: {}", path.display()));
         }
         let mut engine = Engine::new();
-        register_draw_primitives(&mut engine, self.script_user_batch.clone());
+        register_draw_primitives(
+            &mut engine,
+            self.script_user_batch.0.clone(),
+            self.script_user_batch.1.clone(),
+        );
         register_session_handle(&mut engine);
         let ast = compile_file(&engine, &path)
             .map_err(|e| format!("Script compile error: {}", e))?;
@@ -137,9 +155,12 @@ impl ScriptState {
     }
 
     /// Call the script's `draw()` event handler.
-    /// The script's draw primitives (e.g. `draw_line`) mutate the user batch directly.
+    /// The script's draw primitives (e.g. `draw_line`, `draw_text`) mutate the user batches directly.
     pub fn call_draw_event(&mut self) -> Result<(), Box<rhai::EvalAltResult>> {
-        self.script_user_batch.borrow_mut().clear();
+        self.script_user_batch.0.borrow_mut().clear();
+        if let Some(ref mut batch) = *self.script_user_batch.1.borrow_mut() {
+            batch.clear();
+        }
         let (engine, scope, ast) = match (
             self.script_engine.as_ref(),
             self.script_scope.as_mut(),
@@ -151,14 +172,34 @@ impl ScriptState {
         call_draw(engine, scope, &ast.borrow())
     }
 
-    /// Get the user batch vertices for rendering.
+    /// Get the user shape batch vertices for rendering.
     pub fn user_batch_vertices(&self) -> Vec<crate::gfx::shape2d::Vertex> {
-        self.script_user_batch.borrow().vertices()
+        self.script_user_batch.0.borrow().vertices()
     }
 
-    /// Check if the user batch is empty.
+    /// Check if the user shape batch is empty.
     pub fn user_batch_is_empty(&self) -> bool {
-        self.script_user_batch.borrow().is_empty()
+        self.script_user_batch.0.borrow().is_empty()
+    }
+
+    /// Get the user sprite batch vertices for rendering (text). Empty if batch not yet created.
+    pub fn user_sprite_batch_vertices(&self) -> Vec<crate::gfx::sprite2d::Vertex> {
+        self.script_user_batch
+            .1
+            .borrow()
+            .as_ref()
+            .map(|b| b.vertices())
+            .unwrap_or_default()
+    }
+
+    /// Check if the user sprite batch is empty or not created.
+    pub fn user_sprite_batch_is_empty(&self) -> bool {
+        self.script_user_batch
+            .1
+            .borrow()
+            .as_ref()
+            .map(|b| b.is_empty())
+            .unwrap_or(true)
     }
 }
 
@@ -194,8 +235,12 @@ pub fn register_session_handle(engine: &mut Engine) {
 }
 
 /// Register draw primitives on the engine. Call this once when loading a script.
-/// The batch is shared; `draw_line` adds shapes directly to it.
-pub fn register_draw_primitives(engine: &mut Engine, user_batch: UserBatch) {
+/// The batches are shared; `draw_line` adds shapes, `draw_text` adds text sprites.
+pub fn register_draw_primitives(
+    engine: &mut Engine,
+    shape_batch: Rc<RefCell<shape2d::Batch>>,
+    sprite_batch: Rc<RefCell<Option<sprite2d::Batch>>>,
+) {
     engine.register_fn("draw_line", move |x1: f64, y1: f64, x2: f64, y2: f64| {
         let shape = Shape::Line(
             Line::new(
@@ -206,7 +251,32 @@ pub fn register_draw_primitives(engine: &mut Engine, user_batch: UserBatch) {
             Rotation::ZERO,
             Stroke::new(1.0, Rgba::WHITE),
         );
-        user_batch.borrow_mut().add(shape);
+        shape_batch.borrow_mut().add(shape);
+    });
+
+    const FONT_OFFSET: usize = 32;
+    let gw = draw::GLYPH_WIDTH;
+    let gh = draw::GLYPH_HEIGHT;
+
+    engine.register_fn("draw_text", move |x: f64, y: f64, text: &str| {
+        if let Some(ref mut batch) = *sprite_batch.borrow_mut() {
+            let mut sx = x as f32;
+            let sy = y as f32;
+            for c in text.bytes() {
+                let i = c as usize - FONT_OFFSET;
+                let tx = (i % 16) as f32 * gw;
+                let ty = (i / 16) as f32 * gh;
+                batch.add(
+                    Rect::new(tx, ty, tx + gw, ty + gh),
+                    Rect::new(sx, sy, sx + gw, sy + gh),
+                    USER_LAYER,
+                    Rgba::WHITE,
+                    1.0,
+                    Repeat::default(),
+                );
+                sx += gw;
+            }
+        }
     });
 }
 
