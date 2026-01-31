@@ -1,0 +1,36 @@
+{"timestamp":1769861967982,"location":"session.rs:load_script","message":"load_script entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861967985,"location":"script.rs:call_init","message":"call_init entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861972122,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861972126,"location":"lib.rs:reload","message":"reload_script called","hypothesisId":"A","sessionId":"debug-session"}
+{"timestamp":1769861972126,"location":"session.rs:load_script","message":"load_script entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861972133,"location":"script.rs:call_init","message":"call_init entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861972165,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861972173,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861973724,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861973733,"location":"lib.rs:reload","message":"reload_script called","hypothesisId":"A","sessionId":"debug-session"}
+{"timestamp":1769861973733,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861973733,"location":"session.rs:load_script","message":"load_script entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861973744,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861973744,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861973744,"location":"script.rs:call_init","message":"call_init entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861975835,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861975843,"location":"lib.rs:reload","message":"reload_script called","hypothesisId":"A","sessionId":"debug-session"}
+{"timestamp":1769861975843,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861975843,"location":"session.rs:load_script","message":"load_script entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861975853,"location":"script.rs:call_init","message":"call_init entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861975854,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861975854,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861976787,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861976787,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861976788,"location":"lib.rs:reload","message":"reload_script called","hypothesisId":"A","sessionId":"debug-session"}
+{"timestamp":1769861976789,"location":"session.rs:load_script","message":"load_script entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861976799,"location":"script.rs:call_init","message":"call_init entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861976818,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861976818,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861980678,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861980688,"location":"lib.rs:reload","message":"reload_script called","hypothesisId":"A","sessionId":"debug-session"}
+{"timestamp":1769861980688,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861980688,"location":"session.rs:load_script","message":"load_script entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861980697,"location":"script.rs:call_init","message":"call_init entry","hypothesisId":"C","sessionId":"debug-session"}
+{"timestamp":1769861980699,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}
+{"timestamp":1769861980699,"location":"lib.rs:watcher","message":"watcher set flag","hypothesisId":"B","sessionId":"debug-session"}

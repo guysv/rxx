@@ -33,6 +33,7 @@ bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
 env_logger = "0.11.8"
 rhai = "1.24"
+notify = "6"
 
 [dev-dependencies]
 lazy_static = "1.3"

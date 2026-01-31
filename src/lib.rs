@@ -62,6 +62,9 @@ use directories as dirs;
 
 use std::alloc::System;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Program version.
@@ -168,6 +171,52 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
     let wait_events = execution.is_normal() || execution.is_recording();
 
+    let script_reload_pending: Option<Arc<AtomicBool>> =
+        session.script_path().map(|_| Arc::new(AtomicBool::new(false)));
+
+    if let (Some(script_path), Some(pending)) = (
+        session.script_path().cloned(),
+        script_reload_pending.as_ref(),
+    ) {
+        let pending_clone = Arc::clone(pending);
+        let script_canonical = script_path.canonicalize().ok();
+        let watch_dir = script_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        thread::spawn(move || {
+            use notify::{RecursiveMode, Watcher};
+            let pending_cb = Arc::clone(&pending_clone);
+            let mut watcher = match notify::recommended_watcher(move |res: Result<notify::Event, _>| {
+                if let Ok(event) = res {
+                    let is_our_file = event.paths.iter().any(|p| {
+                        p.canonicalize().ok().as_ref() == script_canonical.as_ref()
+                    });
+                    let is_modify = matches!(
+                        event.kind,
+                        notify::EventKind::Modify(_) | notify::EventKind::Create(_)
+                    );
+                    if is_our_file && is_modify {
+                        pending_cb.store(true, Ordering::Relaxed);
+                        unsafe { glfw::ffi::glfwPostEmptyEvent() };
+                    }
+                }
+            }) {
+                Ok(w) => w,
+                Err(e) => {
+                    log::warn!("script watcher: {}", e);
+                    return;
+                }
+            };
+            if watcher.watch(&watch_dir, RecursiveMode::NonRecursive).is_err() {
+                log::warn!("script watcher: failed to watch {}", watch_dir.display());
+                return;
+            }
+            let (_tx, rx) = std::sync::mpsc::channel::<()>();
+            let _ = rx.recv();
+        });
+    }
+
     let mut renderer: wgpu::Renderer = Renderer::new(&mut win, win_size, scale_factor, assets)?;
 
     if let Err(e) = session.edit(paths) {
@@ -204,6 +253,12 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             }
             _ if wait_events => events.wait(),
             _ => events.poll(),
+        }
+
+        if let Some(ref flag) = script_reload_pending {
+            if flag.swap(false, Ordering::Relaxed) && session.script_file_modified_since_load() {
+                session.reload_script();
+            }
         }
 
         for event in events.flush() {

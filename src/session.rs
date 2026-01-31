@@ -656,6 +656,8 @@ pub struct Session {
 
     /// Path to the main Rhai script (event-handler style).
     script_path: Option<PathBuf>,
+    /// Mtime of the script file after last successful load (for hot-reload dedup).
+    script_mtime: Option<std::time::SystemTime>,
     /// Rhai engine for the main script.
     script_engine: Option<rhai::Engine>,
     /// Custom scope so variables defined in init() persist.
@@ -754,6 +756,7 @@ impl Session {
             frame_number: 0,
             queue: Vec::new(),
             script_path: None,
+            script_mtime: None,
             script_engine: None,
             script_scope: None,
             script_ast: None,
@@ -820,6 +823,33 @@ impl Session {
         self.script_engine = Some(engine);
         self.script_scope = Some(scope);
         self.script_ast = Some(Rc::new(RefCell::new(ast)));
+        self.script_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+    }
+
+    /// True if the script file on disk is newer than the last load (or we never stored mtime).
+    pub fn script_file_modified_since_load(&self) -> bool {
+        let path = match &self.script_path {
+            Some(p) => p,
+            None => return false,
+        };
+        let current = match std::fs::metadata(path).ok().and_then(|m| m.modified().ok()) {
+            Some(t) => t,
+            None => return false,
+        };
+        match self.script_mtime {
+            Some(last) => current > last,
+            None => true,
+        }
+    }
+
+    /// Path to the main Rhai script, if one is loaded.
+    pub fn script_path(&self) -> Option<&PathBuf> {
+        self.script_path.as_ref()
+    }
+
+    /// Reload the main Rhai script: recompile and call init() again.
+    pub fn reload_script(&mut self) {
+        self.load_script();
     }
 
     // Reset to factory defaults.
