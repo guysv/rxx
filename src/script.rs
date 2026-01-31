@@ -6,11 +6,11 @@
 
 use crate::draw::{self, USER_LAYER};
 use crate::gfx::color::Rgba;
-use crate::gfx::math::Point2;
+use crate::gfx::math::{Point2, Vector2};
 use crate::gfx::rect::Rect;
 use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
 use crate::gfx::sprite2d;
-use crate::gfx::Repeat;
+use crate::gfx::{Repeat, Rgba8};
 use crate::session::{Effect, Session};
 use crate::view::ViewId;
 
@@ -271,6 +271,38 @@ pub fn register_session_handle(engine: &mut Engine) {
         });
 }
 
+/// Register Vector2<f32> and Rgba8 for script use. vec2(x,y), rgb8(r,g,b), rgb8(r,g,b,a).
+fn register_draw_types(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<Vector2<f32>>("Vector2")
+        .register_get("x", |v: &mut Vector2<f32>| v.x as f64)
+        .register_get("y", |v: &mut Vector2<f32>| v.y as f64)
+        .register_fn("vec2", |x: f64, y: f64| Vector2::new(x as f32, y as f32));
+
+    engine
+        .register_type_with_name::<Rgba8>("Rgba8")
+        .register_get("r", |c: &mut Rgba8| c.r as i64)
+        .register_get("g", |c: &mut Rgba8| c.g as i64)
+        .register_get("b", |c: &mut Rgba8| c.b as i64)
+        .register_get("a", |c: &mut Rgba8| c.a as i64)
+        .register_fn("rgb8", |r: i64, g: i64, b: i64| {
+            Rgba8::new(
+                r.clamp(0, 255) as u8,
+                g.clamp(0, 255) as u8,
+                b.clamp(0, 255) as u8,
+                255,
+            )
+        })
+        .register_fn("rgb8", |r: i64, g: i64, b: i64, a: i64| {
+            Rgba8::new(
+                r.clamp(0, 255) as u8,
+                g.clamp(0, 255) as u8,
+                b.clamp(0, 255) as u8,
+                a.clamp(0, 255) as u8,
+            )
+        });
+}
+
 /// Register draw primitives on the engine. Call this once when loading a script.
 /// The batches are shared; `draw_line` adds shapes, `draw_text` adds text sprites.
 pub fn register_draw_primitives(
@@ -278,27 +310,44 @@ pub fn register_draw_primitives(
     shape_batch: Rc<RefCell<shape2d::Batch>>,
     sprite_batch: Rc<RefCell<Option<sprite2d::Batch>>>,
 ) {
-    engine.register_fn("draw_line", move |x1: f64, y1: f64, x2: f64, y2: f64| {
-        let shape = Shape::Line(
-            Line::new(
-                Point2::new(x1 as f32, y1 as f32),
-                Point2::new(x2 as f32, y2 as f32),
-            ),
-            USER_LAYER,
-            Rotation::ZERO,
-            Stroke::new(1.0, Rgba::WHITE),
-        );
-        shape_batch.borrow_mut().add(shape);
-    });
+    register_draw_types(engine);
+
+    let shape_batch_line = shape_batch.clone();
+    engine.register_fn(
+        "draw_line",
+        move |p1: Vector2<f32>, p2: Vector2<f32>| {
+            let shape = Shape::Line(
+                Line::new(Point2::new(p1.x, p1.y), Point2::new(p2.x, p2.y)),
+                USER_LAYER,
+                Rotation::ZERO,
+                Stroke::new(1.0, Rgba::WHITE),
+            );
+            shape_batch_line.borrow_mut().add(shape);
+        },
+    );
+    engine.register_fn(
+        "draw_line",
+        move |p1: Vector2<f32>, p2: Vector2<f32>, color: Rgba8| {
+            let color: Rgba = color.into();
+            let shape = Shape::Line(
+                Line::new(Point2::new(p1.x, p1.y), Point2::new(p2.x, p2.y)),
+                USER_LAYER,
+                Rotation::ZERO,
+                Stroke::new(1.0, color),
+            );
+            shape_batch.borrow_mut().add(shape);
+        },
+    );
 
     const FONT_OFFSET: usize = 32;
     let gw = draw::GLYPH_WIDTH;
     let gh = draw::GLYPH_HEIGHT;
 
-    engine.register_fn("draw_text", move |x: f64, y: f64, text: &str| {
-        if let Some(ref mut batch) = *sprite_batch.borrow_mut() {
-            let mut sx = x as f32;
-            let sy = y as f32;
+    let sprite_batch_text = sprite_batch.clone();
+    engine.register_fn("draw_text", move |pos: Vector2<f32>, text: &str| {
+        if let Some(ref mut batch) = *sprite_batch_text.borrow_mut() {
+            let mut sx = pos.x;
+            let sy = pos.y;
             for c in text.bytes() {
                 let i = c as usize - FONT_OFFSET;
                 let tx = (i % 16) as f32 * gw;
@@ -308,6 +357,27 @@ pub fn register_draw_primitives(
                     Rect::new(sx, sy, sx + gw, sy + gh),
                     USER_LAYER,
                     Rgba::WHITE,
+                    1.0,
+                    Repeat::default(),
+                );
+                sx += gw;
+            }
+        }
+    });
+    engine.register_fn("draw_text", move |pos: Vector2<f32>, text: &str, color: Rgba8| {
+        let color: Rgba = color.into();
+        if let Some(ref mut batch) = *sprite_batch.borrow_mut() {
+            let mut sx = pos.x;
+            let sy = pos.y;
+            for c in text.bytes() {
+                let i = c as usize - FONT_OFFSET;
+                let tx = (i % 16) as f32 * gw;
+                let ty = (i / 16) as f32 * gh;
+                batch.add(
+                    Rect::new(tx, ty, tx + gw, ty + gh),
+                    Rect::new(sx, sy, sx + gw, sy + gh),
+                    USER_LAYER,
+                    color,
                     1.0,
                     Repeat::default(),
                 );

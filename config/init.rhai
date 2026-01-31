@@ -23,11 +23,13 @@ fn cmd_greet(args) {
     }
 }
 
-/// Draw event: called every frame. Use draw_line to add lines, draw_text to add text.
-/// Use session (set in init) for width, height, offset_x, offset_y.
+/// Draw event: called every frame. Use vec2(x,y), rgb8(r,g,b) or rgb8(r,g,b,a) (0..255).
+/// draw_line(p1, p2) or draw_line(p1, p2, color); draw_text(pos, text) or draw_text(pos, text, color).
 fn draw() {
-    draw_line(10.0, 10.0, 500.0, 200.0);
-    draw_text(50.0, 50.0, "Hello from script");
+    draw_line(vec2(10.0, 10.0), vec2(500.0, 200.0));
+    draw_line(vec2(20.0, 20.0), vec2(400.0, 100.0), rgb8(255, 0, 0));  // red line
+    draw_text(vec2(50.0, 50.0), "Hello from script");
+    draw_text(vec2(50.0, 70.0), "Colored text", rgb8(0, 255, 0));  // green text
 }
 
 fn view_added(view_id) {
