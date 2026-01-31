@@ -5,7 +5,7 @@ use crate::font::{TextAlign, TextBatch};
 use crate::platform;
 use crate::script::ScriptState;
 use crate::session;
-use crate::session::{MessageType, Mode, Session, Tool, VisualState};
+use crate::session::{Mode, Session, Tool, VisualState};
 use crate::sprite;
 use crate::view::{View, ViewCoords};
 
@@ -17,6 +17,8 @@ use crate::gfx::Rgba;
 use crate::gfx::{shape2d, sprite2d};
 use crate::gfx::{Repeat, Rgb8, Rgba8, ZDepth};
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time;
 
 pub const CHECKER_LAYER: ZDepth = ZDepth(-0.9);
@@ -124,23 +126,25 @@ pub struct Context {
 impl Context {
     pub fn draw(
         &mut self,
-        session: &mut Session,
+        session_handle: &Rc<RefCell<Session>>,
         script_state: &mut ScriptState,
         avg_frametime: &time::Duration,
         execution: &Execution,
     ) {
-        self::draw_brush(session, &session.brush, &mut self.ui_batch);
-        self::draw_paste(session, &mut self.paste_batch);
-        self::draw_grid(session, &mut self.ui_batch);
-        self::draw_ui(session, &mut self.ui_batch, &mut self.text_batch);
-        self::draw_overlay(session, avg_frametime, &mut self.overlay_batch, execution);
-        self::draw_palette(session, &mut self.ui_batch);
-        self::draw_cursor(session, &mut self.cursor_sprite, &mut self.tool_batch);
-        self::draw_checker(session, &mut self.checker_batch);
+        let session = session_handle.borrow_mut();
+        self::draw_brush(&session, &session.brush, &mut self.ui_batch);
+        self::draw_paste(&session, &mut self.paste_batch);
+        self::draw_grid(&session, &mut self.ui_batch);
+        self::draw_ui(&session, &mut self.ui_batch, &mut self.text_batch);
+        self::draw_overlay(&session, avg_frametime, &mut self.overlay_batch, execution);
+        self::draw_palette(&session, &mut self.ui_batch);
+        self::draw_cursor(&session, &mut self.cursor_sprite, &mut self.tool_batch);
+        self::draw_checker(&session, &mut self.checker_batch);
 
+        drop(session);
         // User script draw event (populates script_state's user batch directly)
-        if let Err(e) = script_state.call_draw_event() {
-            session.message(format!("Script draw error: {}", e), MessageType::Error);
+        if let Err(e) = script_state.call_draw_event(session_handle) {
+            warn!("Script draw error: {}", e);
         }
     }
 

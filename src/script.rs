@@ -8,6 +8,7 @@ use crate::draw::USER_LAYER;
 use crate::gfx::color::Rgba;
 use crate::gfx::math::Point2;
 use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
+use crate::session::Session;
 
 use rhai::{CallFnOptions, Engine, Scope, AST};
 
@@ -64,6 +65,7 @@ impl ScriptState {
         }
         let mut engine = Engine::new();
         register_draw_primitives(&mut engine, self.script_user_batch.clone());
+        register_session_handle(&mut engine);
         let ast = compile_file(&engine, &path)
             .map_err(|e| format!("Script compile error: {}", e))?;
         let mut scope = Scope::new();
@@ -105,7 +107,7 @@ impl ScriptState {
 
     /// Call the script's `draw()` event handler.
     /// The script's draw primitives (e.g. `draw_line`) mutate the user batch directly.
-    pub fn call_draw_event(&mut self) -> Result<(), Box<rhai::EvalAltResult>> {
+    pub fn call_draw_event(&mut self, session_handle: &Rc<RefCell<Session>>) -> Result<(), Box<rhai::EvalAltResult>> {
         self.script_user_batch.borrow_mut().clear();
         let (engine, scope, ast) = match (
             self.script_engine.as_ref(),
@@ -115,7 +117,7 @@ impl ScriptState {
             (Some(e), Some(s), Some(a)) => (e, s, a),
             _ => return Ok(()),
         };
-        call_draw(engine, scope, &ast.borrow())
+        call_draw(engine, scope, &ast.borrow(), session_handle)
     }
 
     /// Get the user batch vertices for rendering.
@@ -138,6 +140,17 @@ impl Default for ScriptState {
 /// Compile a script file into an AST.
 pub fn compile_file(engine: &Engine, path: &Path) -> Result<AST, Box<rhai::EvalAltResult>> {
     engine.compile_file(path.into())
+}
+
+/// Register session handle type so scripts can use it in draw(session).
+/// Exposes width, height, offset_x, offset_y from the session.
+pub fn register_session_handle(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<Rc<RefCell<Session>>>("Session")
+        .register_get("width", |s: &mut Rc<RefCell<Session>>| s.borrow().width as f64)
+        .register_get("height", |s: &mut Rc<RefCell<Session>>| s.borrow().height as f64)
+        .register_get("offset_x", |s: &mut Rc<RefCell<Session>>| s.borrow().offset.x as f64)
+        .register_get("offset_y", |s: &mut Rc<RefCell<Session>>| s.borrow().offset.y as f64);
 }
 
 /// Register draw primitives on the engine. Call this once when loading a script.
@@ -186,8 +199,10 @@ pub fn call_draw(
     engine: &Engine,
     scope: &mut Scope,
     ast: &AST,
+    session_handle: &Rc<RefCell<Session>>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "draw", ()) {
+    let session = session_handle.clone();
+    match engine.call_fn::<()>(scope, ast, "draw", (session,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e) => Ok(()),
         Err(e) => Err(e),

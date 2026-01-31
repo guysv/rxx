@@ -62,7 +62,9 @@ extern crate log;
 use directories as dirs;
 
 use std::alloc::System;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -248,7 +250,10 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
     let mut hovering = false;
     let mut delta;
 
+    let session_handle = Rc::new(RefCell::new(session));
+
     while !win.is_closing() {
+        let mut session = session_handle.borrow_mut();
         match session.animation_delay() {
             Some(delay) if session.is_running() => {
                 // How much time is left until the next animation frame?
@@ -319,14 +324,16 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                     session.transition(State::Paused);
                 }
                 WindowEvent::RedrawRequested => {
+                    drop(session);
                     render_timer.run(|avg| {
                         renderer
-                            .frame(&mut session, &mut script_state, &mut execution, vec![], &avg)
+                            .frame(&session_handle, &mut script_state, &mut execution, vec![], &avg)
                             .unwrap_or_else(|err| {
                                 log::error!("{}", err);
                             });
                     });
                     win.present();
+                    session = session_handle.borrow_mut();
                 }
                 WindowEvent::ScaleFactorChanged(factor) => {
                     renderer.handle_scale_factor_changed(factor);
@@ -392,23 +399,25 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             }
         }
 
+        drop(session);
         render_timer.run(|avg| {
             renderer
-                .frame(&mut session, &mut script_state, &mut execution, effects, &avg)
-                .unwrap_or_else(|err| {
-                    log::error!("{}", err);
-                });
-        });
+                    .frame(&session_handle, &mut script_state, &mut execution, effects, &avg)
+                    .unwrap_or_else(|err| {
+                        log::error!("{}", err);
+                    });
+            });
+        session = session_handle.borrow_mut();
 
         session.cleanup();
         win.present();
 
-        match session.state {
+        match &session.state {
             State::Closing(ExitReason::Normal) => {
                 return Ok(());
             }
             State::Closing(ExitReason::Error(e)) => {
-                return Err(io::Error::new(io::ErrorKind::Other, e));
+                return Err(io::Error::new(io::ErrorKind::Other, e.clone()));
             }
             _ => {}
         }

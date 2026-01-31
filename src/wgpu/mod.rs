@@ -20,10 +20,12 @@ use crate::gfx::{Matrix4, Rect, Repeat, Vector2};
 use bytemuck::{Pod, Zeroable};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::rc::Rc;
 use std::time;
 
 type M44 = [[f32; 4]; 4];
@@ -1082,12 +1084,13 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
     fn frame(
         &mut self,
-        session: &mut Session,
+        session_handle: &Rc<RefCell<Session>>,
         script_state: &mut ScriptState,
         execution: &mut Execution,
         effects: Vec<session::Effect>,
         avg_frametime: &time::Duration,
     ) -> Result<(), RendererError> {
+        let session = session_handle.borrow_mut();
         if session.state != session::State::Running {
             return Ok(());
         }
@@ -1096,10 +1099,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         self.final_batch.clear();
         self.paste_outputs.clear();
 
-        self.handle_effects(effects, session).unwrap();
-
-        self.update_view_animations(session);
-        self.update_view_composites(session);
+        self.handle_effects(effects, &session).unwrap();
+        self.update_view_animations(&session);
+        self.update_view_composites(&session);
 
         // Get surface texture
         let output = self.surface.get_current_texture()?;
@@ -1114,8 +1116,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             });
 
         // Prepare draw context
+        drop(session);
         self.draw_ctx.clear();
-        self.draw_ctx.draw(session, script_state, avg_frametime, execution);
+        self.draw_ctx.draw(session_handle, script_state, avg_frametime, execution);
+        let mut session = session_handle.borrow_mut();
 
         let [screen_w, screen_h] = self.screen_target.size;
         let ortho: M44 = ortho_wgpu(screen_w, screen_h, Origin::TopLeft).into();
@@ -1588,7 +1592,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             if session.mode == session::Mode::Help {
                 let mut help_shape_batch = shape2d::Batch::new();
                 let mut help_text_batch = text_batch(self.font.size);
-                draw::draw_help(session, &mut help_text_batch, &mut help_shape_batch);
+                draw::draw_help(&session, &mut help_text_batch, &mut help_shape_batch);
 
                 // Draw help shape (background)
                 if let Some((buffer, count)) = self.create_shape_vertices(&help_shape_batch.vertices()) {

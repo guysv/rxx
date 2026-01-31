@@ -4,6 +4,8 @@ use crate::platform::{self, LogicalSize};
 use crate::script::ScriptState;
 use crate::session::{self, Effect, Session};
 
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::time;
 
 pub trait Renderer<'a>: std::marker::Sized {
@@ -20,7 +22,7 @@ pub trait Renderer<'a>: std::marker::Sized {
 
     fn frame(
         &mut self,
-        session: &mut Session,
+        session_handle: &Rc<RefCell<Session>>,
         script_state: &mut ScriptState,
         execution: &mut Execution,
         effects: Vec<session::Effect>,
