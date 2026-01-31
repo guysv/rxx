@@ -1121,6 +1121,11 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Create vertex buffers for this frame
         let ui_vertices = self.create_shape_vertices(&self.draw_ctx.ui_batch.vertices());
+        let user_vertices = if session.user_batch_is_empty() {
+            None
+        } else {
+            self.create_shape_vertices(&session.user_batch_vertices())
+        };
         let text_vertices = self.create_sprite_vertices(&self.draw_ctx.text_batch.vertices());
         let tool_vertices = self.create_sprite_vertices(&self.draw_ctx.tool_batch.vertices());
         let checker_vertices = self.create_sprite_vertices(&self.draw_ctx.checker_batch.vertices());
@@ -1479,6 +1484,14 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render UI shapes
             if let Some((buffer, count)) = &ui_vertices {
+                pass.set_pipeline(&self.shape_pipeline);
+                pass.set_bind_group(0, &transform_bind_group, &[]);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..*count, 0..1);
+            }
+
+            // Render user script shapes (above UI).
+            if let Some((buffer, count)) = &user_vertices {
                 pass.set_pipeline(&self.shape_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));

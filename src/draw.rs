@@ -4,7 +4,7 @@ use crate::execution::Execution;
 use crate::font::{TextAlign, TextBatch};
 use crate::platform;
 use crate::session;
-use crate::session::{Mode, Session, Tool, VisualState};
+use crate::session::{MessageType, Mode, Session, Tool, VisualState};
 use crate::sprite;
 use crate::view::{View, ViewCoords};
 
@@ -23,6 +23,7 @@ pub const VIEW_LAYER: ZDepth = ZDepth(-0.7);
 pub const BRUSH_LAYER: ZDepth = ZDepth(-0.6);
 pub const GRID_LAYER: ZDepth = ZDepth(-0.5);
 pub const UI_LAYER: ZDepth = ZDepth(-0.4);
+pub const USER_LAYER: ZDepth = ZDepth(-0.35);
 pub const TEXT_LAYER: ZDepth = ZDepth(-0.3);
 pub const PALETTE_LAYER: ZDepth = ZDepth(-0.2);
 pub const HELP_LAYER: ZDepth = ZDepth(-0.1);
@@ -122,7 +123,7 @@ pub struct Context {
 impl Context {
     pub fn draw(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         avg_frametime: &time::Duration,
         execution: &Execution,
     ) {
@@ -134,6 +135,11 @@ impl Context {
         self::draw_palette(session, &mut self.ui_batch);
         self::draw_cursor(session, &mut self.cursor_sprite, &mut self.tool_batch);
         self::draw_checker(session, &mut self.checker_batch);
+
+        // User script draw event (populates session's user batch directly)
+        if let Err(e) = session.call_draw_event() {
+            session.message(format!("Script draw error: {}", e), MessageType::Error);
+        }
     }
 
     pub fn clear(&mut self) {

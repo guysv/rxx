@@ -664,6 +664,8 @@ pub struct Session {
     script_scope: Option<rhai::Scope<'static>>,
     /// Compiled script AST.
     script_ast: Option<Rc<RefCell<rhai::AST>>>,
+    /// User batch for script's draw() event, shared with Rhai closures.
+    script_user_batch: script::UserBatch,
 }
 
 impl Session {
@@ -760,6 +762,7 @@ impl Session {
             script_engine: None,
             script_scope: None,
             script_ast: None,
+            script_user_batch: Rc::new(RefCell::new(crate::gfx::shape2d::Batch::new())),
         }
     }
 
@@ -807,7 +810,8 @@ impl Session {
             );
             return;
         }
-        let engine = rhai::Engine::new();
+        let mut engine = rhai::Engine::new();
+        script::register_draw_primitives(&mut engine, self.script_user_batch.clone());
         let ast = match script::compile_file(&engine, &path) {
             Ok(a) => a,
             Err(e) => {
@@ -850,6 +854,36 @@ impl Session {
     /// Reload the main Rhai script: recompile and call init() again.
     pub fn reload_script(&mut self) {
         self.load_script();
+    }
+
+    /// Call the script's `draw()` event handler.
+    /// The script's draw primitives (e.g. `draw_line`) mutate the user batch directly.
+    pub fn call_draw_event(&mut self) -> Result<(), Box<rhai::EvalAltResult>> {
+        // Clear previous frame's shapes
+        self.script_user_batch.borrow_mut().clear();
+
+        // If no script is loaded, nothing to do
+        let (engine, scope, ast) = match (
+            self.script_engine.as_ref(),
+            self.script_scope.as_mut(),
+            self.script_ast.as_ref(),
+        ) {
+            (Some(e), Some(s), Some(a)) => (e, s, a),
+            _ => return Ok(()),
+        };
+
+        // Call the draw() handler
+        script::call_draw(engine, scope, &ast.borrow())
+    }
+
+    /// Get the user batch vertices for rendering.
+    pub fn user_batch_vertices(&self) -> Vec<crate::gfx::shape2d::Vertex> {
+        self.script_user_batch.borrow().vertices()
+    }
+
+    /// Check if the user batch is empty.
+    pub fn user_batch_is_empty(&self) -> bool {
+        self.script_user_batch.borrow().is_empty()
     }
 
     // Reset to factory defaults.
