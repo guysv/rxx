@@ -51,6 +51,7 @@ use event::Event;
 use execution::{DigestMode, Execution, ExecutionMode};
 use platform::{WindowEvent, WindowHint};
 use renderer::Renderer;
+use script::ScriptState;
 use session::*;
 use timer::FrameTimer;
 use view::FileStatus;
@@ -138,7 +139,15 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             Session::DEFAULT_VIEW_W,
             Session::DEFAULT_VIEW_H,
         )
-        .init(options.source.clone(), options.script.clone())?;
+        .init(options.source.clone())?;
+
+    let mut script_state = ScriptState::new();
+    if let Some(path) = options.script.clone() {
+        script_state.set_path(path);
+        if let Err(e) = script_state.load_script() {
+            session.message(e, MessageType::Error);
+        }
+    }
 
     if options.debug {
         session
@@ -172,10 +181,10 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
     let wait_events = execution.is_normal() || execution.is_recording();
 
     let script_reload_pending: Option<Arc<AtomicBool>> =
-        session.script_path().map(|_| Arc::new(AtomicBool::new(false)));
+        script_state.script_path().map(|_| Arc::new(AtomicBool::new(false)));
 
     if let (Some(script_path), Some(pending)) = (
-        session.script_path().cloned(),
+        script_state.script_path().cloned(),
         script_reload_pending.as_ref(),
     ) {
         let pending_clone = Arc::clone(pending);
@@ -256,8 +265,9 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         }
 
         if let Some(ref flag) = script_reload_pending {
-            if flag.swap(false, Ordering::Relaxed) && session.script_file_modified_since_load() {
-                session.reload_script();
+            if flag.swap(false, Ordering::Relaxed) && script_state.script_file_modified_since_load()
+            {
+                script_state.reload_script();
             }
         }
 
@@ -311,7 +321,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                 WindowEvent::RedrawRequested => {
                     render_timer.run(|avg| {
                         renderer
-                            .frame(&mut session, &mut execution, vec![], &avg)
+                            .frame(&mut session, &mut script_state, &mut execution, vec![], &avg)
                             .unwrap_or_else(|err| {
                                 log::error!("{}", err);
                             });
@@ -374,9 +384,17 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         let effects =
             update_timer.run(|avg| session.update(&mut session_events, &mut execution, delta, avg));
 
+        if let Some(path) = session.take_pending_script_path() {
+            script_state.set_path(path);
+            match script_state.load_script() {
+                Ok(()) => session.message("Script loaded".to_string(), MessageType::Info),
+                Err(e) => session.message(e, MessageType::Error),
+            }
+        }
+
         render_timer.run(|avg| {
             renderer
-                .frame(&mut session, &mut execution, effects, &avg)
+                .frame(&mut session, &mut script_state, &mut execution, effects, &avg)
                 .unwrap_or_else(|err| {
                     log::error!("{}", err);
                 });

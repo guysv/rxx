@@ -12,7 +12,6 @@ use crate::hashmap;
 use crate::palette::*;
 use crate::platform::{self, InputState, Key, KeyboardInput, LogicalSize, ModifiersState};
 use crate::util;
-use crate::script;
 use crate::view::path;
 use crate::view::resource::ViewResource;
 use crate::view::{
@@ -37,10 +36,8 @@ use std::fs::File;
 use std::io;
 use std::io::Write;
 
-use std::cell::RefCell;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::time;
 
 /// Settings help string.
@@ -654,18 +651,8 @@ pub struct Session {
     /// an expensive process is kicked off.
     queue: Vec<InternalCommand>,
 
-    /// Path to the main Rhai script (event-handler style).
-    script_path: Option<PathBuf>,
-    /// Mtime of the script file after last successful load (for hot-reload dedup).
-    script_mtime: Option<std::time::SystemTime>,
-    /// Rhai engine for the main script.
-    script_engine: Option<rhai::Engine>,
-    /// Custom scope so variables defined in init() persist.
-    script_scope: Option<rhai::Scope<'static>>,
-    /// Compiled script AST.
-    script_ast: Option<Rc<RefCell<rhai::AST>>>,
-    /// User batch for script's draw() event, shared with Rhai closures.
-    script_user_batch: script::UserBatch,
+    /// When set by :script command, lib.rs applies it to ScriptState and clears this.
+    pending_script_path: Option<PathBuf>,
 }
 
 impl Session {
@@ -757,17 +744,12 @@ impl Session {
             avg_time: time::Duration::from_secs(0),
             frame_number: 0,
             queue: Vec::new(),
-            script_path: None,
-            script_mtime: None,
-            script_engine: None,
-            script_scope: None,
-            script_ast: None,
-            script_user_batch: Rc::new(RefCell::new(crate::gfx::shape2d::Batch::new())),
+            pending_script_path: None,
         }
     }
 
     /// Initialize a session.
-    pub fn init(mut self, source: Option<PathBuf>, script: Option<PathBuf>) -> std::io::Result<Self> {
+    pub fn init(mut self, source: Option<PathBuf>) -> std::io::Result<Self> {
         self.transition(State::Running);
         self.reset()?;
 
@@ -789,101 +771,13 @@ impl Session {
         self.cmdline.history.load()?;
         self.message(format!("rx v{}", crate::VERSION), MessageType::Debug);
 
-        if let Some(path) = script {
-            self.script_path = Some(path);
-            self.load_script();
-        }
-
         Ok(self)
     }
 
-    /// Load or reload the main Rhai script: compile, create scope, call init().
-    fn load_script(&mut self) {
-        let path = match &self.script_path {
-            Some(p) => p.clone(),
-            None => return,
-        };
-        if !path.exists() {
-            self.message(
-                format!("Script not found: {}", path.display()),
-                MessageType::Error,
-            );
-            return;
-        }
-        let mut engine = rhai::Engine::new();
-        script::register_draw_primitives(&mut engine, self.script_user_batch.clone());
-        let ast = match script::compile_file(&engine, &path) {
-            Ok(a) => a,
-            Err(e) => {
-                self.message(format!("Script compile error: {}", e), MessageType::Error);
-                return;
-            }
-        };
-        let mut scope = rhai::Scope::new();
-        if let Err(e) = script::call_init(&engine, &mut scope, &ast) {
-            self.message(format!("Script init error: {}", e), MessageType::Error);
-            return;
-        }
-        self.script_engine = Some(engine);
-        self.script_scope = Some(scope);
-        self.script_ast = Some(Rc::new(RefCell::new(ast)));
-        self.script_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-    }
-
-    /// True if the script file on disk is newer than the last load (or we never stored mtime).
-    pub fn script_file_modified_since_load(&self) -> bool {
-        let path = match &self.script_path {
-            Some(p) => p,
-            None => return false,
-        };
-        let current = match std::fs::metadata(path).ok().and_then(|m| m.modified().ok()) {
-            Some(t) => t,
-            None => return false,
-        };
-        match self.script_mtime {
-            Some(last) => current > last,
-            None => true,
-        }
-    }
-
-    /// Path to the main Rhai script, if one is loaded.
-    pub fn script_path(&self) -> Option<&PathBuf> {
-        self.script_path.as_ref()
-    }
-
-    /// Reload the main Rhai script: recompile and call init() again.
-    pub fn reload_script(&mut self) {
-        self.load_script();
-    }
-
-    /// Call the script's `draw()` event handler.
-    /// The script's draw primitives (e.g. `draw_line`) mutate the user batch directly.
-    pub fn call_draw_event(&mut self) -> Result<(), Box<rhai::EvalAltResult>> {
-        // Clear previous frame's shapes
-        self.script_user_batch.borrow_mut().clear();
-
-        // If no script is loaded, nothing to do
-        let (engine, scope, ast) = match (
-            self.script_engine.as_ref(),
-            self.script_scope.as_mut(),
-            self.script_ast.as_ref(),
-        ) {
-            (Some(e), Some(s), Some(a)) => (e, s, a),
-            _ => return Ok(()),
-        };
-
-        // Call the draw() handler
-        script::call_draw(engine, scope, &ast.borrow())
-    }
-
-    /// Get the user batch vertices for rendering.
-    pub fn user_batch_vertices(&self) -> Vec<crate::gfx::shape2d::Vertex> {
-        self.script_user_batch.borrow().vertices()
-    }
-
-    /// Check if the user batch is empty.
-    pub fn user_batch_is_empty(&self) -> bool {
-        self.script_user_batch.borrow().is_empty()
+    /// Take the pending script path set by :script command, if any.
+    /// Lib applies it to ScriptState and shows feedback.
+    pub fn take_pending_script_path(&mut self) -> Option<PathBuf> {
+        self.pending_script_path.take()
     }
 
     // Reset to factory defaults.
@@ -2826,11 +2720,7 @@ impl Session {
                 );
             }
             Command::SetScript(path) => {
-                self.script_path = Some(PathBuf::from(path));
-                self.load_script();
-                if self.script_ast.is_some() {
-                    self.message("Script loaded".to_string(), MessageType::Info);
-                }
+                self.pending_script_path = Some(PathBuf::from(path));
             }
             Command::Edit(ref paths) => {
                 if paths.is_empty() {

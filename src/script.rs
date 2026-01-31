@@ -12,11 +12,128 @@ use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
 use rhai::{CallFnOptions, Engine, Scope, AST};
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::SystemTime;
 
 /// Type alias for the user batch shared between script and session.
 pub type UserBatch = Rc<RefCell<shape2d::Batch>>;
+
+/// State for the main Rhai script (event-handler style).
+/// Built in lib.rs and passed to renderer.frame() and draw_ctx.draw().
+pub struct ScriptState {
+    /// Path to the main Rhai script.
+    pub script_path: Option<PathBuf>,
+    /// Mtime of the script file after last successful load (for hot-reload dedup).
+    pub script_mtime: Option<SystemTime>,
+    /// Rhai engine for the main script.
+    pub script_engine: Option<Engine>,
+    /// Custom scope so variables defined in init() persist.
+    pub script_scope: Option<Scope<'static>>,
+    /// Compiled script AST.
+    pub script_ast: Option<Rc<RefCell<AST>>>,
+    /// User batch for script's draw() event, shared with Rhai closures.
+    pub script_user_batch: UserBatch,
+}
+
+impl ScriptState {
+    pub fn new() -> Self {
+        Self {
+            script_path: None,
+            script_mtime: None,
+            script_engine: None,
+            script_scope: None,
+            script_ast: None,
+            script_user_batch: Rc::new(RefCell::new(shape2d::Batch::new())),
+        }
+    }
+
+    pub fn set_path(&mut self, path: PathBuf) {
+        self.script_path = Some(path);
+    }
+
+    /// Load or reload the main Rhai script: compile, create scope, call init().
+    /// Returns an error message for the caller to display (e.g. via session.message).
+    pub fn load_script(&mut self) -> Result<(), String> {
+        let path = match &self.script_path {
+            Some(p) => p.clone(),
+            None => return Ok(()),
+        };
+        if !path.exists() {
+            return Err(format!("Script not found: {}", path.display()));
+        }
+        let mut engine = Engine::new();
+        register_draw_primitives(&mut engine, self.script_user_batch.clone());
+        let ast = compile_file(&engine, &path)
+            .map_err(|e| format!("Script compile error: {}", e))?;
+        let mut scope = Scope::new();
+        call_init(&engine, &mut scope, &ast)
+            .map_err(|e| format!("Script init error: {}", e))?;
+        self.script_engine = Some(engine);
+        self.script_scope = Some(scope);
+        self.script_ast = Some(Rc::new(RefCell::new(ast)));
+        self.script_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
+        Ok(())
+    }
+
+    /// True if the script file on disk is newer than the last load (or we never stored mtime).
+    pub fn script_file_modified_since_load(&self) -> bool {
+        let path = match &self.script_path {
+            Some(p) => p,
+            None => return false,
+        };
+        let current = match std::fs::metadata(path).ok().and_then(|m| m.modified().ok()) {
+            Some(t) => t,
+            None => return false,
+        };
+        match self.script_mtime {
+            Some(last) => current > last,
+            None => true,
+        }
+    }
+
+    /// Path to the main Rhai script, if one is loaded.
+    pub fn script_path(&self) -> Option<&PathBuf> {
+        self.script_path.as_ref()
+    }
+
+    /// Reload the main Rhai script: recompile and call init() again.
+    /// Errors are ignored (e.g. for hot-reload); use load_script() for explicit feedback.
+    pub fn reload_script(&mut self) {
+        let _ = self.load_script();
+    }
+
+    /// Call the script's `draw()` event handler.
+    /// The script's draw primitives (e.g. `draw_line`) mutate the user batch directly.
+    pub fn call_draw_event(&mut self) -> Result<(), Box<rhai::EvalAltResult>> {
+        self.script_user_batch.borrow_mut().clear();
+        let (engine, scope, ast) = match (
+            self.script_engine.as_ref(),
+            self.script_scope.as_mut(),
+            self.script_ast.as_ref(),
+        ) {
+            (Some(e), Some(s), Some(a)) => (e, s, a),
+            _ => return Ok(()),
+        };
+        call_draw(engine, scope, &ast.borrow())
+    }
+
+    /// Get the user batch vertices for rendering.
+    pub fn user_batch_vertices(&self) -> Vec<crate::gfx::shape2d::Vertex> {
+        self.script_user_batch.borrow().vertices()
+    }
+
+    /// Check if the user batch is empty.
+    pub fn user_batch_is_empty(&self) -> bool {
+        self.script_user_batch.borrow().is_empty()
+    }
+}
+
+impl Default for ScriptState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Compile a script file into an AST.
 pub fn compile_file(engine: &Engine, path: &Path) -> Result<AST, Box<rhai::EvalAltResult>> {

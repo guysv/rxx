@@ -3,6 +3,7 @@ use crate::color;
 use crate::execution::Execution;
 use crate::font::{TextAlign, TextBatch};
 use crate::platform;
+use crate::script::ScriptState;
 use crate::session;
 use crate::session::{MessageType, Mode, Session, Tool, VisualState};
 use crate::sprite;
@@ -124,6 +125,7 @@ impl Context {
     pub fn draw(
         &mut self,
         session: &mut Session,
+        script_state: &mut ScriptState,
         avg_frametime: &time::Duration,
         execution: &Execution,
     ) {
@@ -136,8 +138,8 @@ impl Context {
         self::draw_cursor(session, &mut self.cursor_sprite, &mut self.tool_batch);
         self::draw_checker(session, &mut self.checker_batch);
 
-        // User script draw event (populates session's user batch directly)
-        if let Err(e) = session.call_draw_event() {
+        // User script draw event (populates script_state's user batch directly)
+        if let Err(e) = script_state.call_draw_event() {
             session.message(format!("Script draw error: {}", e), MessageType::Error);
         }
     }

@@ -6,6 +6,7 @@ use crate::execution::Execution;
 use crate::font::TextBatch;
 use crate::platform::{self, LogicalSize};
 use crate::renderer;
+use crate::script::ScriptState;
 use crate::session::{self, Blending, Effect, Session};
 use crate::sprite;
 use crate::util;
@@ -1082,6 +1083,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
     fn frame(
         &mut self,
         session: &mut Session,
+        script_state: &mut ScriptState,
         execution: &mut Execution,
         effects: Vec<session::Effect>,
         avg_frametime: &time::Duration,
@@ -1113,7 +1115,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Prepare draw context
         self.draw_ctx.clear();
-        self.draw_ctx.draw(session, avg_frametime, execution);
+        self.draw_ctx.draw(session, script_state, avg_frametime, execution);
 
         let [screen_w, screen_h] = self.screen_target.size;
         let ortho: M44 = ortho_wgpu(screen_w, screen_h, Origin::TopLeft).into();
@@ -1121,10 +1123,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Create vertex buffers for this frame
         let ui_vertices = self.create_shape_vertices(&self.draw_ctx.ui_batch.vertices());
-        let user_vertices = if session.user_batch_is_empty() {
+        let user_vertices = if script_state.user_batch_is_empty() {
             None
         } else {
-            self.create_shape_vertices(&session.user_batch_vertices())
+            self.create_shape_vertices(&script_state.user_batch_vertices())
         };
         let text_vertices = self.create_sprite_vertices(&self.draw_ctx.text_batch.vertices());
         let tool_vertices = self.create_sprite_vertices(&self.draw_ctx.tool_batch.vertices());
