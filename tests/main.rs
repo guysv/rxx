@@ -147,6 +147,7 @@ fn run(name: &str) -> io::Result<()> {
     let glyphs = glyphs.as_slice();
 
     let options = rx::Options {
+        script: None,
         resizable: false,
         headless: true,
         source: Some(path.join(name).with_extension("rx")),

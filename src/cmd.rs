@@ -58,6 +58,7 @@ pub enum Command {
     ForceQuit,
     ForceQuitAll,
     Source(Option<String>),
+    SetScript(String),
 
     // Frames
     FrameAdd,
@@ -198,6 +199,7 @@ impl fmt::Display for Command {
             Self::Slice(Some(n)) => write!(f, "Slice view into {} frame(s)", n),
             Self::Slice(None) => write!(f, "Reset view slices"),
             Self::Source(_) => write!(f, "Source an rx script (eg. a palette)"),
+            Self::SetScript(_) => write!(f, "Set path to Rhai script"),
             Self::SwapColors => write!(f, "Swap foreground & background colors"),
             Self::Toggle(s) => write!(f, "Toggle {setting} on/off", setting = s),
             Self::Undo => write!(f, "Undo view edit"),
@@ -274,6 +276,7 @@ impl From<Command> for String {
             Command::Slice(Some(n)) => format!("slice {}", n),
             Command::Slice(None) => format!("slice"),
             Command::Source(Some(path)) => format!("source {}", path),
+            Command::SetScript(path) => format!("script {}", path),
             Command::SwapColors => format!("swap"),
             Command::Toggle(s) => format!("toggle {}", s),
             Command::Undo => format!("undo"),
@@ -788,6 +791,9 @@ impl Default for Commands {
                 "Source an rx script (eg. palette or config)",
                 |p| p.then(optional(path())).map(|(_, p)| Command::Source(p)),
             )
+            .command("script", "Set path to Rhai script", |p| {
+                p.then(path()).map(|(_, path)| Command::SetScript(path))
+            })
             .command("cd", "Change current directory", |p| {
                 p.then(optional(path())).map(|(_, p)| Command::ChangeDir(p))
             })
@@ -1084,6 +1090,9 @@ impl autocomplete::Completer for CommandCompleter {
                 ),
                 Command::Source(path) | Command::Write(path) => {
                     self.complete_path(path.as_ref(), input, Default::default())
+                }
+                Command::SetScript(path) => {
+                    self.complete_path(Some(&path), input, Default::default())
                 }
                 Command::Edit(paths) | Command::EditFrames(paths) => {
                     self.complete_path(paths.last(), input, Default::default())

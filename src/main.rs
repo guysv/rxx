@@ -20,6 +20,7 @@ OPTIONS
 
     -v                   Verbose mode
     -u <script>          Use the commands in <script> for initialization
+    -s, --script <path>  Path to Rhai script (event-handler style)
 
     --record <dir>       Record user input to a directory
     --replay <dir>       Replay user input from a directory
@@ -58,6 +59,10 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
     let verify_digests = args.contains("--verify-digests");
     let headless = args.contains("--headless");
     let source = args.opt_value_from_str::<_, PathBuf>("-u")?;
+    let script = match args.opt_value_from_str::<_, PathBuf>("-s")? {
+        Some(p) => Some(p),
+        None => args.opt_value_from_str::<_, PathBuf>("--script")?,
+    };
     let replay = args.opt_value_from_str::<_, PathBuf>("--replay")?;
     let record = args.opt_value_from_str::<_, PathBuf>("--record")?;
     let resizable = width.is_none() && height.is_none() && replay.is_none() && record.is_none();
@@ -117,6 +122,7 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
         headless,
         resizable,
         source,
+        script,
         exec,
         glyphs,
         debug,

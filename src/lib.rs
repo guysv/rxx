@@ -24,6 +24,7 @@ mod alloc;
 mod autocomplete;
 mod brush;
 mod cmd;
+mod script;
 mod color;
 mod draw;
 mod event;
@@ -76,6 +77,7 @@ pub struct Options<'a> {
     pub resizable: bool,
     pub headless: bool,
     pub source: Option<PathBuf>,
+    pub script: Option<PathBuf>,
     pub exec: ExecutionMode,
     pub glyphs: &'a [u8],
     pub debug: bool,
@@ -89,6 +91,7 @@ impl<'a> Default for Options<'a> {
             headless: false,
             resizable: true,
             source: None,
+            script: None,
             exec: ExecutionMode::Normal,
             glyphs: data::GLYPHS,
             debug: false,
@@ -132,7 +135,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             Session::DEFAULT_VIEW_W,
             Session::DEFAULT_VIEW_H,
         )
-        .init(options.source.clone())?;
+        .init(options.source.clone(), options.script.clone())?;
 
     if options.debug {
         session
