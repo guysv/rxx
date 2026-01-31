@@ -260,6 +260,7 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_get("height", |s: &mut Rc<RefCell<Session>>| s.borrow().height as f64)
         .register_get("offset_x", |s: &mut Rc<RefCell<Session>>| s.borrow().offset.x as f64)
         .register_get("offset_y", |s: &mut Rc<RefCell<Session>>| s.borrow().offset.y as f64)
+        .register_get("active_view_id", |s: &mut Rc<RefCell<Session>>| s.borrow().views.active_id.raw() as i64)
         .register_type_with_name::<ScriptView>("View")
         .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
         .register_fn("views", |s: &mut Rc<RefCell<Session>>| {
