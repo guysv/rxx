@@ -1124,110 +1124,113 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         });
 
         // Get active view for brush stroke rendering
-        let active_view = session.views.active();
+        let v = session
+            .views
+            .active()
+            .expect("there must always be an active view");
+        let view_data = self
+            .view_data
+            .get(&v.id)
+            .expect("view must have associated view data");
 
         // Render brush strokes to view staging buffer
-        if let Some(v) = active_view {
-            if let Some(view_data) = self.view_data.get(&v.id) {
-                let view_ortho: M44 = ortho_wgpu(v.width(), v.fh, Origin::TopLeft).into();
+        let view_ortho: M44 = ortho_wgpu(v.width(), v.fh, Origin::TopLeft).into();
 
-                // Create staging vertex buffer from staging_batch
-                let staging_vertices = self.create_shape_vertices(&self.staging_batch.vertices());
+        // Create staging vertex buffer from staging_batch
+        let staging_vertices = self.create_shape_vertices(&self.staging_batch.vertices());
 
-                if let Some((buffer, count)) = staging_vertices {
-                    // Create uniform buffer for view ortho
-                    let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("staging_uniform_buffer"),
-                        size: std::mem::size_of::<TransformUniforms>() as u64,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: true,
-                    });
-                    let staging_uniforms = TransformUniforms { ortho: view_ortho, transform: identity };
-                    view_uniform_buffer
-                        .slice(..)
-                        .get_mapped_range_mut()
-                        .copy_from_slice(bytemuck::bytes_of(&staging_uniforms));
-                    view_uniform_buffer.unmap();
+        if let Some((buffer, count)) = staging_vertices {
+            // Create uniform buffer for view ortho
+            let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("staging_uniform_buffer"),
+                size: std::mem::size_of::<TransformUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: true,
+            });
+            let staging_uniforms = TransformUniforms { ortho: view_ortho, transform: identity };
+            view_uniform_buffer
+                .slice(..)
+                .get_mapped_range_mut()
+                .copy_from_slice(bytemuck::bytes_of(&staging_uniforms));
+            view_uniform_buffer.unmap();
 
-                    let staging_transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("staging_transform_bind_group"),
-                        layout: &self.transform_bind_group_layout,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: view_uniform_buffer.as_entire_binding(),
-                        }],
-                    });
+            let staging_transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("staging_transform_bind_group"),
+                layout: &self.transform_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: view_uniform_buffer.as_entire_binding(),
+                }],
+            });
 
-                    // Render to staging target
-                    let mut staging_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("staging_brush_pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view_data.staging_target.view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                    });
+            // Render to staging target
+            let mut staging_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("staging_brush_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view_data.staging_target.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
-                    staging_pass.set_pipeline(&self.shape_pipeline);
-                    staging_pass.set_bind_group(0, &staging_transform_bind_group, &[]);
-                    staging_pass.set_vertex_buffer(0, buffer.slice(..));
-                    staging_pass.draw(0..count, 0..1);
-                }
+            staging_pass.set_pipeline(&self.shape_pipeline);
+            staging_pass.set_bind_group(0, &staging_transform_bind_group, &[]);
+            staging_pass.set_vertex_buffer(0, buffer.slice(..));
+            staging_pass.draw(0..count, 0..1);
+        }
 
-                // Render final brush strokes to layer target
-                let final_vertices = self.create_shape_vertices(&self.final_batch.vertices());
+        // Render final brush strokes to layer target
+        let final_vertices = self.create_shape_vertices(&self.final_batch.vertices());
 
-                if let Some((buffer, count)) = final_vertices {
-                    let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("final_uniform_buffer"),
-                        size: std::mem::size_of::<TransformUniforms>() as u64,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: true,
-                    });
-                    let final_uniforms = TransformUniforms { ortho: view_ortho, transform: identity };
-                    view_uniform_buffer
-                        .slice(..)
-                        .get_mapped_range_mut()
-                        .copy_from_slice(bytemuck::bytes_of(&final_uniforms));
-                    view_uniform_buffer.unmap();
+        if let Some((buffer, count)) = final_vertices {
+            let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("final_uniform_buffer"),
+                size: std::mem::size_of::<TransformUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: true,
+            });
+            let final_uniforms = TransformUniforms { ortho: view_ortho, transform: identity };
+            view_uniform_buffer
+                .slice(..)
+                .get_mapped_range_mut()
+                .copy_from_slice(bytemuck::bytes_of(&final_uniforms));
+            view_uniform_buffer.unmap();
 
-                    let final_transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("final_transform_bind_group"),
-                        layout: &self.transform_bind_group_layout,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: view_uniform_buffer.as_entire_binding(),
-                        }],
-                    });
+            let final_transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("final_transform_bind_group"),
+                layout: &self.transform_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: view_uniform_buffer.as_entire_binding(),
+                }],
+            });
 
-                    // Render to layer target (don't clear - preserve existing pixels)
-                    let mut final_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("final_brush_pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view_data.layer.target.view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                    });
+            // Render to layer target (don't clear - preserve existing pixels)
+            let mut final_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("final_brush_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view_data.layer.target.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
-                    final_pass.set_pipeline(&self.shape_pipeline);
-                    final_pass.set_bind_group(0, &final_transform_bind_group, &[]);
-                    final_pass.set_vertex_buffer(0, buffer.slice(..));
-                    final_pass.draw(0..count, 0..1);
-                }
-            }
+            final_pass.set_pipeline(&self.shape_pipeline);
+            final_pass.set_bind_group(0, &final_transform_bind_group, &[]);
+            final_pass.set_vertex_buffer(0, buffer.slice(..));
+            final_pass.draw(0..count, 0..1);
         }
 
         // Render to screen framebuffer
@@ -1491,16 +1494,18 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Create snapshot for dirty views: record_view_resized when resized, else record_view_painted
         if let Some((view_id, was_resized)) = should_record {
-            if let Some(view_data) = self.view_data.get(&view_id) {
-                let [w, h] = view_data.layer.target.size;
+            let view_data = self
+                .view_data
+                .get(&view_id)
+                .expect("view must have associated view data");
+            let [w, h] = view_data.layer.target.size;
                 let pixels = self.read_texture_pixels(&view_data.layer.target.texture, w, h);
 
-                if let Some(v) = session.views.get_mut(view_id) {
-                    if was_resized {
-                        v.resource.record_view_resized(pixels, v.extent());
-                    } else {
-                        v.resource.record_view_painted(pixels);
-                    }
+            if let Some(v) = session.views.get_mut(view_id) {
+                if was_resized {
+                    v.resource.record_view_resized(pixels, v.extent());
+                } else {
+                    v.resource.record_view_painted(pixels);
                 }
             }
         }
@@ -1606,107 +1611,116 @@ impl Renderer {
                     self.resize_view(v, *w, *h)?;
                 }
                 ViewOp::Clear(color) => {
-                    if let Some(view_data) = self.view_data.get(&v.id) {
-                        let mut encoder = self
-                            .device
-                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("clear_encoder"),
-                            });
-                        {
-                            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("clear_view"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &view_data.layer.target.view,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                                            r: color.r as f64 / 255.0,
-                                            g: color.g as f64 / 255.0,
-                                            b: color.b as f64 / 255.0,
-                                            a: color.a as f64 / 255.0,
-                                        }),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                            });
-                        }
-                        self.queue.submit(std::iter::once(encoder.finish()));
+                    let view_data = self
+                        .view_data
+                        .get(&v.id)
+                        .expect("views must have associated view data");
+                    let mut encoder = self
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("clear_encoder"),
+                        });
+                    {
+                        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("clear_view"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view_data.layer.target.view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                                        r: color.r as f64 / 255.0,
+                                        g: color.g as f64 / 255.0,
+                                        b: color.b as f64 / 255.0,
+                                        a: color.a as f64 / 255.0,
+                                    }),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
                     }
+                    self.queue.submit(std::iter::once(encoder.finish()));
                 }
                 ViewOp::Blit(src, dst) => {
                     // TODO: Implement blit
                 }
                 ViewOp::Yank(src) => {
                     // Read pixels from layer texture at src rect and store in paste buffer
-                    if let Some(view_data) = self.view_data.get(&v.id) {
-                        let src_w = src.width() as u32;
-                        let src_h = src.height() as u32;
-                        
-                        // Read the entire layer texture
-                        let [layer_w, layer_h] = view_data.layer.target.size;
-                        let all_pixels = self.read_texture_pixels(&view_data.layer.target.texture, layer_w, layer_h);
-                        
-                        // Extract the source rectangle (accounting for Y-flip since textures are stored top-down)
-                        let mut paste_pixels = Vec::with_capacity((src_w * src_h) as usize);
-                        for y in 0..src_h {
-                            // Convert from bottom-left origin to top-left origin
-                            let tex_y = layer_h - 1 - (src.y1 as u32 + (src_h - 1 - y));
-                            for x in 0..src_w {
-                                let tex_x = src.x1 as u32 + x;
-                                let idx = (tex_y * layer_w + tex_x) as usize;
-                                if idx < all_pixels.len() {
-                                    paste_pixels.push(all_pixels[idx]);
-                                } else {
-                                    paste_pixels.push(Rgba8::TRANSPARENT);
-                                }
+                    let view_data = self
+                        .view_data
+                        .get(&v.id)
+                        .expect("views must have associated view data");
+                    let src_w = src.width() as u32;
+                    let src_h = src.height() as u32;
+
+                    // Read the entire layer texture
+                    let [layer_w, layer_h] = view_data.layer.target.size;
+                    let all_pixels = self.read_texture_pixels(&view_data.layer.target.texture, layer_w, layer_h);
+
+                    // Extract the source rectangle (accounting for Y-flip since textures are stored top-down)
+                    let mut paste_pixels = Vec::with_capacity((src_w * src_h) as usize);
+                    for y in 0..src_h {
+                        // Convert from bottom-left origin to top-left origin
+                        let tex_y = layer_h - 1 - (src.y1 as u32 + (src_h - 1 - y));
+                        for x in 0..src_w {
+                            let tex_x = src.x1 as u32 + x;
+                            let idx = (tex_y * layer_w + tex_x) as usize;
+                            if idx < all_pixels.len() {
+                                paste_pixels.push(all_pixels[idx]);
+                            } else {
+                                paste_pixels.push(Rgba8::TRANSPARENT);
                             }
                         }
-                        
-                        self.paste_pixels = paste_pixels;
-                        self.paste_size = (src_w, src_h);
                     }
+
+                    self.paste_pixels = paste_pixels;
+                    self.paste_size = (src_w, src_h);
                 }
                 ViewOp::Flip(src, dir) => {
                     // TODO: Implement flip
                 }
                 ViewOp::Paste(dst) => {
                     // Paste from paste buffer to layer texture at dst rect
-                    if let Some(view_data) = self.view_data.get(&v.id) {
-                        let (paste_w, paste_h) = self.paste_size;
-                        if paste_w > 0 && paste_h > 0 && !self.paste_pixels.is_empty() {
-                            // Upload paste pixels to the destination location
-                            // Convert destination coordinates (Y is from bottom-left)
-                            let [layer_w, layer_h] = view_data.layer.target.size;
-                            let dst_x = dst.x1 as u32;
-                            let dst_y = layer_h.saturating_sub(dst.y2 as u32);
-                            
-                            // Convert pixels to bytes
-                            let bytes: Vec<u8> = self.paste_pixels.iter()
-                                .flat_map(|p| [p.r, p.g, p.b, p.a])
-                                .collect();
-                            
-                            view_data.layer.upload_part(
-                                &self.queue,
-                                [dst_x, dst_y],
-                                [paste_w, paste_h],
-                                &bytes,
-                            );
-                        }
+                    let view_data = self
+                        .view_data
+                        .get_mut(&v.id)
+                        .expect("views must have associated view data");
+                    let (paste_w, paste_h) = self.paste_size;
+                    if paste_w > 0 && paste_h > 0 && !self.paste_pixels.is_empty() {
+                        // Upload paste pixels to the destination location
+                        // Convert destination coordinates (Y is from bottom-left)
+                        let [layer_w, layer_h] = view_data.layer.target.size;
+                        let dst_x = dst.x1 as u32;
+                        let dst_y = layer_h.saturating_sub(dst.y2 as u32);
+
+                        // Convert pixels to bytes
+                        let bytes: Vec<u8> = self.paste_pixels
+                            .iter()
+                            .flat_map(|p| [p.r, p.g, p.b, p.a])
+                            .collect();
+
+                        view_data.layer.upload_part(
+                            &self.queue,
+                            [dst_x, dst_y],
+                            [paste_w, paste_h],
+                            &bytes,
+                        );
                     }
                 }
                 ViewOp::SetPixel(rgba, x, y) => {
-                    if let Some(view_data) = self.view_data.get(&v.id) {
-                        let texels = &[rgba.r, rgba.g, rgba.b, rgba.a];
-                        view_data.layer.upload_part(
-                            &self.queue,
-                            [*x as u32, *y as u32],
-                            [1, 1],
-                            texels,
-                        );
-                    }
+                    let view_data = self
+                        .view_data
+                        .get_mut(&v.id)
+                        .expect("views must have associated view data");
+                    let texels = &[rgba.r, rgba.g, rgba.b, rgba.a];
+                    view_data.layer.upload_part(
+                        &self.queue,
+                        [*x as u32, *y as u32],
+                        [1, 1],
+                        texels,
+                    );
                 }
             }
         }
@@ -1714,34 +1728,36 @@ impl Renderer {
     }
 
     fn handle_view_damaged(&mut self, view: &View<ViewResource>) -> Result<(), RendererError> {
-        if let Some(view_data) = self.view_data.get(&view.id) {
-            let (_, pixels) = view.layer.current_snapshot();
-            view_data.layer.upload(&self.queue, util::align_u8(pixels));
-            
-            // Clear staging target so old draft strokes don't appear on top
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("clear_staging_encoder"),
-                });
-            {
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("clear_staging"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view_data.staging_target.view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-            }
-            self.queue.submit(std::iter::once(encoder.finish()));
+        let view_data = self
+            .view_data
+            .get_mut(&view.id)
+            .expect("views must have associated view data");
+        let (_, pixels) = view.layer.current_snapshot();
+        view_data.layer.upload(&self.queue, util::align_u8(pixels));
+
+        // Clear staging target so old draft strokes don't appear on top
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("clear_staging_encoder"),
+            });
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear_staging"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view_data.staging_target.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
         }
+        self.queue.submit(std::iter::once(encoder.finish()));
         Ok(())
     }
 
