@@ -91,12 +91,14 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
         return Err("'--record-digests' has no effect without '--record' or '--replay'".into());
     }
 
-    let log_lvl = if verbose {
-        log::Level::Debug
-    } else {
-        log::Level::Info
-    };
-    logger::init(log_lvl)?;
+    // TODO: verbose flag is ignored for now
+    // let log_lvl = if verbose {
+    //     log::Level::Debug
+    // } else {
+    //     log::Level::Info
+    // };
+    // logger::init(log_lvl)?;
+    env_logger::init();
 
     let width = width.unwrap_or(default.width);
     let height = height.unwrap_or(default.height);
