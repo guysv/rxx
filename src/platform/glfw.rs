@@ -52,12 +52,13 @@ pub fn init(
         .create_window(w, h, title, glfw::WindowMode::Windowed)
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "glfw: error creating window"))?;
 
-    window.make_current();
+    if let GraphicsContext::Gl = context {
+        window.make_current();
+        glfw.set_swap_interval(glfw::SwapInterval::None);
+    }
     window.set_all_polling(true);
     // Bring window to front on startup (e.g. macOS); regressed with glfw 0.61.
     window.focus();
-
-    glfw.set_swap_interval(glfw::SwapInterval::None);
 
     Ok((
         Window {
