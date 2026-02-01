@@ -10,7 +10,7 @@ use crate::session::{self, Blending, Effect, Session};
 use crate::sprite;
 use crate::util;
 use crate::view::resource::ViewResource;
-use crate::view::{View, ViewId, ViewOp, ViewState};
+use crate::view::{View, ViewId, ViewOp};
 use crate::{data, data::Assets, image};
 
 use crate::gfx::{shape2d, sprite2d, Origin, Rgba, Rgba8, ZDepth};
@@ -23,8 +23,6 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::mem;
-use std::sync::Arc;
 use std::time;
 
 type M44 = [[f32; 4]; 4];
@@ -282,6 +280,7 @@ impl LayerData {
         }
     }
 
+    #[allow(dead_code)]
     fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("clear_layer"),
@@ -410,6 +409,7 @@ pub struct Renderer {
     // Pipelines
     sprite_pipeline: wgpu::RenderPipeline,
     shape_pipeline: wgpu::RenderPipeline,
+    shape_replace_pipeline: wgpu::RenderPipeline,
     cursor_pipeline: wgpu::RenderPipeline,
     screen_pipeline: wgpu::RenderPipeline,
 
@@ -427,12 +427,12 @@ pub struct Renderer {
     // Per-view data
     view_data: BTreeMap<ViewId, ViewData>,
 
-    // Readback buffer for texture pixels
-    readback_buffer: Option<wgpu::Buffer>,
-    
     // Paste buffer for yank/paste operations
     paste_pixels: Vec<Rgba8>,
     paste_size: (u32, u32),
+
+    // Paste outputs for final pass rendering (like GL's paste_outputs)
+    paste_outputs: Vec<(wgpu::Buffer, u32)>,
 }
 
 #[derive(Debug)]
@@ -868,6 +868,66 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             cache: None,
         });
 
+        // Shape replace pipeline (for Blending::Constant - no alpha blending, just replace)
+        let shape_replace_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shape_replace_pipeline"),
+            layout: Some(&shape_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shape_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Shape2dVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 12,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 16,
+                            shader_location: 2,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 24,
+                            shader_location: 3,
+                            format: wgpu::VertexFormat::Unorm8x4,
+                        },
+                    ],
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shape_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         // Cursor pipeline
         let cursor_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -998,6 +1058,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             sampler,
             sprite_pipeline,
             shape_pipeline,
+            shape_replace_pipeline,
             cursor_pipeline,
             screen_pipeline,
             transform_bind_group_layout,
@@ -1008,9 +1069,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             transform_buffer,
             cursor_uniform_buffer,
             view_data: BTreeMap::new(),
-            readback_buffer: None,
             paste_pixels: Vec::new(),
             paste_size: (0, 0),
+            paste_outputs: Vec::new(),
         })
     }
 
@@ -1031,6 +1092,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         self.staging_batch.clear();
         self.final_batch.clear();
+        self.paste_outputs.clear();
 
         self.handle_effects(effects, session).unwrap();
 
@@ -1138,8 +1200,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Create staging vertex buffer from staging_batch
         let staging_vertices = self.create_shape_vertices(&self.staging_batch.vertices());
+        let paste_vertices = self.create_sprite_vertices(&self.draw_ctx.paste_batch.vertices());
 
-        if let Some((buffer, count)) = staging_vertices {
+        // Render to staging target if we have staging shapes or paste preview
+        if staging_vertices.is_some() || paste_vertices.is_some() {
             // Create uniform buffer for view ortho
             let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("staging_uniform_buffer"),
@@ -1179,16 +1243,44 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 occlusion_query_set: None,
             });
 
-            staging_pass.set_pipeline(&self.shape_pipeline);
-            staging_pass.set_bind_group(0, &staging_transform_bind_group, &[]);
-            staging_pass.set_vertex_buffer(0, buffer.slice(..));
-            staging_pass.draw(0..count, 0..1);
+            // Draw staging brush strokes
+            if let Some((buffer, count)) = staging_vertices {
+                staging_pass.set_pipeline(&self.shape_pipeline);
+                staging_pass.set_bind_group(0, &staging_transform_bind_group, &[]);
+                staging_pass.set_vertex_buffer(0, buffer.slice(..));
+                staging_pass.draw(0..count, 0..1);
+            }
+
+            // Draw paste preview (paste texture)
+            if let Some((buffer, count)) = paste_vertices {
+                let paste_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("staging_paste_bind_group"),
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.paste.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                });
+
+                staging_pass.set_pipeline(&self.sprite_pipeline);
+                staging_pass.set_bind_group(0, &staging_transform_bind_group, &[]);
+                staging_pass.set_bind_group(1, &paste_bind_group, &[]);
+                staging_pass.set_vertex_buffer(0, buffer.slice(..));
+                staging_pass.draw(0..count, 0..1);
+            }
         }
 
-        // Render final brush strokes to layer target
+        // Render final brush strokes and paste outputs to layer target
         let final_vertices = self.create_shape_vertices(&self.final_batch.vertices());
+        let has_paste_outputs = !self.paste_outputs.is_empty();
 
-        if let Some((buffer, count)) = final_vertices {
+        if final_vertices.is_some() || has_paste_outputs {
             let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("final_uniform_buffer"),
                 size: std::mem::size_of::<TransformUniforms>() as u64,
@@ -1227,10 +1319,45 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 occlusion_query_set: None,
             });
 
-            final_pass.set_pipeline(&self.shape_pipeline);
-            final_pass.set_bind_group(0, &final_transform_bind_group, &[]);
-            final_pass.set_vertex_buffer(0, buffer.slice(..));
-            final_pass.draw(0..count, 0..1);
+            // Draw final brush strokes
+            if let Some((buffer, count)) = final_vertices {
+                // Use replace pipeline for Blending::Constant, otherwise alpha blending
+                if self.blending == Blending::Constant {
+                    final_pass.set_pipeline(&self.shape_replace_pipeline);
+                } else {
+                    final_pass.set_pipeline(&self.shape_pipeline);
+                }
+                final_pass.set_bind_group(0, &final_transform_bind_group, &[]);
+                final_pass.set_vertex_buffer(0, buffer.slice(..));
+                final_pass.draw(0..count, 0..1);
+            }
+
+            // Draw paste outputs (rendered quads with paste texture)
+            if has_paste_outputs {
+                let paste_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("final_paste_bind_group"),
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.paste.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                });
+
+                final_pass.set_pipeline(&self.sprite_pipeline);
+                final_pass.set_bind_group(0, &final_transform_bind_group, &[]);
+                final_pass.set_bind_group(1, &paste_bind_group, &[]);
+
+                for (buffer, count) in &self.paste_outputs {
+                    final_pass.set_vertex_buffer(0, buffer.slice(..));
+                    final_pass.draw(0..*count, 0..1);
+                }
+            }
         }
 
         // Render to screen framebuffer
@@ -1375,6 +1502,96 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*count, 0..1);
             }
+
+            // Render view animations if enabled
+            if session.settings["animation"].is_set() {
+                for (id, view_data) in &self.view_data {
+                    if let Some(view) = session.views.get(*id) {
+                        // Only render animations for views with more than one frame
+                        if view.animation.len() > 1 && view_data.anim_vertex_count > 0 {
+                            if let Some(ref anim_buffer) = view_data.anim_vertex_buffer {
+                                // Create animation transform with translation
+                                let anim_transform = Matrix4::from_translation(
+                                    Vector2::new(0., view.zoom).extend(0.),
+                                );
+                                let anim_uniforms = TransformUniforms {
+                                    ortho,
+                                    transform: anim_transform.into(),
+                                };
+
+                                let anim_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                                    label: Some("anim_uniform_buffer"),
+                                    size: std::mem::size_of::<TransformUniforms>() as u64,
+                                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                                    mapped_at_creation: true,
+                                });
+                                anim_uniform_buffer
+                                    .slice(..)
+                                    .get_mapped_range_mut()
+                                    .copy_from_slice(bytemuck::bytes_of(&anim_uniforms));
+                                anim_uniform_buffer.unmap();
+
+                                let anim_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                    label: Some("anim_transform_bind_group"),
+                                    layout: &self.transform_bind_group_layout,
+                                    entries: &[wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: anim_uniform_buffer.as_entire_binding(),
+                                    }],
+                                });
+
+                                // Bind layer texture for animation
+                                let layer_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                    label: Some("anim_layer_bind_group"),
+                                    layout: &self.texture_bind_group_layout,
+                                    entries: &[
+                                        wgpu::BindGroupEntry {
+                                            binding: 0,
+                                            resource: wgpu::BindingResource::TextureView(
+                                                &view_data.layer.target.view,
+                                            ),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 1,
+                                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                                        },
+                                    ],
+                                });
+
+                                pass.set_pipeline(&self.sprite_pipeline);
+                                pass.set_bind_group(0, &anim_bind_group, &[]);
+                                pass.set_bind_group(1, &layer_bind_group, &[]);
+                                pass.set_vertex_buffer(0, anim_buffer.slice(..));
+                                pass.draw(0..view_data.anim_vertex_count, 0..1);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Render help overlay if in help mode
+            if session.mode == session::Mode::Help {
+                let mut help_shape_batch = shape2d::Batch::new();
+                let mut help_text_batch = text_batch(self.font.size);
+                draw::draw_help(session, &mut help_text_batch, &mut help_shape_batch);
+
+                // Draw help shape (background)
+                if let Some((buffer, count)) = self.create_shape_vertices(&help_shape_batch.vertices()) {
+                    pass.set_pipeline(&self.shape_pipeline);
+                    pass.set_bind_group(0, &transform_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..count, 0..1);
+                }
+
+                // Draw help text
+                if let Some((buffer, count)) = self.create_sprite_vertices(&help_text_batch.vertices()) {
+                    pass.set_pipeline(&self.sprite_pipeline);
+                    pass.set_bind_group(0, &transform_bind_group, &[]);
+                    pass.set_bind_group(1, &font_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..count, 0..1);
+                }
+            }
         }
 
         // Render screen to surface (final pass)
@@ -1439,9 +1656,11 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 // Create cursor uniforms - use screen_target size since cursor positions are in that coordinate space
                 let [cursor_w, cursor_h] = self.screen_target.size;
                 let cursor_ortho: M44 = ortho_wgpu(cursor_w, cursor_h, Origin::TopLeft).into();
+                let ui_scale = session.settings["scale"].to_f64();
+                let pixel_ratio = platform::pixel_ratio(self.scale_factor);
                 let cursor_uniforms = CursorUniforms {
                     ortho: cursor_ortho,
-                    scale: self.scale as f32,
+                    scale: (ui_scale * pixel_ratio) as f32,
                     _padding: [0.0; 7],
                 };
                 self.queue.write_buffer(&self.cursor_uniform_buffer, 0, bytemuck::bytes_of(&cursor_uniforms));
@@ -1480,6 +1699,47 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 pass.set_vertex_buffer(0, cursor_buffer.slice(..));
                 pass.draw(0..cursor_vertices.len() as u32, 0..1);
             }
+
+            // Render debug/overlay text if debug setting is on or execution is not normal
+            if session.settings["debug"].is_set() || !execution.is_normal() {
+                let overlay_vertices = self.create_sprite_vertices(&self.draw_ctx.overlay_batch.vertices());
+                if let Some((buffer, count)) = overlay_vertices {
+                    // Use BottomLeft ortho for overlay (like GL)
+                    let [overlay_w, overlay_h] = self.screen_target.size;
+                    let overlay_ortho: M44 = ortho_wgpu(overlay_w, overlay_h, Origin::BottomLeft).into();
+                    let overlay_uniforms = TransformUniforms {
+                        ortho: overlay_ortho,
+                        transform: identity,
+                    };
+
+                    let overlay_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("overlay_uniform_buffer"),
+                        size: std::mem::size_of::<TransformUniforms>() as u64,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: true,
+                    });
+                    overlay_uniform_buffer
+                        .slice(..)
+                        .get_mapped_range_mut()
+                        .copy_from_slice(bytemuck::bytes_of(&overlay_uniforms));
+                    overlay_uniform_buffer.unmap();
+
+                    let overlay_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("overlay_transform_bind_group"),
+                        layout: &self.transform_bind_group_layout,
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: overlay_uniform_buffer.as_entire_binding(),
+                        }],
+                    });
+
+                    pass.set_pipeline(&self.sprite_pipeline);
+                    pass.set_bind_group(0, &overlay_bind_group, &[]);
+                    pass.set_bind_group(1, &font_bind_group, &[]);
+                    pass.set_vertex_buffer(0, buffer.slice(..));
+                    pass.draw(0..count, 0..1);
+                }
+            }
         }
 
         // Track if we need to create a snapshot (painted this frame or view was resized)
@@ -1489,23 +1749,66 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             .filter(|v| v.is_dirty() && (needs_snapshot || v.is_resized()))
             .map(|v| (v.id, v.is_resized()));
 
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-
-        // Create snapshot for dirty views: record_view_resized when resized, else record_view_painted
-        if let Some((view_id, was_resized)) = should_record {
+        // If we need to record a snapshot, add the copy command to this encoder BEFORE finishing
+        // This ensures the copy runs after all render passes that wrote to the layer texture.
+        let snapshot_readback = if let Some((view_id, _)) = should_record {
             let view_data = self
                 .view_data
                 .get(&view_id)
                 .expect("view must have associated view data");
             let [w, h] = view_data.layer.target.size;
-                let pixels = self.read_texture_pixels(&view_data.layer.target.texture, w, h);
+            let bytes_per_row = (4 * w + 255) & !255; // Align to 256 bytes
+            let buffer_size = (bytes_per_row * h) as u64;
 
-            if let Some(v) = session.views.get_mut(view_id) {
-                if was_resized {
-                    v.resource.record_view_resized(pixels, v.extent());
-                } else {
-                    v.resource.record_view_painted(pixels);
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("snapshot_readback_buffer"),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+
+            encoder.copy_texture_to_buffer(
+                wgpu::ImageCopyTexture {
+                    texture: &view_data.layer.target.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::ImageCopyBuffer {
+                    buffer: &buffer,
+                    layout: wgpu::ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: Some(h),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            Some((buffer, w, h, bytes_per_row))
+        } else {
+            None
+        };
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+
+        // Create snapshot for dirty views: record_view_resized when resized, else record_view_painted
+        // The copy was already encoded above, now we just need to map and read
+        if let Some((view_id, was_resized)) = should_record {
+            if let Some((buffer, w, h, bytes_per_row)) = snapshot_readback {
+                let pixels = self.read_buffer_pixels(&buffer, w, h, bytes_per_row);
+
+                if let Some(v) = session.views.get_mut(view_id) {
+                    if was_resized {
+                        v.resource.record_view_resized(pixels, v.extent());
+                    } else {
+                        v.resource.record_view_painted(pixels);
+                    }
                 }
             }
         }
@@ -1644,69 +1947,156 @@ impl Renderer {
                     self.queue.submit(std::iter::once(encoder.finish()));
                 }
                 ViewOp::Blit(src, dst) => {
-                    // TODO: Implement blit
-                }
-                ViewOp::Yank(src) => {
-                    // Read pixels from layer texture at src rect and store in paste buffer
-                    let view_data = self
-                        .view_data
-                        .get(&v.id)
-                        .expect("views must have associated view data");
-                    let src_w = src.width() as u32;
-                    let src_h = src.height() as u32;
-
-                    // Read the entire layer texture
-                    let [layer_w, layer_h] = view_data.layer.target.size;
-                    let all_pixels = self.read_texture_pixels(&view_data.layer.target.texture, layer_w, layer_h);
-
-                    // Extract the source rectangle (accounting for Y-flip since textures are stored top-down)
-                    let mut paste_pixels = Vec::with_capacity((src_w * src_h) as usize);
-                    for y in 0..src_h {
-                        // Convert from bottom-left origin to top-left origin
-                        let tex_y = layer_h - 1 - (src.y1 as u32 + (src_h - 1 - y));
-                        for x in 0..src_w {
-                            let tex_x = src.x1 as u32 + x;
-                            let idx = (tex_y * layer_w + tex_x) as usize;
-                            if idx < all_pixels.len() {
-                                paste_pixels.push(all_pixels[idx]);
-                            } else {
-                                paste_pixels.push(Rgba8::TRANSPARENT);
-                            }
-                        }
-                    }
-
-                    self.paste_pixels = paste_pixels;
-                    self.paste_size = (src_w, src_h);
-                }
-                ViewOp::Flip(src, dir) => {
-                    // TODO: Implement flip
-                }
-                ViewOp::Paste(dst) => {
-                    // Paste from paste buffer to layer texture at dst rect
-                    let view_data = self
-                        .view_data
-                        .get_mut(&v.id)
-                        .expect("views must have associated view data");
-                    let (paste_w, paste_h) = self.paste_size;
-                    if paste_w > 0 && paste_h > 0 && !self.paste_pixels.is_empty() {
-                        // Upload paste pixels to the destination location
-                        // Convert destination coordinates (Y is from bottom-left)
-                        let [layer_w, layer_h] = view_data.layer.target.size;
-                        let dst_x = dst.x1 as u32;
-                        let dst_y = layer_h.saturating_sub(dst.y2 as u32);
-
-                        // Convert pixels to bytes
-                        let bytes: Vec<u8> = self.paste_pixels
-                            .iter()
-                            .flat_map(|p| [p.r, p.g, p.b, p.a])
-                            .collect();
-
+                    // Get pixels from the view's CPU snapshot
+                    if let Some((_, pixels)) = v.resource.layer.get_snapshot_rect(&src.map(|n| n as i32)) {
+                        let view_data = self
+                            .view_data
+                            .get_mut(&v.id)
+                            .expect("views must have associated view data");
+                        let texels = util::align_u8(&pixels);
                         view_data.layer.upload_part(
                             &self.queue,
-                            [dst_x, dst_y],
-                            [paste_w, paste_h],
-                            &bytes,
+                            [dst.x1 as u32, dst.y1 as u32],
+                            [src.width() as u32, src.height() as u32],
+                            texels,
                         );
+                    }
+                }
+                ViewOp::Yank(src) => {
+                    // Get pixels from the view's CPU snapshot (like GL)
+                    if let Some((_, pixels)) = v.resource.layer.get_snapshot_rect(&src.map(|n| n as i32)) {
+                        let (w, h) = (src.width() as u32, src.height() as u32);
+
+                        // Resize paste texture if needed
+                        let [paste_w, paste_h] = self.paste.size;
+                        if paste_w != w || paste_h != h {
+                            self.paste.resize(&self.device, w, h);
+                        }
+
+                        // Upload to paste texture
+                        let body = util::align_u8(&pixels);
+                        self.queue.write_texture(
+                            wgpu::ImageCopyTexture {
+                                texture: &self.paste.texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            body,
+                            wgpu::ImageDataLayout {
+                                offset: 0,
+                                bytes_per_row: Some(4 * w),
+                                rows_per_image: Some(h),
+                            },
+                            wgpu::Extent3d {
+                                width: w,
+                                height: h,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+
+                        // Update paste_pixels/paste_size for compatibility
+                        self.paste_pixels = pixels;
+                        self.paste_size = (w, h);
+                    }
+                }
+                ViewOp::Flip(src, dir) => {
+                    // Get pixels from the view's CPU snapshot and flip in CPU
+                    if let Some((_, mut pixels)) = v.resource.layer.get_snapshot_rect(&src.map(|n| n as i32)) {
+                        let (w, h) = (src.width() as u32, src.height() as u32);
+
+                        match dir {
+                            Axis::Vertical => {
+                                let len = pixels.len();
+                                let (front, back) = pixels.split_at_mut(len / 2);
+                                for (front_row, back_row) in front
+                                    .chunks_exact_mut(w as usize)
+                                    .zip(back.rchunks_exact_mut(w as usize))
+                                {
+                                    front_row.swap_with_slice(back_row);
+                                }
+                            }
+                            Axis::Horizontal => {
+                                pixels
+                                    .chunks_exact_mut(w as usize)
+                                    .for_each(|row| row.reverse());
+                            }
+                        }
+
+                        // Resize paste texture if needed
+                        let [paste_w, paste_h] = self.paste.size;
+                        if paste_w != w || paste_h != h {
+                            self.paste.resize(&self.device, w, h);
+                        }
+
+                        // Upload to paste texture
+                        let body = util::align_u8(&pixels);
+                        self.queue.write_texture(
+                            wgpu::ImageCopyTexture {
+                                texture: &self.paste.texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            body,
+                            wgpu::ImageDataLayout {
+                                offset: 0,
+                                bytes_per_row: Some(4 * w),
+                                rows_per_image: Some(h),
+                            },
+                            wgpu::Extent3d {
+                                width: w,
+                                height: h,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+
+                        // Also update paste_pixels/paste_size for Paste op compatibility
+                        self.paste_pixels = pixels;
+                        self.paste_size = (w, h);
+                    }
+                }
+                ViewOp::Paste(dst) => {
+                    // Create a sprite batch for the paste quad (like GL's paste_outputs)
+                    let [paste_w, paste_h] = self.paste.size;
+                    if paste_w > 0 && paste_h > 0 {
+                        let batch = sprite2d::Batch::singleton(
+                            paste_w,
+                            paste_h,
+                            Rect::origin(paste_w as f32, paste_h as f32),
+                            dst.map(|n| n as f32),
+                            ZDepth::default(),
+                            Rgba::TRANSPARENT,
+                            1.,
+                            Repeat::default(),
+                        );
+
+                        let vertices = batch.vertices();
+                        if !vertices.is_empty() {
+                            let sprite_vertices: Vec<Sprite2dVertex> = vertices
+                                .iter()
+                                .map(|v| Sprite2dVertex {
+                                    position: [v.position.x, v.position.y, v.position.z],
+                                    uv: [v.uv.x, v.uv.y],
+                                    color: [v.color.r, v.color.g, v.color.b, v.color.a],
+                                    opacity: v.opacity,
+                                })
+                                .collect();
+
+                            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                                label: Some("paste_output_buffer"),
+                                size: (sprite_vertices.len() * std::mem::size_of::<Sprite2dVertex>()) as u64,
+                                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                                mapped_at_creation: true,
+                            });
+                            buffer
+                                .slice(..)
+                                .get_mapped_range_mut()
+                                .copy_from_slice(bytemuck::cast_slice(&sprite_vertices));
+                            buffer.unmap();
+
+                            self.paste_outputs.push((buffer, sprite_vertices.len() as u32));
+                        }
                     }
                 }
                 ViewOp::SetPixel(rgba, x, y) => {
@@ -1784,7 +2174,7 @@ impl Renderer {
         let tw = u32::min(ew, vw);
         let th = u32::min(eh, vh);
 
-        let mut view_data = ViewData::new(&self.device, &self.queue, vw, vh, None);
+        let view_data = ViewData::new(&self.device, &self.queue, vw, vh, None);
 
         if let Some((_, texels)) = view.layer.get_snapshot_rect(&Rect::origin(tw as i32, th as i32))
         {
@@ -1801,12 +2191,85 @@ impl Renderer {
         Ok(())
     }
 
-    fn update_view_animations(&mut self, _session: &Session) {
-        // TODO: Implement view animations
+    fn update_view_animations(&mut self, session: &Session) {
+        if !session.settings["animation"].is_set() {
+            return;
+        }
+        for v in session.views.iter() {
+            let batch = draw::draw_view_animation(session, v);
+            let vertices = batch.vertices();
+
+            if let Some(vd) = self.view_data.get_mut(&v.id) {
+                if vertices.is_empty() {
+                    vd.anim_vertex_buffer = None;
+                    vd.anim_vertex_count = 0;
+                } else {
+                    let sprite_vertices: Vec<Sprite2dVertex> = vertices
+                        .iter()
+                        .map(|v| Sprite2dVertex {
+                            position: [v.position.x, v.position.y, v.position.z],
+                            uv: [v.uv.x, v.uv.y],
+                            color: [v.color.r, v.color.g, v.color.b, v.color.a],
+                            opacity: v.opacity,
+                        })
+                        .collect();
+
+                    let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("anim_vertex_buffer"),
+                        size: (sprite_vertices.len() * std::mem::size_of::<Sprite2dVertex>()) as u64,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: true,
+                    });
+                    buffer
+                        .slice(..)
+                        .get_mapped_range_mut()
+                        .copy_from_slice(bytemuck::cast_slice(&sprite_vertices));
+                    buffer.unmap();
+
+                    vd.anim_vertex_buffer = Some(buffer);
+                    vd.anim_vertex_count = sprite_vertices.len() as u32;
+                }
+            }
+        }
     }
 
-    fn update_view_composites(&mut self, _session: &Session) {
-        // TODO: Implement view composites
+    fn update_view_composites(&mut self, session: &Session) {
+        for v in session.views.iter() {
+            let batch = draw::draw_view_composites(session, v);
+            let vertices = batch.vertices();
+
+            if let Some(vd) = self.view_data.get_mut(&v.id) {
+                if vertices.is_empty() {
+                    vd.layer_vertex_buffer = None;
+                    vd.layer_vertex_count = 0;
+                } else {
+                    let sprite_vertices: Vec<Sprite2dVertex> = vertices
+                        .iter()
+                        .map(|v| Sprite2dVertex {
+                            position: [v.position.x, v.position.y, v.position.z],
+                            uv: [v.uv.x, v.uv.y],
+                            color: [v.color.r, v.color.g, v.color.b, v.color.a],
+                            opacity: v.opacity,
+                        })
+                        .collect();
+
+                    let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("composite_vertex_buffer"),
+                        size: (sprite_vertices.len() * std::mem::size_of::<Sprite2dVertex>()) as u64,
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: true,
+                    });
+                    buffer
+                        .slice(..)
+                        .get_mapped_range_mut()
+                        .copy_from_slice(bytemuck::cast_slice(&sprite_vertices));
+                    buffer.unmap();
+
+                    vd.layer_vertex_buffer = Some(buffer);
+                    vd.layer_vertex_count = sprite_vertices.len() as u32;
+                }
+            }
+        }
     }
 
     /// Create a vertex buffer from sprite2d vertices.
@@ -1882,7 +2345,37 @@ impl Renderer {
         self.read_texture_pixels(&self.screen_target.texture, width, height)
     }
 
-    /// Read pixels from a texture (blocking).
+    /// Read pixels from a buffer that has already been filled via copy_texture_to_buffer.
+    /// This assumes the copy command has already been submitted.
+    fn read_buffer_pixels(&self, buffer: &wgpu::Buffer, width: u32, height: u32, bytes_per_row: u32) -> Vec<Rgba8> {
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        self.device.poll(wgpu::Maintain::Wait);
+        rx.recv().unwrap().unwrap();
+
+        let data = slice.get_mapped_range();
+        let mut pixels = Vec::with_capacity((width * height) as usize);
+
+        for y in 0..height {
+            let row_start = (y * bytes_per_row) as usize;
+            for x in 0..width {
+                let offset = row_start + (x * 4) as usize;
+                pixels.push(Rgba8::new(
+                    data[offset],
+                    data[offset + 1],
+                    data[offset + 2],
+                    data[offset + 3],
+                ));
+            }
+        }
+
+        pixels
+    }
+
+    /// Read pixels from a texture (blocking). Creates its own encoder and submit.
     fn read_texture_pixels(&self, texture: &wgpu::Texture, width: u32, height: u32) -> Vec<Rgba8> {
         let bytes_per_row = (4 * width + 255) & !255; // Align to 256 bytes
         let buffer_size = (bytes_per_row * height) as u64;

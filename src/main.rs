@@ -1,6 +1,5 @@
 #![allow(clippy::inconsistent_struct_constructor)]
 use rx::execution::{DigestMode, ExecutionMode, GifMode};
-use rx::logger;
 
 use std::io;
 use std::path::PathBuf;
@@ -51,7 +50,6 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
         return Ok(());
     }
 
-    let verbose = args.contains("-v");
     let debug = args.contains("--debug");
     let width = args.opt_value_from_str("--width")?;
     let height = args.opt_value_from_str("--height")?;
