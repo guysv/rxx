@@ -219,3 +219,16 @@ This is a specific Y-flip and origin convention. If the rest of the stack (view 
 | Yank Y convention        | N/A (GPU readback)            | Custom Y formula           | Medium – verify vs rest of pipeline    |
 
 Recommended order to fix for maximum stability: (1) snapshot/dirty and readback ordering, (2) Blit/Flip if the app uses them, (3) Blending::Constant, (4) cursor scale and yank/paste coordinates, (5) help and debug overlay, (6) animations and composites.
+
+---
+
+## Fixes applied
+
+### §1 Snapshot / dirty view recording
+
+**Fix:** Snapshot recording now mirrors GL behavior.
+
+- **When to record:** Snapshot is taken only when the active view is dirty (`v.is_dirty()`) **and** either something was painted this frame (`needs_snapshot`) or the view was resized (`v.is_resized()`). So resize-only frames are recorded too.
+- **What to call:** If the view was resized (`v.is_resized()`), call `record_view_resized(pixels, v.extent())` so `ViewResource.extent` and the snapshot match the new size. Otherwise call `record_view_painted(pixels)`.
+
+**Effect:** After `:f/resize 8 8`, the first paint no longer panics: the extent used for the snapshot matches the read-back pixel buffer size (e.g. 8×8), and undo/redo and extent stay in sync with the view.

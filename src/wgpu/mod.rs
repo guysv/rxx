@@ -1479,23 +1479,26 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             }
         }
 
-        // Track if we need to create a snapshot (final_batch was not empty)
+        // Track if we need to create a snapshot (painted this frame or view was resized)
         let needs_snapshot = !self.final_batch.vertices().is_empty();
-        let active_view_id = session.views.active().map(|v| v.id);
+        let active_view = session.views.active();
+        let should_record = active_view
+            .filter(|v| v.is_dirty() && (needs_snapshot || v.is_resized()))
+            .map(|v| (v.id, v.is_resized()));
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
-        // Create snapshot for dirty views after painting
-        if needs_snapshot {
-            if let Some(view_id) = active_view_id {
-                if let Some(view_data) = self.view_data.get(&view_id) {
-                    // Read back layer texture pixels
-                    let [w, h] = view_data.layer.target.size;
-                    let pixels = self.read_texture_pixels(&view_data.layer.target.texture, w, h);
-                    
-                    // Get mutable reference to view and record snapshot
-                    if let Some(v) = session.views.get_mut(view_id) {
+        // Create snapshot for dirty views: record_view_resized when resized, else record_view_painted
+        if let Some((view_id, was_resized)) = should_record {
+            if let Some(view_data) = self.view_data.get(&view_id) {
+                let [w, h] = view_data.layer.target.size;
+                let pixels = self.read_texture_pixels(&view_data.layer.target.texture, w, h);
+
+                if let Some(v) = session.views.get_mut(view_id) {
+                    if was_resized {
+                        v.resource.record_view_resized(pixels, v.extent());
+                    } else {
                         v.resource.record_view_painted(pixels);
                     }
                 }
