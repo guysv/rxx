@@ -170,9 +170,11 @@ impl ScriptState {
                 match eff {
                     Effect::ViewAdded(id) => {
                         let _ = call_view_added(engine, scope, &ast.borrow(), id.raw() as i64);
+                        renderer_effects.push(eff.clone());
                     }
                     Effect::ViewRemoved(id) => {
                         let _ = call_view_removed(engine, scope, &ast.borrow(), id.raw() as i64);
+                        renderer_effects.push(eff.clone());
                     }
                     Effect::RunScriptCommand(name, args) => script_commands.push((name.clone(), args.clone())),
                     other => renderer_effects.push(other.clone()),
