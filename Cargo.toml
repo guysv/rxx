@@ -10,14 +10,15 @@ edition = "2021"
 
 [features]
 default = ["glfw"]
+glfw = ["dep:glfw", "dep:raw-window-handle"]
 
 [dependencies]
 pico-args = "0.3.0"
 png = { version = "0.16.6" }
 gif = "0.10.3"
 chrono = "0.4.19"
-glfw = { version = "0.41.0", optional = true }
-raw-window-handle = { version = "0.3.3", optional = true }
+glfw = { version = "0.61", optional = true, features = ["raw-window-handle-v0-6", "native-handles"] }
+raw-window-handle = { version = "0.6", optional = true }
 snap = "0.2.5"
 log = { version = "0.4.14", features = ["std"] }
 directories = "2.0.2"

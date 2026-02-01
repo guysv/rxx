@@ -4,8 +4,11 @@ use crate::platform::{
 };
 
 use glfw::Context;
+use raw_window_handle::{
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
+};
 
-use std::{io, sync};
+use std::io;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -17,7 +20,7 @@ pub fn init(
     context: GraphicsContext,
 ) -> io::Result<(Window, Events)> {
     let mut glfw =
-        glfw::init(glfw::LOG_ERRORS).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        glfw::init(glfw::log_errors).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
     glfw.window_hint(glfw::WindowHint::Resizable(true));
     glfw.window_hint(glfw::WindowHint::Visible(true));
@@ -66,7 +69,7 @@ pub fn init(
 }
 
 pub struct Events {
-    handle: sync::mpsc::Receiver<(f64, glfw::WindowEvent)>,
+    handle: glfw::GlfwReceiver<(f64, glfw::WindowEvent)>,
     glfw: glfw::Glfw,
 }
 
@@ -89,17 +92,20 @@ impl Events {
 }
 
 pub struct Window {
-    pub handle: glfw::Window,
+    pub handle: glfw::PWindow,
     context: GraphicsContext,
 }
 
 impl Window {
-    pub fn handle(&self) -> &glfw::Window {
+    pub fn handle(&self) -> &glfw::PWindow {
         &self.handle
     }
 
     pub fn get_proc_address(&mut self, s: &str) -> *const std::ffi::c_void {
-        self.handle.get_proc_address(s)
+        self.handle
+            .get_proc_address(s)
+            .map(|f| f as *const std::ffi::c_void)
+            .unwrap_or(std::ptr::null())
     }
 
     pub fn set_cursor_visible(&mut self, visible: bool) {
@@ -136,6 +142,18 @@ impl Window {
 
     pub fn clipboard(&self) -> Option<String> {
         self.handle.get_clipboard_string()
+    }
+}
+
+impl HasWindowHandle for Window {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        self.handle.window_handle()
+    }
+}
+
+impl HasDisplayHandle for Window {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        self.handle.display_handle()
     }
 }
 

@@ -1,15 +1,6 @@
 use crate::platform::{GraphicsContext, LogicalSize, WindowEvent, WindowHint};
 
-use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use std::io;
-
-pub struct DummyWindow(());
-
-unsafe impl HasRawWindowHandle for DummyWindow {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        unreachable!()
-    }
-}
 
 pub struct Events {
     handle: (),
@@ -28,7 +19,7 @@ impl Events {
 }
 
 pub struct Window {
-    handle: DummyWindow,
+    _private: (),
 }
 
 impl Window {
@@ -36,8 +27,8 @@ impl Window {
         unreachable!()
     }
 
-    pub fn handle(&self) -> &DummyWindow {
-        &self.handle
+    pub fn handle(&self) -> &Self {
+        self
     }
 
     pub fn get_proc_address(&mut self, _s: &str) -> *const std::ffi::c_void {
