@@ -28,10 +28,9 @@ nonempty = "0.1.4"
 memoir = "0.2.1"
 arrayvec = "0.5"
 num-traits = "*"
-luminance = "0.43.2"
-luminance-gl = "0.16.1"
-luminance-derive = "0.6.3"
-gl = "0.14"
+wgpu = "23"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
 
 [dev-dependencies]
 lazy_static = "1.3"

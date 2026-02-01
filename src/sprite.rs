@@ -4,7 +4,7 @@ use crate::gfx::ZDepth;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct Vertex(Vector3<f32>, Vector2<f32>);
+pub struct Vertex(pub Vector3<f32>, pub Vector2<f32>);
 
 pub struct Sprite {
     w: u32,

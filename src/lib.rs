@@ -29,8 +29,8 @@ mod draw;
 mod event;
 mod flood;
 mod font;
-mod gl;
 mod history;
+mod wgpu;
 mod image;
 mod io;
 mod palette;
@@ -110,7 +110,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         options.width,
         options.height,
         hints,
-        platform::GraphicsContext::Gl,
+        platform::GraphicsContext::None,
     )?;
 
     let scale_factor = win.scale_factor();
@@ -165,7 +165,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
     let wait_events = execution.is_normal() || execution.is_recording();
 
-    let mut renderer: gl::Renderer = Renderer::new(&mut win, win_size, scale_factor, assets)?;
+    let mut renderer: wgpu::Renderer = Renderer::new(&mut win, win_size, scale_factor, assets)?;
 
     if let Err(e) = session.edit(paths) {
         session.message(format!("Error loading path(s): {}", e), MessageType::Error);
