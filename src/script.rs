@@ -270,7 +270,6 @@ impl ScriptState {
 
         match engine.call_fn::<()>(scope, &ast.borrow(), &handler_name, (rhai_args,)) {
             Ok(()) => Ok(true),
-            Err(ref e) if is_function_not_found(e) => Ok(false),
             Err(e) => Err(e),
         }
     }
