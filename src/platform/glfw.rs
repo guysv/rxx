@@ -25,6 +25,7 @@ pub fn init(
     glfw.window_hint(glfw::WindowHint::Resizable(true));
     glfw.window_hint(glfw::WindowHint::Visible(true));
     glfw.window_hint(glfw::WindowHint::Focused(true));
+    glfw.window_hint(glfw::WindowHint::FocusOnShow(true));
     glfw.window_hint(glfw::WindowHint::RefreshRate(None));
     glfw.window_hint(glfw::WindowHint::ScaleToMonitor(true));
     glfw.window_hint(glfw::WindowHint::DoubleBuffer(true));
@@ -53,6 +54,8 @@ pub fn init(
 
     window.make_current();
     window.set_all_polling(true);
+    // Bring window to front on startup (e.g. macOS); regressed with glfw 0.61.
+    window.focus();
 
     glfw.set_swap_interval(glfw::SwapInterval::None);
 
