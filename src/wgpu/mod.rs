@@ -1220,32 +1220,33 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let staging_vertices = self.create_shape_vertices(&self.staging_batch.vertices());
         let paste_vertices = self.create_sprite_vertices(&self.draw_ctx.paste_batch.vertices());
 
-        // Render to staging target if we have staging shapes or paste preview
-        if staging_vertices.is_some() || paste_vertices.is_some() {
-            // Create uniform buffer for view ortho
-            let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("staging_uniform_buffer"),
-                size: std::mem::size_of::<TransformUniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: true,
-            });
-            let staging_uniforms = TransformUniforms { ortho: view_ortho, transform: identity };
-            view_uniform_buffer
-                .slice(..)
-                .get_mapped_range_mut()
-                .copy_from_slice(bytemuck::bytes_of(&staging_uniforms));
-            view_uniform_buffer.unmap();
+        // Always run staging pass for active view so the staging target is cleared every frame
+        // (otherwise after ESC the paste preview ghost persists until next view modification).
+        // Create uniform buffer for view ortho
+        let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging_uniform_buffer"),
+            size: std::mem::size_of::<TransformUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        let staging_uniforms = TransformUniforms { ortho: view_ortho, transform: identity };
+        view_uniform_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::bytes_of(&staging_uniforms));
+        view_uniform_buffer.unmap();
 
-            let staging_transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("staging_transform_bind_group"),
-                layout: &self.transform_bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: view_uniform_buffer.as_entire_binding(),
-                }],
-            });
+        let staging_transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("staging_transform_bind_group"),
+            layout: &self.transform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: view_uniform_buffer.as_entire_binding(),
+            }],
+        });
 
-            // Render to staging target
+        // Render to staging target (clear every frame so ghost disappears on ESC)
+        {
             let mut staging_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("staging_brush_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
