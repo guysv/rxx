@@ -1777,11 +1777,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             }
         }
 
-        // Track if we need to create a snapshot (painted this frame or view was resized)
-        let needs_snapshot = !self.final_batch.vertices().is_empty();
+        // Record snapshot whenever the active view is dirty (match GL path).
         let active_view = session.views.active();
         let should_record = active_view
-            .filter(|v| v.is_dirty() && (needs_snapshot || v.is_resized()))
+            .filter(|v| v.is_dirty())
             .map(|v| (v.id, v.is_resized()));
 
         // If we need to record a snapshot, add the copy command to this encoder BEFORE finishing
