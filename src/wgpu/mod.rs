@@ -166,14 +166,14 @@ impl TextureBundle {
     }
 }
 
-/// Render target texture (like a framebuffer).
-struct RenderTarget {
+/// Render texture (like a framebuffer).
+struct RenderTexture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     size: [u32; 2],
 }
 
-impl RenderTarget {
+impl RenderTexture {
     fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
         let size = wgpu::Extent3d {
             width,
@@ -182,7 +182,7 @@ impl RenderTarget {
         };
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("render_target"),
+            label: Some("render_texture"),
             size,
             mip_level_count: 1,
             sample_count: 1,
@@ -207,18 +207,149 @@ impl RenderTarget {
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) {
         *self = Self::new(device, width, height, format);
     }
+
+    #[allow(dead_code)]
+    fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clear_layer"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+    }
+
+    fn upload(&self, queue: &wgpu::Queue, texels: &[u8]) {
+        let [w, h] = self.size;
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            texels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * w),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    fn upload_part(&self, queue: &wgpu::Queue, offset: [u32; 2], size: [u32; 2], texels: &[u8]) {
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: offset[0],
+                    y: offset[1],
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            texels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * size[0]),
+                rows_per_image: Some(size[1]),
+            },
+            wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Read back pixel data from the target (blocking). Creates its own encoder and submit.
+    fn pixels(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Rgba8> {
+        let [w, h] = self.size;
+        let bytes_per_row = (4 * w + 255) & !255;
+        let buffer_size = (bytes_per_row * h) as u64;
+
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback_buffer"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("readback_encoder"),
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv().unwrap().unwrap();
+
+        let data = slice.get_mapped_range();
+        let mut pixels = Vec::with_capacity((w * h) as usize);
+        for y in 0..h {
+            let row_start = (y * bytes_per_row) as usize;
+            for x in 0..w {
+                let offset = row_start + (x * 4) as usize;
+                pixels.push(Rgba8::new(
+                    data[offset],
+                    data[offset + 1],
+                    data[offset + 2],
+                    data[offset + 3],
+                ));
+            }
+        }
+        pixels
+    }
 }
 
 /// Per-layer data for a view.
 struct LayerData {
-    target: RenderTarget,
+    texture: RenderTexture,
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
 }
 
 impl LayerData {
     fn new(device: &wgpu::Device, w: u32, h: u32, pixels: Option<&[Rgba8]>, queue: &wgpu::Queue) -> Self {
-        let target = RenderTarget::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let texture = RenderTexture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
 
         // Create a quad vertex buffer for rendering this layer
         let batch = sprite2d::Batch::singleton(
@@ -257,7 +388,7 @@ impl LayerData {
             let aligned = util::align_u8(pixels);
             queue.write_texture(
                 wgpu::ImageCopyTexture {
-                    texture: &target.texture,
+                    texture: &texture.texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
@@ -277,7 +408,7 @@ impl LayerData {
         }
 
         Self {
-            target,
+            texture,
             vertex_buffer,
             vertex_count: verts.len() as u32,
         }
@@ -285,76 +416,27 @@ impl LayerData {
 
     #[allow(dead_code)]
     fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clear_layer"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.target.view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
+        self.texture.clear(encoder);
     }
 
     fn upload(&self, queue: &wgpu::Queue, texels: &[u8]) {
-        let [w, h] = self.target.size;
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &self.target.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            texels,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * w),
-                rows_per_image: Some(h),
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
+        self.texture.upload(queue, texels);
     }
 
     fn upload_part(&self, queue: &wgpu::Queue, offset: [u32; 2], size: [u32; 2], texels: &[u8]) {
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &self.target.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: offset[0],
-                    y: offset[1],
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            texels,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * size[0]),
-                rows_per_image: Some(size[1]),
-            },
-            wgpu::Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            },
-        );
+        self.texture.upload_part(queue, offset, size, texels);
+    }
+
+    /// Snapshot of the layer pixels (blocking readback). Matches the GL `pixels()` API.
+    fn pixels(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Rgba8> {
+        self.texture.pixels(device, queue)
     }
 }
 
 /// Per-view rendering data.
 struct ViewData {
     layer: LayerData,
-    staging_target: RenderTarget,
+    staging_texture: RenderTexture,
     anim_vertex_buffer: Option<wgpu::Buffer>,
     anim_vertex_count: u32,
     layer_vertex_buffer: Option<wgpu::Buffer>,
@@ -363,12 +445,12 @@ struct ViewData {
 
 impl ViewData {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, pixels: Option<&[Rgba8]>) -> Self {
-        let staging_target = RenderTarget::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let staging_texture = RenderTexture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
         let layer = LayerData::new(device, w, h, pixels, queue);
 
         Self {
             layer,
-            staging_target,
+            staging_texture,
             anim_vertex_buffer: None,
             anim_vertex_count: 0,
             layer_vertex_buffer: None,
@@ -393,8 +475,8 @@ pub struct Renderer {
     scale: f64,
     blending: Blending,
 
-    // Render targets
-    screen_target: RenderTarget,
+    // Render textures
+    screen_texture: RenderTexture,
 
     // Batches
     staging_batch: shape2d::Batch,
@@ -583,7 +665,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let paste = TextureBundle::new(&device, &queue, paste_w, paste_h, None);
 
         // Create screen render target
-        let screen_target = RenderTarget::new(
+        let screen_texture = RenderTexture::new(
             &device,
             win_size.width as u32,
             win_size.height as u32,
@@ -1051,7 +1133,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             scale_factor,
             scale: 1.0,
             blending: Blending::Alpha,
-            screen_target,
+            screen_texture,
             staging_batch: shape2d::Batch::new(),
             final_batch: shape2d::Batch::new(),
             font,
@@ -1123,7 +1205,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         self.draw_ctx.draw(session_handle, script_state, avg_frametime, execution);
         let mut session = session_handle.borrow_mut();
 
-        let [screen_w, screen_h] = self.screen_target.size;
+        let [screen_w, screen_h] = self.screen_texture.size;
         let ortho: M44 = ortho_wgpu(screen_w, screen_h, Origin::TopLeft).into();
         let identity: M44 = Matrix4::identity().into();
 
@@ -1250,7 +1332,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let mut staging_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("staging_brush_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view_data.staging_target.view,
+                    view: &view_data.staging_texture.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1326,7 +1408,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let mut final_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("final_brush_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view_data.layer.target.view,
+                    view: &view_data.layer.texture.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -1385,7 +1467,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("screen_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.screen_target.view,
+                    view: &self.screen_texture.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1456,7 +1538,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                 wgpu::BindGroupEntry {
                                     binding: 0,
                                     resource: wgpu::BindingResource::TextureView(
-                                        &view_data.layer.target.view,
+                                        &view_data.layer.texture.view,
                                     ),
                                 },
                                 wgpu::BindGroupEntry {
@@ -1481,7 +1563,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                 wgpu::BindGroupEntry {
                                     binding: 0,
                                     resource: wgpu::BindingResource::TextureView(
-                                        &view_data.staging_target.view,
+                                        &view_data.staging_texture.view,
                                     ),
                                 },
                                 wgpu::BindGroupEntry {
@@ -1584,7 +1666,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                         wgpu::BindGroupEntry {
                                             binding: 0,
                                             resource: wgpu::BindingResource::TextureView(
-                                                &view_data.layer.target.view,
+                                                &view_data.layer.texture.view,
                                             ),
                                         },
                                         wgpu::BindGroupEntry {
@@ -1638,7 +1720,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&self.screen_target.view),
+                        resource: wgpu::BindingResource::TextureView(&self.screen_texture.view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -1689,8 +1771,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     .copy_from_slice(bytemuck::cast_slice(&cursor_vertices));
                 cursor_buffer.unmap();
 
-                // Create cursor uniforms - use screen_target size since cursor positions are in that coordinate space
-                let [cursor_w, cursor_h] = self.screen_target.size;
+                // Create cursor uniforms - use screen_texture size since cursor positions are in that coordinate space
+                let [cursor_w, cursor_h] = self.screen_texture.size;
                 let cursor_ortho: M44 = ortho_wgpu(cursor_w, cursor_h, Origin::TopLeft).into();
                 let ui_scale = session.settings["scale"].to_f64();
                 let pixel_ratio = platform::pixel_ratio(self.scale_factor);
@@ -1720,7 +1802,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&self.screen_target.view),
+                            resource: wgpu::BindingResource::TextureView(&self.screen_texture.view),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
@@ -1741,7 +1823,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 let overlay_vertices = self.create_sprite_vertices(&self.draw_ctx.overlay_batch.vertices());
                 if let Some((buffer, count)) = overlay_vertices {
                     // Use BottomLeft ortho for overlay (like GL)
-                    let [overlay_w, overlay_h] = self.screen_target.size;
+                    let [overlay_w, overlay_h] = self.screen_texture.size;
                     let overlay_ortho: M44 = ortho_wgpu(overlay_w, overlay_h, Origin::BottomLeft).into();
                     let overlay_uniforms = TransformUniforms {
                         ortho: overlay_ortho,
@@ -1784,73 +1866,29 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             .filter(|v| v.is_dirty())
             .map(|v| (v.id, v.is_resized()));
 
-        // If we need to record a snapshot, add the copy command to this encoder BEFORE finishing
-        // This ensures the copy runs after all render passes that wrote to the layer texture.
-        let snapshot_readback = if let Some((view_id, _)) = should_record {
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+
+        // If active view is dirty, record a snapshot of it (like GL layer.pixels()).
+        if let Some((view_id, was_resized)) = should_record {
             let view_data = self
                 .view_data
                 .get(&view_id)
                 .expect("view must have associated view data");
-            let [w, h] = view_data.layer.target.size;
-            let bytes_per_row = (4 * w + 255) & !255; // Align to 256 bytes
-            let buffer_size = (bytes_per_row * h) as u64;
+            let pixels = view_data.layer.pixels(&self.device, &self.queue);
 
-            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("snapshot_readback_buffer"),
-                size: buffer_size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-
-            encoder.copy_texture_to_buffer(
-                wgpu::ImageCopyTexture {
-                    texture: &view_data.layer.target.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::ImageCopyBuffer {
-                    buffer: &buffer,
-                    layout: wgpu::ImageDataLayout {
-                        offset: 0,
-                        bytes_per_row: Some(bytes_per_row),
-                        rows_per_image: Some(h),
-                    },
-                },
-                wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-            );
-
-            Some((buffer, w, h, bytes_per_row))
-        } else {
-            None
-        };
-
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-
-        // Create snapshot for dirty views: record_view_resized when resized, else record_view_painted
-        // The copy was already encoded above, now we just need to map and read
-        if let Some((view_id, was_resized)) = should_record {
-            if let Some((buffer, w, h, bytes_per_row)) = snapshot_readback {
-                let pixels = self.read_buffer_pixels(&buffer, w, h, bytes_per_row);
-
-                if let Some(v) = session.views.get_mut(view_id) {
-                    if was_resized {
-                        v.resource.record_view_resized(pixels, v.extent());
-                    } else {
-                        v.resource.record_view_painted(pixels);
-                    }
+            if let Some(v) = session.views.get_mut(view_id) {
+                if was_resized {
+                    v.resource.record_view_resized(pixels, v.extent());
+                } else {
+                    v.resource.record_view_painted(pixels);
                 }
             }
         }
 
         // Record snapshots if needed
         if !execution.is_normal() {
-            let [w, h] = self.screen_target.size;
+            let [w, h] = self.screen_texture.size;
             let texels = self.read_screen_pixels(w, h);
             execution.record(&texels).ok();
         }
@@ -1884,7 +1922,7 @@ impl Renderer {
         let h = (self.win_size.height / scale) as u32;
 
         if w > 0 && h > 0 {
-            self.screen_target.resize(&self.device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
+            self.screen_texture.resize(&self.device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
         }
     }
 
@@ -1965,7 +2003,7 @@ impl Renderer {
                         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("clear_view"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view_data.layer.target.view,
+                                view: &view_data.layer.texture.view,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -2169,22 +2207,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("clear_staging_encoder"),
             });
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear_staging"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view_data.staging_target.view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-        }
+        view_data.staging_texture.clear(&mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
         Ok(())
     }
@@ -2380,37 +2403,7 @@ impl Renderer {
 
     /// Read pixels from the screen texture (blocking).
     pub fn read_screen_pixels(&self, width: u32, height: u32) -> Vec<Rgba8> {
-        self.read_texture_pixels(&self.screen_target.texture, width, height)
-    }
-
-    /// Read pixels from a buffer that has already been filled via copy_texture_to_buffer.
-    /// This assumes the copy command has already been submitted.
-    fn read_buffer_pixels(&self, buffer: &wgpu::Buffer, width: u32, height: u32, bytes_per_row: u32) -> Vec<Rgba8> {
-        let slice = buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
-        self.device.poll(wgpu::Maintain::Wait);
-        rx.recv().unwrap().unwrap();
-
-        let data = slice.get_mapped_range();
-        let mut pixels = Vec::with_capacity((width * height) as usize);
-
-        for y in 0..height {
-            let row_start = (y * bytes_per_row) as usize;
-            for x in 0..width {
-                let offset = row_start + (x * 4) as usize;
-                pixels.push(Rgba8::new(
-                    data[offset],
-                    data[offset + 1],
-                    data[offset + 2],
-                    data[offset + 3],
-                ));
-            }
-        }
-
-        pixels
+        self.read_texture_pixels(&self.screen_texture.texture, width, height)
     }
 
     /// Read pixels from a texture (blocking). Creates its own encoder and submit.
