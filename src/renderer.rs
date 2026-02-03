@@ -21,7 +21,7 @@ pub trait Renderer<'a>: std::marker::Sized {
     fn init(&mut self, effects: Vec<Effect>, session: &Session);
 
     fn frame(
-        &mut self,
+        renderer_handle: &Rc<RefCell<Self>>,
         session_handle: &Rc<RefCell<Session>>,
         script_state: &mut ScriptState,
         execution: &mut Execution,

@@ -244,6 +244,8 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
     );
     renderer.init(effects, &session);
 
+    let renderer_handle = Rc::new(RefCell::new(renderer));
+
     let mut render_timer = FrameTimer::new();
     let mut update_timer = FrameTimer::new();
     let mut session_events = Vec::with_capacity(16);
@@ -329,8 +331,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                 WindowEvent::RedrawRequested => {
                     drop(session);
                     render_timer.run(|avg| {
-                        renderer
-                            .frame(&session_handle, &mut script_state, &mut execution, vec![], &avg)
+                        Renderer::frame(&renderer_handle, &session_handle, &mut script_state, &mut execution, vec![], &avg)
                             .unwrap_or_else(|err| {
                                 log::error!("{}", err);
                             });
@@ -339,6 +340,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                     session = session_handle.borrow_mut();
                 }
                 WindowEvent::ScaleFactorChanged(factor) => {
+                    let mut renderer = renderer_handle.borrow_mut();
                     renderer.handle_scale_factor_changed(factor);
                 }
                 WindowEvent::CloseRequested => {
@@ -406,8 +408,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         let renderer_effects = script_state.call_view_effects(&effects, &session_handle);
 
         render_timer.run(|avg| {
-            renderer
-                    .frame(&session_handle, &mut script_state, &mut execution, renderer_effects, &avg)
+            Renderer::frame(&renderer_handle, &session_handle, &mut script_state, &mut execution, renderer_effects, &avg)
                     .unwrap_or_else(|err| {
                         log::error!("{}", err);
                     });

@@ -1165,33 +1165,34 @@ impl<'a> renderer::Renderer<'a> for Renderer {
     }
 
     fn frame(
-        &mut self,
+        renderer_handle: &Rc<RefCell<Self>>,
         session_handle: &Rc<RefCell<Session>>,
         script_state: &mut ScriptState,
         execution: &mut Execution,
         effects: Vec<session::Effect>,
         avg_frametime: &time::Duration,
     ) -> Result<(), RendererError> {
+        let mut this = renderer_handle.borrow_mut();
         let session = session_handle.borrow_mut();
         if session.state != session::State::Running {
             return Ok(());
         }
 
-        self.staging_batch.clear();
-        self.final_batch.clear();
-        self.paste_outputs.clear();
+        this.staging_batch.clear();
+        this.final_batch.clear();
+        this.paste_outputs.clear();
 
-        self.handle_effects(effects, &session).unwrap();
-        self.update_view_animations(&session);
-        self.update_view_composites(&session);
+        this.handle_effects(effects, &session).unwrap();
+        this.update_view_animations(&session);
+        this.update_view_composites(&session);
 
         // Get surface texture
-        let output = self.surface.get_current_texture()?;
+        let output = this.surface.get_current_texture()?;
         let surface_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self
+        let mut encoder = this
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render_encoder"),
@@ -1199,88 +1200,88 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Prepare draw context
         drop(session);
-        let [font_w, font_h] = self.font.size;
+        let [font_w, font_h] = this.font.size;
         script_state.ensure_user_sprite_batch(font_w, font_h);
-        self.draw_ctx.clear();
-        self.draw_ctx.draw(session_handle, script_state, avg_frametime, execution);
+        this.draw_ctx.clear();
+        this.draw_ctx.draw(session_handle, script_state, avg_frametime, execution);
         let mut session = session_handle.borrow_mut();
 
-        let [screen_w, screen_h] = self.screen_texture.size;
+        let [screen_w, screen_h] = this.screen_texture.size;
         let ortho: M44 = ortho_wgpu(screen_w, screen_h, Origin::TopLeft).into();
         let identity: M44 = Matrix4::identity().into();
 
         // Create vertex buffers for this frame
-        let ui_vertices = self.create_shape_vertices(&self.draw_ctx.ui_batch.vertices());
+        let ui_vertices = this.create_shape_vertices(&this.draw_ctx.ui_batch.vertices());
         let user_vertices = if script_state.user_batch_is_empty() {
             None
         } else {
-            self.create_shape_vertices(&script_state.user_batch_vertices())
+            this.create_shape_vertices(&script_state.user_batch_vertices())
         };
         let user_sprite_tess = if script_state.user_sprite_batch_is_empty() {
             None
         } else {
-            self.create_sprite_vertices(&script_state.user_sprite_batch_vertices())
+            this.create_sprite_vertices(&script_state.user_sprite_batch_vertices())
         };
-        let text_vertices = self.create_sprite_vertices(&self.draw_ctx.text_batch.vertices());
-        let tool_vertices = self.create_sprite_vertices(&self.draw_ctx.tool_batch.vertices());
-        let checker_vertices = self.create_sprite_vertices(&self.draw_ctx.checker_batch.vertices());
-        let cursor_verts = self.draw_ctx.cursor_sprite.vertices();
+        let text_vertices = this.create_sprite_vertices(&this.draw_ctx.text_batch.vertices());
+        let tool_vertices = this.create_sprite_vertices(&this.draw_ctx.tool_batch.vertices());
+        let checker_vertices = this.create_sprite_vertices(&this.draw_ctx.checker_batch.vertices());
+        let cursor_verts = this.draw_ctx.cursor_sprite.vertices();
 
         // Create uniform bind group with ortho and identity transform
         let uniforms = TransformUniforms { ortho, transform: identity };
-        self.queue.write_buffer(&self.transform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        this.queue.write_buffer(&this.transform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let transform_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("transform_bind_group"),
-            layout: &self.transform_bind_group_layout,
+            layout: &this.transform_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: self.transform_buffer.as_entire_binding(),
+                resource: this.transform_buffer.as_entire_binding(),
             }],
         });
 
         // Texture bind groups
-        let font_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let font_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("font_bind_group"),
-            layout: &self.texture_bind_group_layout,
+            layout: &this.texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.font.view),
+                    resource: wgpu::BindingResource::TextureView(&this.font.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(&this.sampler),
                 },
             ],
         });
 
-        let cursors_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let cursors_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cursors_bind_group"),
-            layout: &self.texture_bind_group_layout,
+            layout: &this.texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.cursors.view),
+                    resource: wgpu::BindingResource::TextureView(&this.cursors.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(&this.sampler),
                 },
             ],
         });
 
-        let checker_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let checker_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("checker_bind_group"),
-            layout: &self.texture_bind_group_layout,
+            layout: &this.texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.checker.view),
+                    resource: wgpu::BindingResource::TextureView(&this.checker.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(&this.sampler),
                 },
             ],
         });
@@ -1290,7 +1291,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             .views
             .active()
             .expect("there must always be an active view");
-        let view_data = self
+        let view_data = this
             .view_data
             .get(&v.id)
             .expect("view must have associated view data");
@@ -1299,13 +1300,13 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let view_ortho: M44 = ortho_wgpu(v.width(), v.fh, Origin::TopLeft).into();
 
         // Create staging vertex buffer from staging_batch
-        let staging_vertices = self.create_shape_vertices(&self.staging_batch.vertices());
-        let paste_vertices = self.create_sprite_vertices(&self.draw_ctx.paste_batch.vertices());
+        let staging_vertices = this.create_shape_vertices(&this.staging_batch.vertices());
+        let paste_vertices = this.create_sprite_vertices(&this.draw_ctx.paste_batch.vertices());
 
         // Always run staging pass for active view so the staging target is cleared every frame
         // (otherwise after ESC the paste preview ghost persists until next view modification).
         // Create uniform buffer for view ortho
-        let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+        let view_uniform_buffer = this.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("staging_uniform_buffer"),
             size: std::mem::size_of::<TransformUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1318,9 +1319,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             .copy_from_slice(bytemuck::bytes_of(&staging_uniforms));
         view_uniform_buffer.unmap();
 
-        let staging_transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let staging_transform_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("staging_transform_bind_group"),
-            layout: &self.transform_bind_group_layout,
+            layout: &this.transform_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: view_uniform_buffer.as_entire_binding(),
@@ -1346,7 +1347,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Draw staging brush strokes
             if let Some((buffer, count)) = staging_vertices {
-                staging_pass.set_pipeline(&self.shape_pipeline);
+                staging_pass.set_pipeline(&this.shape_pipeline);
                 staging_pass.set_bind_group(0, &staging_transform_bind_group, &[]);
                 staging_pass.set_vertex_buffer(0, buffer.slice(..));
                 staging_pass.draw(0..count, 0..1);
@@ -1354,22 +1355,22 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Draw paste preview (paste texture)
             if let Some((buffer, count)) = paste_vertices {
-                let paste_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                let paste_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("staging_paste_bind_group"),
-                    layout: &self.texture_bind_group_layout,
+                    layout: &this.texture_bind_group_layout,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&self.paste.view),
+                            resource: wgpu::BindingResource::TextureView(&this.paste.view),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                            resource: wgpu::BindingResource::Sampler(&this.sampler),
                         },
                     ],
                 });
 
-                staging_pass.set_pipeline(&self.sprite_pipeline);
+                staging_pass.set_pipeline(&this.sprite_pipeline);
                 staging_pass.set_bind_group(0, &staging_transform_bind_group, &[]);
                 staging_pass.set_bind_group(1, &paste_bind_group, &[]);
                 staging_pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1378,11 +1379,11 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         }
 
         // Render final brush strokes and paste outputs to layer target
-        let final_vertices = self.create_shape_vertices(&self.final_batch.vertices());
-        let has_paste_outputs = !self.paste_outputs.is_empty();
+        let final_vertices = this.create_shape_vertices(&this.final_batch.vertices());
+        let has_paste_outputs = !this.paste_outputs.is_empty();
 
         if final_vertices.is_some() || has_paste_outputs {
-            let view_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            let view_uniform_buffer = this.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("final_uniform_buffer"),
                 size: std::mem::size_of::<TransformUniforms>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1395,9 +1396,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 .copy_from_slice(bytemuck::bytes_of(&final_uniforms));
             view_uniform_buffer.unmap();
 
-            let final_transform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let final_transform_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("final_transform_bind_group"),
-                layout: &self.transform_bind_group_layout,
+                layout: &this.transform_bind_group_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
                     resource: view_uniform_buffer.as_entire_binding(),
@@ -1423,10 +1424,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             // Draw final brush strokes
             if let Some((buffer, count)) = final_vertices {
                 // Use replace pipeline for Blending::Constant, otherwise alpha blending
-                if self.blending == Blending::Constant {
-                    final_pass.set_pipeline(&self.shape_replace_pipeline);
+                if this.blending == Blending::Constant {
+                    final_pass.set_pipeline(&this.shape_replace_pipeline);
                 } else {
-                    final_pass.set_pipeline(&self.shape_pipeline);
+                    final_pass.set_pipeline(&this.shape_pipeline);
                 }
                 final_pass.set_bind_group(0, &final_transform_bind_group, &[]);
                 final_pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1435,26 +1436,26 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Draw paste outputs (rendered quads with paste texture)
             if has_paste_outputs {
-                let paste_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                let paste_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("final_paste_bind_group"),
-                    layout: &self.texture_bind_group_layout,
+                    layout: &this.texture_bind_group_layout,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&self.paste.view),
+                            resource: wgpu::BindingResource::TextureView(&this.paste.view),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                            resource: wgpu::BindingResource::Sampler(&this.sampler),
                         },
                     ],
                 });
 
-                final_pass.set_pipeline(&self.sprite_pipeline);
+                final_pass.set_pipeline(&this.sprite_pipeline);
                 final_pass.set_bind_group(0, &final_transform_bind_group, &[]);
                 final_pass.set_bind_group(1, &paste_bind_group, &[]);
 
-                for (buffer, count) in &self.paste_outputs {
+                for (buffer, count) in &this.paste_outputs {
                     final_pass.set_vertex_buffer(0, buffer.slice(..));
                     final_pass.draw(0..*count, 0..1);
                 }
@@ -1467,7 +1468,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("screen_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.screen_texture.view,
+                    view: &this.screen_texture.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1487,7 +1488,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             // Draw checkers if enabled
             if session.settings["checker"].is_set() {
                 if let Some((buffer, count)) = &checker_vertices {
-                    pass.set_pipeline(&self.sprite_pipeline);
+                    pass.set_pipeline(&this.sprite_pipeline);
                     pass.set_bind_group(0, &transform_bind_group, &[]);
                     pass.set_bind_group(1, &checker_bind_group, &[]);
                     pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1496,7 +1497,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             }
 
             // Render views
-            for (id, view_data) in &self.view_data {
+            for (id, view_data) in &this.view_data {
                 if let Some(view) = session.views.get(*id) {
                     let transform = Matrix4::from_translation(
                         (session.offset + view.offset).extend(*draw::VIEW_LAYER),
@@ -1508,7 +1509,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     };
 
                     // Create a temporary buffer for view transform
-                    let view_transform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    let view_transform_buffer = this.device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("view_transform_buffer"),
                         size: std::mem::size_of::<TransformUniforms>() as u64,
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1521,9 +1522,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     view_transform_buffer.unmap();
 
                     let view_transform_bind_group =
-                        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("view_transform_bind_group"),
-                            layout: &self.transform_bind_group_layout,
+                            layout: &this.transform_bind_group_layout,
                             entries: &[wgpu::BindGroupEntry {
                                 binding: 0,
                                 resource: view_transform_buffer.as_entire_binding(),
@@ -1531,9 +1532,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                         });
 
                     let view_texture_bind_group =
-                        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("view_texture_bind_group"),
-                            layout: &self.texture_bind_group_layout,
+                            layout: &this.texture_bind_group_layout,
                             entries: &[
                                 wgpu::BindGroupEntry {
                                     binding: 0,
@@ -1543,12 +1544,12 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                 },
                                 wgpu::BindGroupEntry {
                                     binding: 1,
-                                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                                    resource: wgpu::BindingResource::Sampler(&this.sampler),
                                 },
                             ],
                         });
 
-                    pass.set_pipeline(&self.sprite_pipeline);
+                    pass.set_pipeline(&this.sprite_pipeline);
                     pass.set_bind_group(0, &view_transform_bind_group, &[]);
                     pass.set_bind_group(1, &view_texture_bind_group, &[]);
                     pass.set_vertex_buffer(0, view_data.layer.vertex_buffer.slice(..));
@@ -1556,9 +1557,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
                     // Also render staging buffer
                     let staging_bind_group =
-                        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("staging_bind_group"),
-                            layout: &self.texture_bind_group_layout,
+                            layout: &this.texture_bind_group_layout,
                             entries: &[
                                 wgpu::BindGroupEntry {
                                     binding: 0,
@@ -1568,7 +1569,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                 },
                                 wgpu::BindGroupEntry {
                                     binding: 1,
-                                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                                    resource: wgpu::BindingResource::Sampler(&this.sampler),
                                 },
                             ],
                         });
@@ -1580,7 +1581,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render UI shapes
             if let Some((buffer, count)) = &ui_vertices {
-                pass.set_pipeline(&self.shape_pipeline);
+                pass.set_pipeline(&this.shape_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*count, 0..1);
@@ -1588,7 +1589,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render user script shapes (above UI).
             if let Some((buffer, count)) = &user_vertices {
-                pass.set_pipeline(&self.shape_pipeline);
+                pass.set_pipeline(&this.shape_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
                 pass.draw(0..*count, 0..1);
@@ -1596,7 +1597,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render user script text (sprite batch, same font as UI text).
             if let Some((buffer, count)) = &user_sprite_tess {
-                pass.set_pipeline(&self.sprite_pipeline);
+                pass.set_pipeline(&this.sprite_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
                 pass.set_bind_group(1, &font_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1605,7 +1606,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render text
             if let Some((buffer, count)) = &text_vertices {
-                pass.set_pipeline(&self.sprite_pipeline);
+                pass.set_pipeline(&this.sprite_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
                 pass.set_bind_group(1, &font_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1614,7 +1615,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render tool sprites
             if let Some((buffer, count)) = &tool_vertices {
-                pass.set_pipeline(&self.sprite_pipeline);
+                pass.set_pipeline(&this.sprite_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
                 pass.set_bind_group(1, &cursors_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1623,7 +1624,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render view animations if enabled
             if session.settings["animation"].is_set() {
-                for (id, view_data) in &self.view_data {
+                for (id, view_data) in &this.view_data {
                     if let Some(view) = session.views.get(*id) {
                         // Only render animations for views with more than one frame
                         if view.animation.len() > 1 && view_data.anim_vertex_count > 0 {
@@ -1637,7 +1638,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                     transform: anim_transform.into(),
                                 };
 
-                                let anim_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                                let anim_uniform_buffer = this.device.create_buffer(&wgpu::BufferDescriptor {
                                     label: Some("anim_uniform_buffer"),
                                     size: std::mem::size_of::<TransformUniforms>() as u64,
                                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1649,9 +1650,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                     .copy_from_slice(bytemuck::bytes_of(&anim_uniforms));
                                 anim_uniform_buffer.unmap();
 
-                                let anim_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                let anim_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                     label: Some("anim_transform_bind_group"),
-                                    layout: &self.transform_bind_group_layout,
+                                    layout: &this.transform_bind_group_layout,
                                     entries: &[wgpu::BindGroupEntry {
                                         binding: 0,
                                         resource: anim_uniform_buffer.as_entire_binding(),
@@ -1659,9 +1660,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                 });
 
                                 // Bind layer texture for animation
-                                let layer_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                let layer_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                     label: Some("anim_layer_bind_group"),
-                                    layout: &self.texture_bind_group_layout,
+                                    layout: &this.texture_bind_group_layout,
                                     entries: &[
                                         wgpu::BindGroupEntry {
                                             binding: 0,
@@ -1671,12 +1672,12 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                         },
                                         wgpu::BindGroupEntry {
                                             binding: 1,
-                                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                                            resource: wgpu::BindingResource::Sampler(&this.sampler),
                                         },
                                     ],
                                 });
 
-                                pass.set_pipeline(&self.sprite_pipeline);
+                                pass.set_pipeline(&this.sprite_pipeline);
                                 pass.set_bind_group(0, &anim_bind_group, &[]);
                                 pass.set_bind_group(1, &layer_bind_group, &[]);
                                 pass.set_vertex_buffer(0, anim_buffer.slice(..));
@@ -1690,20 +1691,20 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             // Render help overlay if in help mode
             if session.mode == session::Mode::Help {
                 let mut help_shape_batch = shape2d::Batch::new();
-                let mut help_text_batch = text_batch(self.font.size);
+                let mut help_text_batch = text_batch(this.font.size);
                 draw::draw_help(&session, &mut help_text_batch, &mut help_shape_batch);
 
                 // Draw help shape (background)
-                if let Some((buffer, count)) = self.create_shape_vertices(&help_shape_batch.vertices()) {
-                    pass.set_pipeline(&self.shape_pipeline);
+                if let Some((buffer, count)) = this.create_shape_vertices(&help_shape_batch.vertices()) {
+                    pass.set_pipeline(&this.shape_pipeline);
                     pass.set_bind_group(0, &transform_bind_group, &[]);
                     pass.set_vertex_buffer(0, buffer.slice(..));
                     pass.draw(0..count, 0..1);
                 }
 
                 // Draw help text
-                if let Some((buffer, count)) = self.create_sprite_vertices(&help_text_batch.vertices()) {
-                    pass.set_pipeline(&self.sprite_pipeline);
+                if let Some((buffer, count)) = this.create_sprite_vertices(&help_text_batch.vertices()) {
+                    pass.set_pipeline(&this.sprite_pipeline);
                     pass.set_bind_group(0, &transform_bind_group, &[]);
                     pass.set_bind_group(1, &font_bind_group, &[]);
                     pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1714,17 +1715,17 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Render screen to surface (final pass)
         {
-            let screen_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let screen_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("screen_bind_group"),
-                layout: &self.screen_bind_group_layout,
+                layout: &this.screen_bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&self.screen_texture.view),
+                        resource: wgpu::BindingResource::TextureView(&this.screen_texture.view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        resource: wgpu::BindingResource::Sampler(&this.sampler),
                     },
                 ],
             });
@@ -1744,7 +1745,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 occlusion_query_set: None,
             });
 
-            pass.set_pipeline(&self.screen_pipeline);
+            pass.set_pipeline(&this.screen_pipeline);
             pass.set_bind_group(0, &screen_bind_group, &[]);
             pass.draw(0..6, 0..1);
 
@@ -1759,7 +1760,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     })
                     .collect();
 
-                let cursor_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                let cursor_buffer = this.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("cursor_vertex_buffer"),
                     size: (cursor_vertices.len() * std::mem::size_of::<Cursor2dVertex>()) as u64,
                     usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
@@ -1772,46 +1773,46 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 cursor_buffer.unmap();
 
                 // Create cursor uniforms - use screen_texture size since cursor positions are in that coordinate space
-                let [cursor_w, cursor_h] = self.screen_texture.size;
+                let [cursor_w, cursor_h] = this.screen_texture.size;
                 let cursor_ortho: M44 = ortho_wgpu(cursor_w, cursor_h, Origin::TopLeft).into();
                 let ui_scale = session.settings["scale"].to_f64();
-                let pixel_ratio = platform::pixel_ratio(self.scale_factor);
+                let pixel_ratio = platform::pixel_ratio(this.scale_factor);
                 let cursor_uniforms = CursorUniforms {
                     ortho: cursor_ortho,
                     scale: (ui_scale * pixel_ratio) as f32,
                     _padding: [0.0; 7],
                 };
-                self.queue.write_buffer(&self.cursor_uniform_buffer, 0, bytemuck::bytes_of(&cursor_uniforms));
+                this.queue.write_buffer(&this.cursor_uniform_buffer, 0, bytemuck::bytes_of(&cursor_uniforms));
 
-                let cursor_uniform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                let cursor_uniform_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("cursor_uniform_bind_group"),
-                    layout: &self.cursor_bind_group_layout,
+                    layout: &this.cursor_bind_group_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: self.cursor_uniform_buffer.as_entire_binding(),
+                        resource: this.cursor_uniform_buffer.as_entire_binding(),
                     }],
                 });
 
-                let cursor_texture_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                let cursor_texture_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("cursor_texture_bind_group"),
-                    layout: &self.cursor_texture_bind_group_layout,
+                    layout: &this.cursor_texture_bind_group_layout,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&self.cursors.view),
+                            resource: wgpu::BindingResource::TextureView(&this.cursors.view),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&self.screen_texture.view),
+                            resource: wgpu::BindingResource::TextureView(&this.screen_texture.view),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                            resource: wgpu::BindingResource::Sampler(&this.sampler),
                         },
                     ],
                 });
 
-                pass.set_pipeline(&self.cursor_pipeline);
+                pass.set_pipeline(&this.cursor_pipeline);
                 pass.set_bind_group(0, &cursor_uniform_bind_group, &[]);
                 pass.set_bind_group(1, &cursor_texture_bind_group, &[]);
                 pass.set_vertex_buffer(0, cursor_buffer.slice(..));
@@ -1820,17 +1821,17 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render debug/overlay text if debug setting is on or execution is not normal
             if session.settings["debug"].is_set() || !execution.is_normal() {
-                let overlay_vertices = self.create_sprite_vertices(&self.draw_ctx.overlay_batch.vertices());
+                let overlay_vertices = this.create_sprite_vertices(&this.draw_ctx.overlay_batch.vertices());
                 if let Some((buffer, count)) = overlay_vertices {
                     // Use BottomLeft ortho for overlay (like GL)
-                    let [overlay_w, overlay_h] = self.screen_texture.size;
+                    let [overlay_w, overlay_h] = this.screen_texture.size;
                     let overlay_ortho: M44 = ortho_wgpu(overlay_w, overlay_h, Origin::BottomLeft).into();
                     let overlay_uniforms = TransformUniforms {
                         ortho: overlay_ortho,
                         transform: identity,
                     };
 
-                    let overlay_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    let overlay_uniform_buffer = this.device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("overlay_uniform_buffer"),
                         size: std::mem::size_of::<TransformUniforms>() as u64,
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1842,16 +1843,16 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                         .copy_from_slice(bytemuck::bytes_of(&overlay_uniforms));
                     overlay_uniform_buffer.unmap();
 
-                    let overlay_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    let overlay_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("overlay_transform_bind_group"),
-                        layout: &self.transform_bind_group_layout,
+                        layout: &this.transform_bind_group_layout,
                         entries: &[wgpu::BindGroupEntry {
                             binding: 0,
                             resource: overlay_uniform_buffer.as_entire_binding(),
                         }],
                     });
 
-                    pass.set_pipeline(&self.sprite_pipeline);
+                    pass.set_pipeline(&this.sprite_pipeline);
                     pass.set_bind_group(0, &overlay_bind_group, &[]);
                     pass.set_bind_group(1, &font_bind_group, &[]);
                     pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1866,16 +1867,16 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             .filter(|v| v.is_dirty())
             .map(|v| (v.id, v.is_resized()));
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        this.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
         // If active view is dirty, record a snapshot of it (like GL layer.pixels()).
         if let Some((view_id, was_resized)) = should_record {
-            let view_data = self
+            let view_data = this
                 .view_data
                 .get(&view_id)
                 .expect("view must have associated view data");
-            let pixels = view_data.layer.pixels(&self.device, &self.queue);
+            let pixels = view_data.layer.pixels(&this.device, &this.queue);
 
             if let Some(v) = session.views.get_mut(view_id) {
                 if was_resized {
@@ -1888,8 +1889,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Record snapshots if needed
         if !execution.is_normal() {
-            let [w, h] = self.screen_texture.size;
-            let texels = self.read_screen_pixels(w, h);
+            let [w, h] = this.screen_texture.size;
+            let texels = this.read_screen_pixels(w, h);
             execution.record(&texels).ok();
         }
 
