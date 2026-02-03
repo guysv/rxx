@@ -13,11 +13,12 @@ use crate::gfx::sprite2d;
 use crate::gfx::{Repeat, Rgba8};
 use crate::session::{Effect, MessageType, Session};
 use crate::view::{View, ViewId, ViewResource};
-use crate::wgpu;
+use crate::wgpu::{self, RenderTexture, RenderTextureHandle};
 
 use rhai::{Array, CallFnOptions, Dynamic, Engine, Scope, AST};
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -54,6 +55,10 @@ pub struct ScriptState {
     pub script_ast: Option<Rc<RefCell<AST>>>,
     /// User batches for script's draw() event (shape + sprite for text), shared with Rhai closures.
     pub script_user_batch: UserBatch,
+    /// Script-created render textures (owned here so renderer stays stateless for script resources).
+    pub script_render_textures: BTreeMap<u64, Rc<RefCell<RenderTexture>>>,
+    /// Next id for script_render_textures.
+    pub next_script_texture_id: u64,
 }
 
 impl ScriptState {
@@ -68,7 +73,17 @@ impl ScriptState {
                 Rc::new(RefCell::new(shape2d::Batch::new())),
                 Rc::new(RefCell::new(None)),
             ),
+            script_render_textures: BTreeMap::new(),
+            next_script_texture_id: 0,
         }
+    }
+
+    /// Store a render texture and return its script handle id. Used by the renderer when creating script textures.
+    pub fn add_render_texture(&mut self, texture: RenderTexture) -> u64 {
+        let id = self.next_script_texture_id;
+        self.next_script_texture_id = self.next_script_texture_id.saturating_add(1);
+        self.script_render_textures.insert(id, Rc::new(RefCell::new(texture)));
+        id
     }
 
     /// Ensure the user sprite batch exists (created with font texture size). Call from renderer each frame.
@@ -82,51 +97,78 @@ impl ScriptState {
         self.script_path = Some(path);
     }
 
-    /// Load or reload the main Rhai script: compile, create scope, call init(session, renderer).
-    /// Returns an error message for the caller to display (e.g. via session.message).
-    pub fn load_script(
+    /// Populate engine, scope, ast, mtime after a successful load. Used by load_script.
+    fn apply_loaded_script(
         &mut self,
-        session_handle: &Rc<RefCell<Session>>,
-        renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
-    ) -> Result<(), String> {
-        let path = match &self.script_path {
+        engine: Engine,
+        scope: Scope<'static>,
+        ast: AST,
+        path: &PathBuf,
+    ) {
+        self.script_engine = Some(engine);
+        self.script_scope = Some(scope);
+        self.script_ast = Some(Rc::new(RefCell::new(ast)));
+        self.script_mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    }
+}
+
+/// Load or reload the main Rhai script: compile, create scope, call init(session, renderer).
+/// Takes script_state_handle so that init() can call create_render_texture (which borrows it)
+/// without RefCell double-borrow. Returns an error message for the caller to display.
+pub fn load_script(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    session_handle: &Rc<RefCell<Session>>,
+    renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
+) -> Result<(), String> {
+    let (path, shape_batch, sprite_batch) = {
+        let state = script_state_handle.borrow();
+        let path = match state.script_path.as_ref() {
             Some(p) => p.clone(),
             None => return Ok(()),
         };
         if !path.exists() {
             return Err(format!("Script not found: {}", path.display()));
         }
-        let mut engine = Engine::new();
-        register_draw_primitives(
-            &mut engine,
-            self.script_user_batch.0.clone(),
-            self.script_user_batch.1.clone(),
-        );
-        register_session_handle(&mut engine);
-        register_renderer_handle(&mut engine);
+        (
+            path,
+            state.script_user_batch.0.clone(),
+            state.script_user_batch.1.clone(),
+        )
+    };
+    let mut engine = Engine::new();
+    register_draw_primitives(&mut engine, shape_batch, sprite_batch);
+    register_session_handle(&mut engine);
+    register_renderer_handle(&mut engine, renderer_handle, script_state_handle);
 
-        // Collector for script commands registered during init()
-        let script_commands: Rc<RefCell<Vec<(String, String)>>> =
-            Rc::new(RefCell::new(Vec::new()));
-        register_command_api(&mut engine, script_commands.clone());
+    let script_commands: Rc<RefCell<Vec<(String, String)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    register_command_api(&mut engine, script_commands.clone());
 
-        let ast = compile_file(&engine, &path)
-            .map_err(|e| format!("Script compile error: {}", e))?;
-        let mut scope = Scope::new();
-        call_init(&engine, &mut scope, &ast, session_handle, renderer_handle)
-            .map_err(|e| format!("Script init error: {}", e))?;
+    let ast = compile_file(&engine, &path)
+        .map_err(|e| format!("Script compile error: {}", e))?;
+    let mut scope = Scope::new();
+    call_init(&engine, &mut scope, &ast, session_handle, renderer_handle)
+        .map_err(|e| format!("Script init error: {}", e))?;
 
-        // Apply collected script commands to session's command line
-        let cmds = script_commands.borrow().clone();
-        session_handle.borrow_mut().set_script_commands(cmds);
+    let cmds = script_commands.borrow().clone();
+    session_handle.borrow_mut().set_script_commands(cmds);
 
-        self.script_engine = Some(engine);
-        self.script_scope = Some(scope);
-        self.script_ast = Some(Rc::new(RefCell::new(ast)));
-        self.script_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-        Ok(())
-    }
+    script_state_handle
+        .borrow_mut()
+        .apply_loaded_script(engine, scope, ast, &path);
+    Ok(())
+}
 
+/// Reload the main Rhai script (recompile and call init again). Errors are ignored.
+pub fn reload_script(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    session_handle: &Rc<RefCell<Session>>,
+    renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
+) {
+    let _ = load_script(script_state_handle, session_handle, renderer_handle);
+}
+
+impl ScriptState {
     /// True if the script file on disk is newer than the last load (or we never stored mtime).
     pub fn script_file_modified_since_load(&self) -> bool {
         let path = match &self.script_path {
@@ -148,15 +190,6 @@ impl ScriptState {
         self.script_path.as_ref()
     }
 
-    /// Reload the main Rhai script: recompile and call init(session, renderer) again.
-    /// Errors are ignored (e.g. for hot-reload); use load_script() for explicit feedback.
-    pub fn reload_script(
-        &mut self,
-        session_handle: &Rc<RefCell<Session>>,
-        renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
-    ) {
-        let _ = self.load_script(session_handle, renderer_handle);
-    }
 
     /// Traverse effects: call script's `view_added` / `view_removed` handlers and run script
     /// commands (with session messages on error). Returns effects not consumed for the renderer.
@@ -323,12 +356,34 @@ pub fn register_session_handle(engine: &mut Engine) {
 }
 
 /// Register renderer handle type so scripts can use it in init(session, renderer).
-/// Exposes width and height from the renderer's window size.
-pub fn register_renderer_handle(engine: &mut Engine) {
+/// Exposes create_render_texture, view_render_texture.
+/// Script-created textures are stored in script_state_handle.
+pub fn register_renderer_handle(
+    engine: &mut Engine,
+    _renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+) {
+    let script_state_create = script_state_handle.clone();
     engine
+        .register_type_with_name::<RenderTextureHandle>("RenderTextureHandle")
         .register_type_with_name::<Rc<RefCell<wgpu::Renderer>>>("Renderer")
-        .register_get("width", |r: &mut Rc<RefCell<wgpu::Renderer>>| r.borrow().win_size.width)
-        .register_get("height", |r: &mut Rc<RefCell<wgpu::Renderer>>| r.borrow().win_size.height);
+        .register_fn(
+            "create_render_texture",
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, width: i64, height: i64| {
+                let mut script_state = script_state_create.borrow_mut();
+                r.borrow_mut().create_render_texture(&mut *script_state, width as u32, height as u32)
+            },
+        )
+        .register_fn(
+            "view_render_texture",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>, view_id: i64| -> Dynamic {
+                let id = ViewId(view_id as u16);
+                match r.borrow().view_render_texture(id) {
+                    Some(h) => Dynamic::from(h),
+                    None => Dynamic::UNIT,
+                }
+            },
+        );
 }
 
 /// Register Vector2<f32> and Rgba8 for script use. vec2(x,y), rgb8(r,g,b), rgb8(r,g,b,a).

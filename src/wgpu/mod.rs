@@ -166,8 +166,8 @@ impl TextureBundle {
     }
 }
 
-/// Render texture (like a framebuffer).
-struct RenderTexture {
+/// Render texture (like a framebuffer). Public so script state can own script-created textures.
+pub struct RenderTexture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     size: [u32; 2],
@@ -340,9 +340,18 @@ impl RenderTexture {
     }
 }
 
+/// Handle to a render texture exposed to scripts. Either a view's layer texture or a script-created texture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderTextureHandle {
+    /// Refers to view_data[view_id].layer.texture
+    ViewLayer(ViewId),
+    /// Refers to script_render_textures[id]
+    ScriptCreated(u64),
+}
+
 /// Per-layer data for a view.
 struct LayerData {
-    texture: RenderTexture,
+    texture: Rc<RefCell<RenderTexture>>,
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
 }
@@ -408,7 +417,7 @@ impl LayerData {
         }
 
         Self {
-            texture,
+            texture: Rc::new(RefCell::new(texture)),
             vertex_buffer,
             vertex_count: verts.len() as u32,
         }
@@ -416,20 +425,20 @@ impl LayerData {
 
     #[allow(dead_code)]
     fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.texture.clear(encoder);
+        self.texture.borrow_mut().clear(encoder);
     }
 
     fn upload(&self, queue: &wgpu::Queue, texels: &[u8]) {
-        self.texture.upload(queue, texels);
+        self.texture.borrow_mut().upload(queue, texels);
     }
 
     fn upload_part(&self, queue: &wgpu::Queue, offset: [u32; 2], size: [u32; 2], texels: &[u8]) {
-        self.texture.upload_part(queue, offset, size, texels);
+        self.texture.borrow_mut().upload_part(queue, offset, size, texels);
     }
 
     /// Snapshot of the layer pixels (blocking readback). Matches the GL `pixels()` API.
     fn pixels(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Rgba8> {
-        self.texture.pixels(device, queue)
+        self.texture.borrow_mut().pixels(device, queue)
     }
 }
 
@@ -1409,7 +1418,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let mut final_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("final_brush_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view_data.layer.texture.view,
+                    view: &view_data.layer.texture.borrow().view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -1539,7 +1548,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                 wgpu::BindGroupEntry {
                                     binding: 0,
                                     resource: wgpu::BindingResource::TextureView(
-                                        &view_data.layer.texture.view,
+                                        &view_data.layer.texture.borrow().view,
                                     ),
                                 },
                                 wgpu::BindGroupEntry {
@@ -1667,7 +1676,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                         wgpu::BindGroupEntry {
                                             binding: 0,
                                             resource: wgpu::BindingResource::TextureView(
-                                                &view_data.layer.texture.view,
+                                                &view_data.layer.texture.borrow().view,
                                             ),
                                         },
                                         wgpu::BindGroupEntry {
@@ -1904,6 +1913,32 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 }
 
 impl Renderer {
+    /// Create a new render texture and return a handle. The texture is stored in script_state.
+    pub fn create_render_texture(
+        &mut self,
+        script_state: &mut ScriptState,
+        width: u32,
+        height: u32,
+    ) -> RenderTextureHandle {
+        let texture = RenderTexture::new(
+            &self.device,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        );
+        let id = script_state.add_render_texture(texture);
+        RenderTextureHandle::ScriptCreated(id)
+    }
+
+    /// Return a handle to the given view's layer texture, or None if the view has no render data.
+    pub fn view_render_texture(&self, view_id: ViewId) -> Option<RenderTextureHandle> {
+        if self.view_data.contains_key(&view_id) {
+            Some(RenderTextureHandle::ViewLayer(view_id))
+        } else {
+            None
+        }
+    }
+
     pub fn handle_resized(&mut self, size: platform::LogicalSize) {
         let physical = size.to_physical(self.scale_factor);
 
@@ -2004,7 +2039,7 @@ impl Renderer {
                         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("clear_view"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view_data.layer.texture.view,
+                                view: &view_data.layer.texture.borrow().view,
                                 resolve_target: None,
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Clear(wgpu::Color {

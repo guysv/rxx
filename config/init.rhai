@@ -4,6 +4,13 @@ fn init(session_in, renderer_in) {
     let lookup_views = #{};
     register_command("lt/on", "Add active view to lookup set");
     register_command("lt/off", "Remove active view from lookup set");
+
+    // Demo render texture APIs
+    let created_handle = renderer.create_render_texture(64, 64);
+    print(`create_render_texture(64, 64) => ${created_handle}`);
+    let view_handle = renderer.view_render_texture(session.active_view_id);
+    print(`view_render_texture(${session.active_view_id}) => ${view_handle}`);
+    
     print(`script initialized`);
 }
 

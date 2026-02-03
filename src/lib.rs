@@ -192,21 +192,26 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
     drop(session); // release so load_script can borrow session_handle
 
-    let mut script_state = ScriptState::new();
+    let script_state_handle: Rc<RefCell<ScriptState>> =
+        Rc::new(RefCell::new(ScriptState::new()));
     if let Some(path) = options.script.clone() {
-        script_state.set_path(path);
-        if let Err(e) = script_state.load_script(&session_handle, &renderer_handle) {
+        script_state_handle.borrow_mut().set_path(path);
+        if let Err(e) =
+            script::load_script(&script_state_handle, &session_handle, &renderer_handle)
+        {
             log::error!("Error loading script: {}", e);
         }
     }
 
     let wait_events = execution.is_normal() || execution.is_recording();
 
-    let script_reload_pending: Option<Arc<AtomicBool>> =
-        script_state.script_path().map(|_| Arc::new(AtomicBool::new(false)));
+    let script_reload_pending: Option<Arc<AtomicBool>> = script_state_handle
+        .borrow()
+        .script_path()
+        .map(|_| Arc::new(AtomicBool::new(false)));
 
     if let (Some(script_path), Some(pending)) = (
-        script_state.script_path().cloned(),
+        script_state_handle.borrow().script_path().cloned(),
         script_reload_pending.as_ref(),
     ) {
         let pending_clone = Arc::clone(pending);
@@ -274,10 +279,11 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         }
 
         if let Some(ref flag) = script_reload_pending {
-            if flag.swap(false, Ordering::Relaxed) && script_state.script_file_modified_since_load()
+            if flag.swap(false, Ordering::Relaxed)
+                && script_state_handle.borrow().script_file_modified_since_load()
             {
                 drop(session);
-                script_state.reload_script(&session_handle, &renderer_handle);
+                script::reload_script(&script_state_handle, &session_handle, &renderer_handle);
                 session = session_handle.borrow_mut();
             }
         }
@@ -332,10 +338,17 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                 WindowEvent::RedrawRequested => {
                     drop(session);
                     render_timer.run(|avg| {
-                        Renderer::frame(&renderer_handle, &session_handle, &mut script_state, &mut execution, vec![], &avg)
-                            .unwrap_or_else(|err| {
-                                log::error!("{}", err);
-                            });
+                        Renderer::frame(
+                            &renderer_handle,
+                            &session_handle,
+                            &mut *script_state_handle.borrow_mut(),
+                            &mut execution,
+                            vec![],
+                            &avg,
+                        )
+                        .unwrap_or_else(|err| {
+                            log::error!("{}", err);
+                        });
                     });
                     win.present();
                     session = session_handle.borrow_mut();
@@ -398,22 +411,30 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             update_timer.run(|avg| session.update(&mut session_events, &mut execution, delta, avg));
 
         if let Some(path) = session.take_pending_script_path() {
-            script_state.set_path(path);
-            match script_state.load_script(&session_handle, &renderer_handle) {
+            script_state_handle.borrow_mut().set_path(path);
+            match script::load_script(&script_state_handle, &session_handle, &renderer_handle) {
                 Ok(()) => session.message("Script loaded".to_string(), MessageType::Info),
                 Err(e) => session.message(e, MessageType::Error),
             }
         }
 
         drop(session);
-        let renderer_effects = script_state.call_view_effects(&effects, &session_handle);
+        let renderer_effects =
+            script_state_handle.borrow_mut().call_view_effects(&effects, &session_handle);
 
         render_timer.run(|avg| {
-            Renderer::frame(&renderer_handle, &session_handle, &mut script_state, &mut execution, renderer_effects, &avg)
-                    .unwrap_or_else(|err| {
-                        log::error!("{}", err);
-                    });
+            Renderer::frame(
+                &renderer_handle,
+                &session_handle,
+                &mut *script_state_handle.borrow_mut(),
+                &mut execution,
+                renderer_effects,
+                &avg,
+            )
+            .unwrap_or_else(|err| {
+                log::error!("{}", err);
             });
+        });
         session = session_handle.borrow_mut();
 
         session.cleanup();
