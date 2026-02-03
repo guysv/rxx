@@ -144,14 +144,6 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         .init(options.source.clone())?;
     let session_handle = Rc::new(RefCell::new(session));
 
-    let mut script_state = ScriptState::new();
-    if let Some(path) = options.script.clone() {
-        script_state.set_path(path);
-        if let Err(e) = script_state.load_script(&session_handle) {
-            log::error!("Error loading script: {}", e);
-        }
-    }
-
     let mut session = session_handle.borrow_mut();
     if options.debug {
         session
@@ -180,6 +172,32 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                 .expect("'animation' is a bool");
         }
         _ => {}
+    }
+
+    let mut renderer: wgpu::Renderer = Renderer::new(&mut win, win_size, scale_factor, assets)?;
+
+    if let Err(e) = session.edit(paths) {
+        session.message(format!("Error loading path(s): {}", e), MessageType::Error);
+    }
+    // Make sure our session ticks once before anything is rendered.
+    let effects = session.update(
+        &mut vec![],
+        &mut execution,
+        Duration::default(),
+        Duration::default(),
+    );
+    renderer.init(effects, &session);
+
+    let renderer_handle = Rc::new(RefCell::new(renderer));
+
+    drop(session); // release so load_script can borrow session_handle
+
+    let mut script_state = ScriptState::new();
+    if let Some(path) = options.script.clone() {
+        script_state.set_path(path);
+        if let Err(e) = script_state.load_script(&session_handle, &renderer_handle) {
+            log::error!("Error loading script: {}", e);
+        }
     }
 
     let wait_events = execution.is_normal() || execution.is_recording();
@@ -230,22 +248,6 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         });
     }
 
-    let mut renderer: wgpu::Renderer = Renderer::new(&mut win, win_size, scale_factor, assets)?;
-
-    if let Err(e) = session.edit(paths) {
-        session.message(format!("Error loading path(s): {}", e), MessageType::Error);
-    }
-    // Make sure our session ticks once before anything is rendered.
-    let effects = session.update(
-        &mut vec![],
-        &mut execution,
-        Duration::default(),
-        Duration::default(),
-    );
-    renderer.init(effects, &session);
-
-    let renderer_handle = Rc::new(RefCell::new(renderer));
-
     let mut render_timer = FrameTimer::new();
     let mut update_timer = FrameTimer::new();
     let mut session_events = Vec::with_capacity(16);
@@ -254,7 +256,6 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
     let mut hovering = false;
     let mut delta;
 
-    drop(session);
     while !win.is_closing() {
         let mut session = session_handle.borrow_mut();
         match session.animation_delay() {
@@ -276,7 +277,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             if flag.swap(false, Ordering::Relaxed) && script_state.script_file_modified_since_load()
             {
                 drop(session);
-                script_state.reload_script(&session_handle);
+                script_state.reload_script(&session_handle, &renderer_handle);
                 session = session_handle.borrow_mut();
             }
         }
@@ -398,7 +399,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
         if let Some(path) = session.take_pending_script_path() {
             script_state.set_path(path);
-            match script_state.load_script(&session_handle) {
+            match script_state.load_script(&session_handle, &renderer_handle) {
                 Ok(()) => session.message("Script loaded".to_string(), MessageType::Info),
                 Err(e) => session.message(e, MessageType::Error),
             }

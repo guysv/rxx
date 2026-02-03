@@ -1,7 +1,7 @@
 //! Rhai script loading and event-handler lifecycle.
 //!
 //! Follows the [event-handler pattern](https://rhai.rs/book/patterns/events-1.html):
-//! one main script with `init(session)`; custom Scope + CallFnOptions (eval_ast false,
+//! one main script with `init(session, renderer)`; custom Scope + CallFnOptions (eval_ast false,
 //! rewind_scope false) so variables defined in `init()` persist.
 
 use crate::draw::{self, USER_LAYER};
@@ -13,6 +13,7 @@ use crate::gfx::sprite2d;
 use crate::gfx::{Repeat, Rgba8};
 use crate::session::{Effect, MessageType, Session};
 use crate::view::{View, ViewId, ViewResource};
+use crate::wgpu;
 
 use rhai::{Array, CallFnOptions, Dynamic, Engine, Scope, AST};
 
@@ -81,9 +82,13 @@ impl ScriptState {
         self.script_path = Some(path);
     }
 
-    /// Load or reload the main Rhai script: compile, create scope, call init(session).
+    /// Load or reload the main Rhai script: compile, create scope, call init(session, renderer).
     /// Returns an error message for the caller to display (e.g. via session.message).
-    pub fn load_script(&mut self, session_handle: &Rc<RefCell<Session>>) -> Result<(), String> {
+    pub fn load_script(
+        &mut self,
+        session_handle: &Rc<RefCell<Session>>,
+        renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
+    ) -> Result<(), String> {
         let path = match &self.script_path {
             Some(p) => p.clone(),
             None => return Ok(()),
@@ -98,6 +103,7 @@ impl ScriptState {
             self.script_user_batch.1.clone(),
         );
         register_session_handle(&mut engine);
+        register_renderer_handle(&mut engine);
 
         // Collector for script commands registered during init()
         let script_commands: Rc<RefCell<Vec<(String, String)>>> =
@@ -107,7 +113,7 @@ impl ScriptState {
         let ast = compile_file(&engine, &path)
             .map_err(|e| format!("Script compile error: {}", e))?;
         let mut scope = Scope::new();
-        call_init(&engine, &mut scope, &ast, session_handle)
+        call_init(&engine, &mut scope, &ast, session_handle, renderer_handle)
             .map_err(|e| format!("Script init error: {}", e))?;
 
         // Apply collected script commands to session's command line
@@ -142,10 +148,14 @@ impl ScriptState {
         self.script_path.as_ref()
     }
 
-    /// Reload the main Rhai script: recompile and call init(session) again.
+    /// Reload the main Rhai script: recompile and call init(session, renderer) again.
     /// Errors are ignored (e.g. for hot-reload); use load_script() for explicit feedback.
-    pub fn reload_script(&mut self, session_handle: &Rc<RefCell<Session>>) {
-        let _ = self.load_script(session_handle);
+    pub fn reload_script(
+        &mut self,
+        session_handle: &Rc<RefCell<Session>>,
+        renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
+    ) {
+        let _ = self.load_script(session_handle, renderer_handle);
     }
 
     /// Traverse effects: call script's `view_added` / `view_removed` handlers and run script
@@ -286,7 +296,7 @@ pub fn compile_file(engine: &Engine, path: &Path) -> Result<AST, Box<rhai::EvalA
     engine.compile_file(path.into())
 }
 
-/// Register session handle type so scripts can use it in init(session).
+/// Register session handle type so scripts can use it in init(session, renderer).
 /// Exposes width, height, offset_x, offset_y from the session.
 pub fn register_session_handle(engine: &mut Engine) {
     engine
@@ -310,6 +320,15 @@ pub fn register_session_handle(engine: &mut Engine) {
             let id = ViewId(id as u16);
             Dynamic::from(ScriptView::from(s.borrow().view(id)))
         });
+}
+
+/// Register renderer handle type so scripts can use it in init(session, renderer).
+/// Exposes width and height from the renderer's window size.
+pub fn register_renderer_handle(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<Rc<RefCell<wgpu::Renderer>>>("Renderer")
+        .register_get("width", |r: &mut Rc<RefCell<wgpu::Renderer>>| r.borrow().win_size.width)
+        .register_get("height", |r: &mut Rc<RefCell<wgpu::Renderer>>| r.borrow().win_size.height);
 }
 
 /// Register Vector2<f32> and Rgba8 for script use. vec2(x,y), rgb8(r,g,b), rgb8(r,g,b,a).
@@ -436,7 +455,7 @@ fn register_command_api(engine: &mut Engine, commands: Rc<RefCell<Vec<(String, S
     });
 }
 
-/// Call the script's `init(session)` function with options so that new variables
+/// Call the script's `init(session, renderer)` function with options so that new variables
 /// introduced in the scope are retained (rewind_scope false) and the AST
 /// is not re-evaluated (eval_ast false).
 ///
@@ -446,13 +465,15 @@ pub fn call_init(
     scope: &mut Scope,
     ast: &AST,
     session_handle: &Rc<RefCell<Session>>,
+    renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     let options = CallFnOptions::new()
         .eval_ast(false)
         .rewind_scope(false);
 
     let session = session_handle.clone();
-    match engine.call_fn_with_options::<()>(options, scope, ast, "init", (session,)) {
+    let renderer = renderer_handle.clone();
+    match engine.call_fn_with_options::<()>(options, scope, ast, "init", (session, renderer)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e) => Ok(()),
         Err(e) => Err(e),
