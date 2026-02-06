@@ -50,6 +50,8 @@ fn cmd_lt_off(args) {
 
 fn shade(encoder) {
     print(`shade called with encoder: ${encoder}`);
+    let pass = encoder.begin_render_pass();
+    print(`pass: ${pass}`);
 }
 
 fn render(pass) {

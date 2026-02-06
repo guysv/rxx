@@ -139,6 +139,7 @@ pub fn load_script(
     register_draw_primitives(&mut engine, shape_batch, sprite_batch);
     register_session_handle(&mut engine);
     register_renderer_handle(&mut engine, renderer_handle, script_state_handle);
+    register_wgpu_types(&mut engine);
 
     let script_commands: Rc<RefCell<Vec<(String, String)>>> =
         Rc::new(RefCell::new(Vec::new()));
@@ -272,6 +273,18 @@ impl ScriptState {
             _ => return Ok(()),
         };
         call_shade(engine, scope, &ast.borrow(), encoder)
+    }
+
+    pub fn call_render_event(&mut self, pass: &Rc<RefCell<wgpu::Pass<'static>>>) -> Result<(), Box<rhai::EvalAltResult>> {
+        let (engine, scope, ast) = match (
+            self.script_engine.as_ref(),
+            self.script_scope.as_mut(),
+            self.script_ast.as_ref(),
+        ) {
+            (Some(e), Some(s), Some(a)) => (e, s, a),
+            _ => return Ok(()),
+        };
+        call_render(engine, scope, &ast.borrow(), pass)
     }
 
     /// Get the user shape batch vertices for rendering.
@@ -514,6 +527,30 @@ pub fn register_draw_primitives(
     });
 }
 
+pub fn register_wgpu_types(engine: &mut Engine) {
+    engine.register_type_with_name::<Rc<RefCell<wgpu::Encoder>>>("Encoder")
+        .register_fn("begin_render_pass", |encoder: &mut Rc<RefCell<wgpu::Encoder>>| {
+            // let pass = encoder.borrow_mut().begin_render_pass(&wgpu::PassDescriptor::<'static>{
+            //     label: Some("test"),
+            //     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            //         view: &view_data.staging_texture.view,
+            //         resolve_target: None,
+            //         ops: wgpu::Operations {
+            //             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            //             store: wgpu::StoreOp::Store,
+            //         },
+            //     })],
+            //     depth_stencil_attachment: None,
+            //     timestamp_writes: None,
+            //     occlusion_query_set: None,
+            // })
+            // .forget_lifetime();
+
+            // // Pack pass and encoder into a bundle we can return to the script wrapped in Rc<RefCell<>>
+            // Rc::new(RefCell::new(pass))
+        });
+}
+
 /// Register the `register_command(name, help)` function for scripts to register custom commands.
 /// Commands are collected in the provided `Rc<RefCell<Vec<(String, String)>>>`.
 fn register_command_api(engine: &mut Engine, commands: Rc<RefCell<Vec<(String, String)>>>) {
@@ -572,6 +609,19 @@ pub fn call_shade(
     encoder: &Rc<RefCell<wgpu::Encoder>>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "shade", (encoder.clone(),)) {
+        Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn call_render(
+    engine: &Engine,
+    scope: &mut Scope,
+    ast: &AST,
+    pass: &Rc<RefCell<wgpu::Pass<'static>>>,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    match engine.call_fn::<()>(scope, ast, "render", (pass.clone(),)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e) => Ok(()),
         Err(e) => Err(e),

@@ -469,6 +469,9 @@ impl ViewData {
 }
 
 pub type Encoder = wgpu::CommandEncoder;
+pub type Pass<'a> = wgpu::RenderPass<'a>;
+pub type PassDescriptor<'a> = wgpu::RenderPassDescriptor<'a>;
+pub type RenderPassColorAttachment<'a> = wgpu::RenderPassColorAttachment<'a>;
 
 /// The wgpu renderer.
 pub struct Renderer {
@@ -1729,6 +1732,12 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     pass.set_vertex_buffer(0, buffer.slice(..));
                     pass.draw(0..count, 0..1);
                 }
+            }
+
+            let pass = pass.forget_lifetime();
+            let pass_handle = Rc::new(RefCell::new(pass));
+            if let Err(e) = script_state.call_render_event(&pass_handle) {
+                warn!("Script render error: {}", e);
             }
         }
 
