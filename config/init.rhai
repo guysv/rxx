@@ -47,3 +47,11 @@ fn cmd_lt_off(args) {
     lookup_views.remove(`${vid}`);
     print(`view removed from lookup: ${vid}`);
 }
+
+fn shade(encoder) {
+    print(`shade called with encoder: ${encoder}`);
+}
+
+fn render(pass) {
+    print(`render called with pass: ${pass}`);
+}

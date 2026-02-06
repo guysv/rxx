@@ -262,6 +262,18 @@ impl ScriptState {
         call_draw(engine, scope, &ast.borrow())
     }
 
+    pub fn call_shade_event(&mut self, encoder: &Rc<RefCell<wgpu::Encoder>>) -> Result<(), Box<rhai::EvalAltResult>> {
+        let (engine, scope, ast) = match (
+            self.script_engine.as_ref(),
+            self.script_scope.as_mut(),
+            self.script_ast.as_ref(),
+        ) {
+            (Some(e), Some(s), Some(a)) => (e, s, a),
+            _ => return Ok(()),
+        };
+        call_shade(engine, scope, &ast.borrow(), encoder)
+    }
+
     /// Get the user shape batch vertices for rendering.
     pub fn user_batch_vertices(&self) -> Vec<crate::gfx::shape2d::Vertex> {
         self.script_user_batch.0.borrow().vertices()
@@ -545,6 +557,21 @@ pub fn call_draw(
     ast: &AST,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "draw", ()) {
+        Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Call the script's `shade(encoder)` event handler.
+
+pub fn call_shade(
+    engine: &Engine,
+    scope: &mut Scope,
+    ast: &AST,
+    encoder: &Rc<RefCell<wgpu::Encoder>>,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    match engine.call_fn::<()>(scope, ast, "shade", (encoder.clone(),)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e) => Ok(()),
         Err(e) => Err(e),

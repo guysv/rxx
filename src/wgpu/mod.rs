@@ -468,6 +468,8 @@ impl ViewData {
     }
 }
 
+pub type Encoder = wgpu::CommandEncoder;
+
 /// The wgpu renderer.
 pub struct Renderer {
     pub win_size: LogicalSize,
@@ -1470,6 +1472,14 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 }
             }
         }
+
+        let encoder_handle = Rc::new(RefCell::new(encoder));
+        drop(this);
+        if let Err(e) = script_state.call_shade_event(&encoder_handle) {
+            warn!("Script shade error: {}", e);
+        }
+        let mut encoder = Rc::try_unwrap(encoder_handle).unwrap().into_inner();
+        let mut this = renderer_handle.borrow_mut();
 
         // Render to screen framebuffer
         {
