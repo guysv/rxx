@@ -17,7 +17,7 @@ use crate::wgpu::{
     self, Color, Operations, RenderPass, RenderPassColorAttachment, RenderPassDescriptor,
     RenderTexture, RenderTextureHandle, StoreOp,
 };
-use wgpu::LoadOp;
+use ::wgpu::LoadOp;
 
 use rhai::{Array, CallFnOptions, Dynamic, Engine, ImmutableString, Scope, AST};
 
@@ -280,7 +280,7 @@ impl ScriptState {
         call_shade(engine, scope, &ast.borrow(), encoder)
     }
 
-    pub fn call_render_event(&mut self, pass: &Rc<RefCell<wgpu::Pass<'static>>>) -> Result<(), Box<rhai::EvalAltResult>> {
+    pub fn call_render_event(&mut self, script_pass: ScriptPass) -> Result<(), Box<rhai::EvalAltResult>> {
         let (engine, scope, ast) = match (
             self.script_engine.as_ref(),
             self.script_scope.as_mut(),
@@ -289,7 +289,7 @@ impl ScriptState {
             (Some(e), Some(s), Some(a)) => (e, s, a),
             _ => return Ok(()),
         };
-        call_render(engine, scope, &ast.borrow(), pass)
+        call_render(engine, scope, &ast.borrow(), script_pass)
     }
 
     /// Get the user shape batch vertices for rendering.
@@ -435,6 +435,71 @@ impl ScriptRenderPass {
     }
 }
 
+/// Unified pass type for script: wraps the wgpu pass and renderer so pass methods can resolve handles
+/// without borrowing ScriptState (which is already borrowed to call render()).
+#[derive(Clone)]
+pub struct ScriptPass {
+    pass: Rc<RefCell<wgpu::Pass<'static>>>,
+    renderer: Rc<RefCell<wgpu::Renderer>>,
+}
+
+impl ScriptPass {
+    pub fn new(pass: Rc<RefCell<wgpu::Pass<'static>>>, renderer: Rc<RefCell<wgpu::Renderer>>) -> Self {
+        Self { pass, renderer }
+    }
+
+    pub fn set_pipeline(&mut self, handle: i64) -> Result<(), Box<rhai::EvalAltResult>> {
+        let id = handle as u64;
+        let renderer_ref = self.renderer.borrow();
+        let pipeline = renderer_ref.get_script_pipeline(id).ok_or_else(|| {
+            rhai::EvalAltResult::ErrorRuntime(
+                format!("script pipeline handle not found: {}", id).into(),
+                rhai::Position::NONE,
+            )
+        })?;
+        self.pass.borrow_mut().set_pipeline(pipeline);
+        Ok(())
+    }
+
+    pub fn set_bind_group(&mut self, index: i64, handle: i64) -> Result<(), Box<rhai::EvalAltResult>> {
+        let id = handle as u64;
+        let renderer_ref = self.renderer.borrow();
+        let bind_group = renderer_ref.get_script_bind_group(id).ok_or_else(|| {
+            rhai::EvalAltResult::ErrorRuntime(
+                format!("script bind group handle not found: {}", id).into(),
+                rhai::Position::NONE,
+            )
+        })?;
+        self.pass.borrow_mut().set_bind_group(index as u32, bind_group, &[]);
+        Ok(())
+    }
+
+    pub fn set_vertex_buffer(&mut self, slot: i64, handle: i64) -> Result<(), Box<rhai::EvalAltResult>> {
+        let id = handle as u64;
+        let renderer_ref = self.renderer.borrow();
+        let buffer = renderer_ref.get_script_buffer(id).ok_or_else(|| {
+            rhai::EvalAltResult::ErrorRuntime(
+                format!("script buffer handle not found: {}", id).into(),
+                rhai::Position::NONE,
+            )
+        })?;
+        self.pass.borrow_mut().set_vertex_buffer(slot as u32, buffer.slice(..));
+        Ok(())
+    }
+
+    pub fn draw(
+        &mut self,
+        vertex_count: i64,
+        instance_count: i64,
+        first_vertex: i64,
+        first_instance: i64,
+    ) {
+        let vertices = (first_vertex as u32)..(first_vertex as u32 + vertex_count as u32);
+        let instances = (first_instance as u32)..(first_instance as u32 + instance_count as u32);
+        self.pass.borrow_mut().draw(vertices, instances);
+    }
+}
+
 /// Register renderer handle type so scripts can use it in init(session, renderer).
 /// Exposes create_render_texture, view_render_texture, begin_render_pass.
 /// Script-created textures are stored in script_state_handle.
@@ -450,7 +515,7 @@ pub fn register_renderer_handle(
         .register_type_with_name::<ScriptLoadOp>("LoadOp")
         .register_type_with_name::<ScriptStoreOp>("StoreOp")
         .register_type_with_name::<ScriptColorAttachment>("ColorAttachment")
-        .register_type_with_name::<ScriptRenderPass>("RenderPass")
+        .register_type_with_name::<ScriptPass>("ScriptPass")
         .register_fn("load_load", || ScriptLoadOp::Load)
         .register_fn("load_clear", |r: f64, g: f64, b: f64, a: f64| ScriptLoadOp::Clear { r, g, b, a })
         .register_fn("store_store", || ScriptStoreOp::Store)
@@ -465,18 +530,31 @@ pub fn register_renderer_handle(
             },
         )
         .register_fn(
+            "set_pipeline",
+            |pass: &mut ScriptPass, handle: i64| -> Result<(), Box<rhai::EvalAltResult>> {
+                pass.set_pipeline(handle)
+            },
+        )
+        .register_fn(
+            "set_bind_group",
+            |pass: &mut ScriptPass, index: i64, handle: i64| -> Result<(), Box<rhai::EvalAltResult>> {
+                pass.set_bind_group(index, handle)
+            },
+        )
+        .register_fn(
+            "set_vertex_buffer",
+            |pass: &mut ScriptPass, slot: i64, handle: i64| -> Result<(), Box<rhai::EvalAltResult>> {
+                pass.set_vertex_buffer(slot, handle)
+            },
+        )
+        .register_fn(
             "draw",
-            |pass: &mut ScriptRenderPass,
+            |pass: &mut ScriptPass,
              vertex_count: i64,
              instance_count: i64,
              first_vertex: i64,
              first_instance: i64| {
-                pass.draw(
-                    vertex_count as u32,
-                    instance_count as u32,
-                    first_vertex as u32,
-                    first_instance as u32,
-                )
+                pass.draw(vertex_count, instance_count, first_vertex, first_instance);
             },
         )
         .register_type_with_name::<Rc<RefCell<wgpu::Renderer>>>("Renderer")
@@ -497,6 +575,63 @@ pub fn register_renderer_handle(
                 }
             },
         )
+        .register_fn(
+            "create_shader_module",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>, wgsl_source: ImmutableString| {
+                r.borrow_mut().create_shader_module(None, wgsl_source.as_str()) as i64
+            },
+        )
+        .register_fn(
+            "create_render_pipeline",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>,
+             shader_handle: i64,
+             vs_entry: ImmutableString,
+             fs_entry: ImmutableString| {
+                r.borrow_mut().create_render_pipeline(
+                    shader_handle as u64,
+                    vs_entry.as_str(),
+                    fs_entry.as_str(),
+                ) as i64
+            },
+        )
+        .register_fn(
+            "create_buffer",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>, size: i64, usage_str: ImmutableString| {
+                r.borrow_mut().create_buffer(size as u64, usage_str.as_str(), None) as i64
+            },
+        )
+        .register_fn(
+            "create_buffer",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>,
+             size: i64,
+             usage_str: ImmutableString,
+             data: Array| {
+                let bytes: Vec<u8> = data
+                    .iter()
+                    .map(|v| v.clone().cast::<i64>().clamp(0, 255) as u8)
+                    .collect();
+                let slice = if bytes.is_empty() { None } else { Some(bytes.as_slice()) };
+                r.borrow_mut().create_buffer(size as u64, usage_str.as_str(), slice) as i64
+            },
+        )
+        .register_fn(
+            "create_transform_bind_group",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>, buffer_handle: i64| {
+                r.borrow_mut().create_transform_bind_group(buffer_handle as u64) as i64
+            },
+        )
+        .register_fn(
+            "create_identity_transform_bind_group",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>| {
+                r.borrow_mut().create_identity_transform_bind_group() as i64
+            },
+        )
+        .register_fn(
+            "create_fullscreen_triangle_vertex_buffer",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>| {
+                r.borrow_mut().create_fullscreen_triangle_vertex_buffer() as i64
+            },
+        )
         .register_raw_fn(
             "begin_render_pass",
             [
@@ -505,7 +640,7 @@ pub fn register_renderer_handle(
                 TypeId::of::<ImmutableString>(),
                 TypeId::of::<Array>(),
             ],
-            |_ctx, args| {
+            move |_ctx, args| {
                 use std::cell::Ref;
                 let r = args[0]
                     .clone()
@@ -593,7 +728,9 @@ pub fn register_renderer_handle(
                 };
                 let mut encoder_mut = encoder.borrow_mut();
                 let pass = encoder_mut.begin_render_pass(&descriptor);
-                Ok(Dynamic::from(Rc::new(RefCell::new(pass.forget_lifetime()))))
+                let pass_handle = Rc::new(RefCell::new(pass.forget_lifetime()));
+                let script_pass = ScriptPass::new(pass_handle, r.clone());
+                Ok(Dynamic::from(script_pass))
             },
         );
 }
@@ -786,9 +923,9 @@ pub fn call_render(
     engine: &Engine,
     scope: &mut Scope,
     ast: &AST,
-    pass: &Rc<RefCell<wgpu::Pass<'static>>>,
+    script_pass: ScriptPass,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "render", (pass.clone(),)) {
+    match engine.call_fn::<()>(scope, ast, "render", (script_pass,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e) => Ok(()),
         Err(e) => Err(e),

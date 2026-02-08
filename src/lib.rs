@@ -341,7 +341,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                         Renderer::frame(
                             &renderer_handle,
                             &session_handle,
-                            &mut *script_state_handle.borrow_mut(),
+                            &script_state_handle,
                             &mut execution,
                             vec![],
                             &avg,
@@ -426,7 +426,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             Renderer::frame(
                 &renderer_handle,
                 &session_handle,
-                &mut *script_state_handle.borrow_mut(),
+                &script_state_handle,
                 &mut execution,
                 renderer_effects,
                 &avg,

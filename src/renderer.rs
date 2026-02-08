@@ -23,7 +23,7 @@ pub trait Renderer<'a>: std::marker::Sized {
     fn frame(
         renderer_handle: &Rc<RefCell<Self>>,
         session_handle: &Rc<RefCell<Session>>,
-        script_state: &mut ScriptState,
+        script_state_handle: &Rc<RefCell<ScriptState>>,
         execution: &mut Execution,
         effects: Vec<session::Effect>,
         avg_frametime: &time::Duration,

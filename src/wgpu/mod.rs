@@ -480,7 +480,7 @@ pub type RenderPassColorAttachment<'a> = wgpu::RenderPassColorAttachment<'a>;
 
 // Re-export for script.rs so it can build render pass descriptors.
 pub use wgpu::{
-    Color, LoadOp, Operations, RenderPass, RenderPassDescriptor, StoreOp,
+    Color, Operations, RenderPass, RenderPassDescriptor, StoreOp,
 };
 
 /// The wgpu renderer.
@@ -542,6 +542,16 @@ pub struct Renderer {
 
     // Paste outputs for final pass rendering (like GL's paste_outputs)
     paste_outputs: Vec<(wgpu::Buffer, u32)>,
+
+    // Script-created GPU resources (owned here so render() can resolve without borrowing ScriptState)
+    script_shader_modules: BTreeMap<u64, wgpu::ShaderModule>,
+    next_script_shader_id: u64,
+    script_pipelines: BTreeMap<u64, wgpu::RenderPipeline>,
+    next_script_pipeline_id: u64,
+    script_bind_groups: BTreeMap<u64, wgpu::BindGroup>,
+    next_script_bind_group_id: u64,
+    script_buffers: BTreeMap<u64, wgpu::Buffer>,
+    next_script_buffer_id: u64,
 }
 
 #[derive(Debug)]
@@ -1181,6 +1191,14 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             paste_pixels: Vec::new(),
             paste_size: (0, 0),
             paste_outputs: Vec::new(),
+            script_shader_modules: BTreeMap::new(),
+            next_script_shader_id: 0,
+            script_pipelines: BTreeMap::new(),
+            next_script_pipeline_id: 0,
+            script_bind_groups: BTreeMap::new(),
+            next_script_bind_group_id: 0,
+            script_buffers: BTreeMap::new(),
+            next_script_buffer_id: 0,
         })
     }
 
@@ -1191,7 +1209,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
     fn frame(
         renderer_handle: &Rc<RefCell<Self>>,
         session_handle: &Rc<RefCell<Session>>,
-        script_state: &mut ScriptState,
+        script_state_handle: &Rc<RefCell<ScriptState>>,
         execution: &mut Execution,
         effects: Vec<session::Effect>,
         avg_frametime: &time::Duration,
@@ -1225,10 +1243,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         // Prepare draw context
         drop(session);
         let [font_w, font_h] = this.font.size;
-        script_state.ensure_user_sprite_batch(font_w, font_h);
+        script_state_handle.borrow_mut().ensure_user_sprite_batch(font_w, font_h);
         this.draw_ctx.clear();
-        this.draw_ctx.draw(session_handle, script_state, avg_frametime, execution);
-        let mut session = session_handle.borrow_mut();
+        this.draw_ctx.draw(session_handle, &mut *script_state_handle.borrow_mut(), avg_frametime, execution);
+        let session = session_handle.borrow_mut();
 
         let [screen_w, screen_h] = this.screen_texture.size;
         let ortho: M44 = ortho_wgpu(screen_w, screen_h, Origin::TopLeft).into();
@@ -1236,15 +1254,15 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Create vertex buffers for this frame
         let ui_vertices = this.create_shape_vertices(&this.draw_ctx.ui_batch.vertices());
-        let user_vertices = if script_state.user_batch_is_empty() {
+        let user_vertices = if script_state_handle.borrow().user_batch_is_empty() {
             None
         } else {
-            this.create_shape_vertices(&script_state.user_batch_vertices())
+            this.create_shape_vertices(&script_state_handle.borrow().user_batch_vertices())
         };
-        let user_sprite_tess = if script_state.user_sprite_batch_is_empty() {
+        let user_sprite_tess = if script_state_handle.borrow().user_sprite_batch_is_empty() {
             None
         } else {
-            this.create_sprite_vertices(&script_state.user_sprite_batch_vertices())
+            this.create_sprite_vertices(&script_state_handle.borrow().user_sprite_batch_vertices())
         };
         let text_vertices = this.create_sprite_vertices(&this.draw_ctx.text_batch.vertices());
         let tool_vertices = this.create_sprite_vertices(&this.draw_ctx.tool_batch.vertices());
@@ -1489,7 +1507,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let encoder_handle = Rc::new(RefCell::new(encoder));
         drop(this);
         drop(session);
-        if let Err(e) = script_state.call_shade_event(&encoder_handle) {
+        if let Err(e) = script_state_handle.borrow_mut().call_shade_event(&encoder_handle) {
             warn!("Script shade error: {}", e);
         }
         let mut encoder = Rc::try_unwrap(encoder_handle).unwrap().into_inner();
@@ -1748,9 +1766,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             let pass = pass.forget_lifetime();
             let pass_handle = Rc::new(RefCell::new(pass));
+            let script_pass = crate::script::ScriptPass::new(pass_handle, renderer_handle.clone());
             drop(this);
             drop(session);
-            if let Err(e) = script_state.call_render_event(&pass_handle) {
+            if let Err(e) = script_state_handle.borrow_mut().call_render_event(script_pass) {
                 warn!("Script render error: {}", e);
             }
             this = renderer_handle.borrow_mut();
@@ -1972,6 +1991,245 @@ impl Renderer {
         } else {
             None
         }
+    }
+
+    /// Script GPU resource storage (so render() can resolve handles without borrowing ScriptState).
+    pub fn add_script_shader_module(&mut self, module: wgpu::ShaderModule) -> u64 {
+        let id = self.next_script_shader_id;
+        self.next_script_shader_id = self.next_script_shader_id.saturating_add(1);
+        self.script_shader_modules.insert(id, module);
+        id
+    }
+    pub fn add_script_pipeline(&mut self, pipeline: wgpu::RenderPipeline) -> u64 {
+        let id = self.next_script_pipeline_id;
+        self.next_script_pipeline_id = self.next_script_pipeline_id.saturating_add(1);
+        self.script_pipelines.insert(id, pipeline);
+        id
+    }
+    pub fn add_script_bind_group(&mut self, bind_group: wgpu::BindGroup) -> u64 {
+        let id = self.next_script_bind_group_id;
+        self.next_script_bind_group_id = self.next_script_bind_group_id.saturating_add(1);
+        self.script_bind_groups.insert(id, bind_group);
+        id
+    }
+    pub fn add_script_buffer(&mut self, buffer: wgpu::Buffer) -> u64 {
+        let id = self.next_script_buffer_id;
+        self.next_script_buffer_id = self.next_script_buffer_id.saturating_add(1);
+        self.script_buffers.insert(id, buffer);
+        id
+    }
+    pub fn get_script_shader_module(&self, id: u64) -> Option<&wgpu::ShaderModule> {
+        self.script_shader_modules.get(&id)
+    }
+    pub fn get_script_pipeline(&self, id: u64) -> Option<&wgpu::RenderPipeline> {
+        self.script_pipelines.get(&id)
+    }
+    pub fn get_script_bind_group(&self, id: u64) -> Option<&wgpu::BindGroup> {
+        self.script_bind_groups.get(&id)
+    }
+    pub fn get_script_buffer(&self, id: u64) -> Option<&wgpu::Buffer> {
+        self.script_buffers.get(&id)
+    }
+
+    /// Create a shader module from WGSL source. Returns handle (u64).
+    pub fn create_shader_module(&mut self, label: Option<&str>, wgsl_source: &str) -> u64 {
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: label.or(Some("script_shader")),
+            source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
+        });
+        self.add_script_shader_module(module)
+    }
+
+    /// Create a render pipeline using the transform bind group layout and Shape2dVertex layout.
+    /// Shader must have vs_main and fs_main with the same layout as the built-in shape shader.
+    pub fn create_render_pipeline(
+        &mut self,
+        shader_handle: u64,
+        vs_entry: &str,
+        fs_entry: &str,
+    ) -> u64 {
+        let module = self
+            .get_script_shader_module(shader_handle)
+            .expect("create_render_pipeline: invalid shader handle");
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("script_pipeline_layout"),
+            bind_group_layouts: &[&self.transform_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("script_pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some(vs_entry),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Shape2dVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 12,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 16,
+                            shader_location: 2,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 24,
+                            shader_location: 3,
+                            format: wgpu::VertexFormat::Unorm8x4,
+                        },
+                    ],
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some(fs_entry),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        self.add_script_pipeline(pipeline)
+    }
+
+    /// Create a buffer and optionally upload initial data. Usage: "vertex", "uniform", "copy_dst" (comma-separated).
+    /// Returns handle (u64).
+    pub fn create_buffer(
+        &mut self,
+        size: u64,
+        usage_str: &str,
+        initial_data: Option<&[u8]>,
+    ) -> u64 {
+        let mut usage = wgpu::BufferUsages::empty();
+        for part in usage_str.split(',') {
+            let part = part.trim().to_lowercase();
+            match part.as_str() {
+                "vertex" => usage |= wgpu::BufferUsages::VERTEX,
+                "uniform" => usage |= wgpu::BufferUsages::UNIFORM,
+                "copy_dst" => usage |= wgpu::BufferUsages::COPY_DST,
+                _ => {}
+            }
+        }
+        if usage.is_empty() {
+            usage = wgpu::BufferUsages::VERTEX;
+        }
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("script_buffer"),
+            size,
+            usage,
+            mapped_at_creation: false,
+        });
+        if let Some(data) = initial_data {
+            self.queue.write_buffer(&buffer, 0, data);
+        }
+        self.add_script_buffer(buffer)
+    }
+
+    /// Create a bind group with the transform layout bound to the given buffer.
+    /// Returns handle (u64).
+    pub fn create_transform_bind_group(&mut self, buffer_handle: u64) -> u64 {
+        let buffer = self
+            .get_script_buffer(buffer_handle)
+            .expect("create_transform_bind_group: invalid buffer handle");
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("script_transform_bind_group"),
+            layout: &self.transform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        self.add_script_bind_group(bind_group)
+    }
+
+    /// Create a transform bind group with identity ortho and identity transform (for script demo).
+    pub fn create_identity_transform_bind_group(&mut self) -> u64 {
+        let identity: M44 = Matrix4::identity().into();
+        let uniforms = TransformUniforms {
+            ortho: identity,
+            transform: identity,
+        };
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("script_identity_transform_buffer"),
+            size: std::mem::size_of::<TransformUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::bytes_of(&uniforms));
+        buffer.unmap();
+        let buffer_id = self.add_script_buffer(buffer);
+        let buffer_ref = self.get_script_buffer(buffer_id).unwrap();
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("script_identity_transform_bind_group"),
+            layout: &self.transform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer_ref.as_entire_binding(),
+            }],
+        });
+        self.add_script_bind_group(bind_group)
+    }
+
+    /// Create a vertex buffer containing a fullscreen triangle (NDC). For script demo.
+    pub fn create_fullscreen_triangle_vertex_buffer(&mut self) -> u64 {
+        // Fullscreen triangle: (-1,-1,0), (3,-1,0), (-1,3,0); angle=0, center=(0,0), white
+        let verts = [
+            Shape2dVertex {
+                position: [-1.0, -1.0, 0.0],
+                angle: 0.0,
+                center: [0.0, 0.0],
+                color: [255, 255, 255, 255],
+            },
+            Shape2dVertex {
+                position: [3.0, -1.0, 0.0],
+                angle: 0.0,
+                center: [0.0, 0.0],
+                color: [255, 255, 255, 255],
+            },
+            Shape2dVertex {
+                position: [-1.0, 3.0, 0.0],
+                angle: 0.0,
+                center: [0.0, 0.0],
+                color: [255, 255, 255, 255],
+            },
+        ];
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("script_fullscreen_triangle"),
+            size: (verts.len() * std::mem::size_of::<Shape2dVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue
+            .write_buffer(&buffer, 0, bytemuck::cast_slice(&verts));
+        self.add_script_buffer(buffer)
     }
 
     pub fn handle_resized(&mut self, size: platform::LogicalSize) {
