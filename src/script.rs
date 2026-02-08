@@ -13,10 +13,15 @@ use crate::gfx::sprite2d;
 use crate::gfx::{Repeat, Rgba8};
 use crate::session::{Effect, MessageType, Session};
 use crate::view::{View, ViewId, ViewResource};
-use crate::wgpu::{self, RenderTexture, RenderTextureHandle};
+use crate::wgpu::{
+    self, Color, Operations, RenderPass, RenderPassColorAttachment, RenderPassDescriptor,
+    RenderTexture, RenderTextureHandle, StoreOp,
+};
+use wgpu::LoadOp;
 
-use rhai::{Array, CallFnOptions, Dynamic, Engine, Scope, AST};
+use rhai::{Array, CallFnOptions, Dynamic, Engine, ImmutableString, Scope, AST};
 
+use std::any::TypeId;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -380,8 +385,58 @@ pub fn register_session_handle(engine: &mut Engine) {
         });
 }
 
+/// Load op for script render pass color attachments.
+#[derive(Clone)]
+pub enum ScriptLoadOp {
+    Load,
+    Clear { r: f64, g: f64, b: f64, a: f64 },
+}
+
+/// Store op for script render pass color attachments.
+#[derive(Clone)]
+pub enum ScriptStoreOp {
+    Store,
+}
+
+/// Script-side color attachment: handle + load/store ops.
+#[derive(Clone)]
+pub struct ScriptColorAttachment {
+    pub handle: RenderTextureHandle,
+    pub load_op: ScriptLoadOp,
+    pub store_op: ScriptStoreOp,
+}
+
+/// Pass proxy passed to the script callback. Holds a raw pointer to the live RenderPass.
+/// SAFETY: Only used synchronously; the pass is dropped after the callback returns.
+/// Clone copies the pointer so the script can pass the proxy to the callback; both refer to the same pass.
+#[derive(Clone)]
+pub struct ScriptRenderPass {
+    pass: *mut (),
+}
+
+impl ScriptRenderPass {
+    pub fn new(pass: &mut RenderPass<'_>) -> Self {
+        Self {
+            pass: pass as *mut RenderPass<'_> as *mut (),
+        }
+    }
+
+    pub fn draw(
+        &mut self,
+        vertex_count: u32,
+        instance_count: u32,
+        first_vertex: u32,
+        first_instance: u32,
+    ) {
+        let pass = self.pass as *mut RenderPass<'_>;
+        let vertices = first_vertex..first_vertex + vertex_count;
+        let instances = first_instance..first_instance + instance_count;
+        unsafe { (*pass).draw(vertices, instances) }
+    }
+}
+
 /// Register renderer handle type so scripts can use it in init(session, renderer).
-/// Exposes create_render_texture, view_render_texture.
+/// Exposes create_render_texture, view_render_texture, begin_render_pass.
 /// Script-created textures are stored in script_state_handle.
 pub fn register_renderer_handle(
     engine: &mut Engine,
@@ -389,8 +444,41 @@ pub fn register_renderer_handle(
     script_state_handle: &Rc<RefCell<ScriptState>>,
 ) {
     let script_state_create = script_state_handle.clone();
+
     engine
         .register_type_with_name::<RenderTextureHandle>("RenderTextureHandle")
+        .register_type_with_name::<ScriptLoadOp>("LoadOp")
+        .register_type_with_name::<ScriptStoreOp>("StoreOp")
+        .register_type_with_name::<ScriptColorAttachment>("ColorAttachment")
+        .register_type_with_name::<ScriptRenderPass>("RenderPass")
+        .register_fn("load_load", || ScriptLoadOp::Load)
+        .register_fn("load_clear", |r: f64, g: f64, b: f64, a: f64| ScriptLoadOp::Clear { r, g, b, a })
+        .register_fn("store_store", || ScriptStoreOp::Store)
+        .register_fn(
+            "color_attachment",
+            |handle: RenderTextureHandle, load_op: ScriptLoadOp, store_op: ScriptStoreOp| {
+                ScriptColorAttachment {
+                    handle,
+                    load_op,
+                    store_op,
+                }
+            },
+        )
+        .register_fn(
+            "draw",
+            |pass: &mut ScriptRenderPass,
+             vertex_count: i64,
+             instance_count: i64,
+             first_vertex: i64,
+             first_instance: i64| {
+                pass.draw(
+                    vertex_count as u32,
+                    instance_count as u32,
+                    first_vertex as u32,
+                    first_instance as u32,
+                )
+            },
+        )
         .register_type_with_name::<Rc<RefCell<wgpu::Renderer>>>("Renderer")
         .register_fn(
             "create_render_texture",
@@ -407,6 +495,105 @@ pub fn register_renderer_handle(
                     Some(h) => Dynamic::from(h),
                     None => Dynamic::UNIT,
                 }
+            },
+        )
+        .register_raw_fn(
+            "begin_render_pass",
+            [
+                TypeId::of::<Rc<RefCell<wgpu::Renderer>>>(),
+                TypeId::of::<Rc<RefCell<wgpu::Encoder>>>(),
+                TypeId::of::<ImmutableString>(),
+                TypeId::of::<Array>(),
+            ],
+            |_ctx, args| {
+                use std::cell::Ref;
+                let r = args[0]
+                    .clone()
+                    .try_cast::<Rc<RefCell<wgpu::Renderer>>>()
+                    .ok_or_else(|| {
+                        rhai::EvalAltResult::ErrorMismatchDataType(
+                            "Renderer".into(),
+                            args[0].type_name().into(),
+                            rhai::Position::NONE,
+                        )
+                    })?;
+                let encoder = args[1]
+                    .clone()
+                    .try_cast::<Rc<RefCell<wgpu::Encoder>>>()
+                    .ok_or_else(|| {
+                        rhai::EvalAltResult::ErrorMismatchDataType(
+                            "Encoder".into(),
+                            args[1].type_name().into(),
+                            rhai::Position::NONE,
+                        )
+                    })?;
+                let label = args[2].clone().into_immutable_string().unwrap_or_default();
+                let attachments = args[3]
+                    .clone()
+                    .try_cast::<Array>()
+                    .ok_or_else(|| {
+                        rhai::EvalAltResult::ErrorMismatchDataType(
+                            "Array".into(),
+                            args[3].type_name().into(),
+                            rhai::Position::NONE,
+                        )
+                    })?;
+                let renderer = r.borrow();
+                let mut texture_refs: Vec<Ref<RenderTexture>> = Vec::new();
+                let mut ops_list: Vec<(LoadOp<Color>, StoreOp)> = Vec::new();
+                for att in attachments.iter() {
+                    let Some(att) = att.clone().try_cast::<ScriptColorAttachment>() else {
+                        continue;
+                    };
+                    if let RenderTextureHandle::ViewLayer(vid) = att.handle {
+                        let vd = match renderer.view_data.get(&vid) {
+                            Some(v) => v,
+                            None => continue,
+                        };
+                        let load_op = match &att.load_op {
+                            ScriptLoadOp::Load => LoadOp::Load,
+                            ScriptLoadOp::Clear { r, g, b, a } => LoadOp::Clear(Color {
+                                r: *r,
+                                g: *g,
+                                b: *b,
+                                a: *a,
+                            }),
+                        };
+                        let store_op = match &att.store_op {
+                            ScriptStoreOp::Store => StoreOp::Store,
+                        };
+                        texture_refs.push(vd.layer.texture.borrow());
+                        ops_list.push((load_op, store_op));
+                    }
+                }
+                if texture_refs.is_empty() {
+                    return Ok(Dynamic::UNIT);
+                }
+                let color_attachments: Vec<Option<RenderPassColorAttachment>> = texture_refs
+                    .iter()
+                    .zip(ops_list.iter())
+                    .map(|(r, (load_op, store_op))| {
+                        let ops = Operations {
+                            load: load_op.clone(),
+                            store: *store_op,
+                        };
+                        Some(RenderPassColorAttachment {
+                            view: r.view(),
+                            resolve_target: None,
+                            ops,
+                        })
+                    })
+                    .collect();
+                let descriptor = RenderPassDescriptor {
+                    label: Some(label.as_str()),
+                    color_attachments: &color_attachments,
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                };
+                let mut encoder_mut = encoder.borrow_mut();
+                let pass = encoder_mut.begin_render_pass(&descriptor);
+                Ok(Dynamic::from(Rc::new(RefCell::new(pass.forget_lifetime()))))
             },
         );
 }
@@ -528,27 +715,7 @@ pub fn register_draw_primitives(
 }
 
 pub fn register_wgpu_types(engine: &mut Engine) {
-    engine.register_type_with_name::<Rc<RefCell<wgpu::Encoder>>>("Encoder")
-        .register_fn("begin_render_pass", |encoder: &mut Rc<RefCell<wgpu::Encoder>>| {
-            // let pass = encoder.borrow_mut().begin_render_pass(&wgpu::PassDescriptor::<'static>{
-            //     label: Some("test"),
-            //     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            //         view: &view_data.staging_texture.view,
-            //         resolve_target: None,
-            //         ops: wgpu::Operations {
-            //             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            //             store: wgpu::StoreOp::Store,
-            //         },
-            //     })],
-            //     depth_stencil_attachment: None,
-            //     timestamp_writes: None,
-            //     occlusion_query_set: None,
-            // })
-            // .forget_lifetime();
-
-            // // Pack pass and encoder into a bundle we can return to the script wrapped in Rc<RefCell<>>
-            // Rc::new(RefCell::new(pass))
-        });
+    engine.register_type_with_name::<Rc<RefCell<wgpu::Encoder>>>("Encoder");
 }
 
 /// Register the `register_command(name, help)` function for scripts to register custom commands.

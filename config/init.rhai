@@ -49,9 +49,13 @@ fn cmd_lt_off(args) {
 }
 
 fn shade(encoder) {
-    print(`shade called with encoder: ${encoder}`);
-    let pass = encoder.begin_render_pass();
-    print(`pass: ${pass}`);
+    print(`shade called with encoder`);
+    let view_handle = renderer.view_render_texture(session.active_view_id);
+    if view_handle != () {
+        let att = color_attachment(view_handle, load_clear(0.0, 0.0, 0.0, 0.0), store_store());
+        let pass = renderer.begin_render_pass(encoder, "script_pass", [att]);
+        print(`pass: ${pass}`);
+    }
 }
 
 fn render(pass) {

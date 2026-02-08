@@ -204,6 +204,11 @@ impl RenderTexture {
         }
     }
 
+    /// Public so script can resolve RenderTextureHandle to a view (clone) for render pass descriptors.
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) {
         *self = Self::new(device, width, height, format);
     }
@@ -213,7 +218,7 @@ impl RenderTexture {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("clear_layer"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.view,
+                view: self.view(),
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -350,8 +355,8 @@ pub enum RenderTextureHandle {
 }
 
 /// Per-layer data for a view.
-struct LayerData {
-    texture: Rc<RefCell<RenderTexture>>,
+pub(crate) struct LayerData {
+    pub(crate) texture: Rc<RefCell<RenderTexture>>,
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
 }
@@ -443,8 +448,8 @@ impl LayerData {
 }
 
 /// Per-view rendering data.
-struct ViewData {
-    layer: LayerData,
+pub(crate) struct ViewData {
+    pub(crate) layer: LayerData,
     staging_texture: RenderTexture,
     anim_vertex_buffer: Option<wgpu::Buffer>,
     anim_vertex_count: u32,
@@ -472,6 +477,11 @@ pub type Encoder = wgpu::CommandEncoder;
 pub type Pass<'a> = wgpu::RenderPass<'a>;
 pub type PassDescriptor<'a> = wgpu::RenderPassDescriptor<'a>;
 pub type RenderPassColorAttachment<'a> = wgpu::RenderPassColorAttachment<'a>;
+
+// Re-export for script.rs so it can build render pass descriptors.
+pub use wgpu::{
+    Color, LoadOp, Operations, RenderPass, RenderPassDescriptor, StoreOp,
+};
 
 /// The wgpu renderer.
 pub struct Renderer {
@@ -523,8 +533,8 @@ pub struct Renderer {
     transform_buffer: wgpu::Buffer,
     cursor_uniform_buffer: wgpu::Buffer,
 
-    // Per-view data
-    view_data: BTreeMap<ViewId, ViewData>,
+    // Per-view data (pub(crate) so script can resolve ViewLayer handles for begin_render_pass).
+    pub(crate) view_data: BTreeMap<ViewId, ViewData>,
 
     // Paste buffer for yank/paste operations
     paste_pixels: Vec<Rgba8>,
@@ -1478,11 +1488,13 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         let encoder_handle = Rc::new(RefCell::new(encoder));
         drop(this);
+        drop(session);
         if let Err(e) = script_state.call_shade_event(&encoder_handle) {
             warn!("Script shade error: {}", e);
         }
         let mut encoder = Rc::try_unwrap(encoder_handle).unwrap().into_inner();
         let mut this = renderer_handle.borrow_mut();
+        let mut session = session_handle.borrow_mut();
 
         // Render to screen framebuffer
         {
@@ -1736,9 +1748,13 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             let pass = pass.forget_lifetime();
             let pass_handle = Rc::new(RefCell::new(pass));
+            drop(this);
+            drop(session);
             if let Err(e) = script_state.call_render_event(&pass_handle) {
                 warn!("Script render error: {}", e);
             }
+            this = renderer_handle.borrow_mut();
+            session = session_handle.borrow_mut();
         }
 
         // Render screen to surface (final pass)
