@@ -82,9 +82,9 @@ struct TransformUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct CursorUniforms {
-    ortho: M44,           // 64 bytes
-    scale: f32,           // 4 bytes
-    _padding: [f32; 7],   // 28 bytes to reach 96 total (WGSL alignment)
+    ortho: M44,         // 64 bytes
+    scale: f32,         // 4 bytes
+    _padding: [f32; 7], // 28 bytes to reach 96 total (WGSL alignment)
 }
 
 /// Render texture (like a framebuffer). Used for both render targets and source textures (font, cursors, etc.).
@@ -97,7 +97,13 @@ pub struct Texture {
 }
 
 impl Texture {
-    fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat, storage_binding: bool) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        storage_binding: bool,
+    ) -> Self {
         let size = wgpu::Extent3d {
             width,
             height,
@@ -115,7 +121,11 @@ impl Texture {
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST
-                | if storage_binding { wgpu::TextureUsages::STORAGE_BINDING } else { TextureUsages::empty() },
+                | if storage_binding {
+                    wgpu::TextureUsages::STORAGE_BINDING
+                } else {
+                    TextureUsages::empty()
+                },
             view_formats: &[],
         });
 
@@ -177,7 +187,13 @@ impl Texture {
         &self.texture
     }
 
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) {
+    fn resize(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) {
         *self = Self::new(device, width, height, format, false);
     }
 
@@ -335,7 +351,13 @@ pub(crate) struct LayerData {
 }
 
 impl LayerData {
-    fn new(device: &wgpu::Device, w: u32, h: u32, pixels: Option<&[Rgba8]>, queue: &wgpu::Queue) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        w: u32,
+        h: u32,
+        pixels: Option<&[Rgba8]>,
+        queue: &wgpu::Queue,
+    ) -> Self {
         let texture = Texture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb, false);
 
         // Create a quad vertex buffer for rendering this layer
@@ -411,7 +433,9 @@ impl LayerData {
     }
 
     fn upload_part(&self, queue: &wgpu::Queue, offset: [u32; 2], size: [u32; 2], texels: &[u8]) {
-        self.texture.borrow_mut().upload_part(queue, offset, size, texels);
+        self.texture
+            .borrow_mut()
+            .upload_part(queue, offset, size, texels);
     }
 
     /// Snapshot of the layer pixels (blocking readback). Matches the GL `pixels()` API.
@@ -431,8 +455,15 @@ pub(crate) struct ViewData {
 }
 
 impl ViewData {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, pixels: Option<&[Rgba8]>) -> Self {
-        let staging_texture = Texture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb, false);
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        w: u32,
+        h: u32,
+        pixels: Option<&[Rgba8]>,
+    ) -> Self {
+        let staging_texture =
+            Texture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb, false);
         let layer = LayerData::new(device, w, h, pixels, queue);
 
         Self {
@@ -648,8 +679,22 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
         let font = Texture::new_with_data(&device, &queue, font_w, font_h, format, Some(&font_img));
-        let cursors = Texture::new_with_data(&device, &queue, cursors_w, cursors_h, format, Some(&cursors_img));
-        let checker = Texture::new_with_data(&device, &queue, checker_w, checker_h, format, Some(&draw::CHECKER));
+        let cursors = Texture::new_with_data(
+            &device,
+            &queue,
+            cursors_w,
+            cursors_h,
+            format,
+            Some(&cursors_img),
+        );
+        let checker = Texture::new_with_data(
+            &device,
+            &queue,
+            checker_w,
+            checker_h,
+            format,
+            Some(&draw::CHECKER),
+        );
         let paste = Texture::new_with_data(&device, &queue, paste_w, paste_h, format, None);
 
         // Create screen render target
@@ -943,64 +988,65 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         });
 
         // Shape replace pipeline (for Blending::Constant - no alpha blending, just replace)
-        let shape_replace_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("shape_replace_pipeline"),
-            layout: Some(&shape_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shape_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Shape2dVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            offset: 0,
-                            shader_location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 12,
-                            shader_location: 1,
-                            format: wgpu::VertexFormat::Float32,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 16,
-                            shader_location: 2,
-                            format: wgpu::VertexFormat::Float32x2,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 24,
-                            shader_location: 3,
-                            format: wgpu::VertexFormat::Unorm8x4,
-                        },
-                    ],
-                }],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shape_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let shape_replace_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("shape_replace_pipeline"),
+                layout: Some(&shape_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shape_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Shape2dVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                offset: 0,
+                                shader_location: 0,
+                                format: wgpu::VertexFormat::Float32x3,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 12,
+                                shader_location: 1,
+                                format: wgpu::VertexFormat::Float32,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 16,
+                                shader_location: 2,
+                                format: wgpu::VertexFormat::Float32x2,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 24,
+                                shader_location: 3,
+                                format: wgpu::VertexFormat::Unorm8x4,
+                            },
+                        ],
+                    }],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shape_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
 
         // Cursor pipeline
         let cursor_pipeline_layout =
@@ -1190,9 +1236,16 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         // Prepare draw context
         drop(session);
         let [font_w, font_h] = this.font.size();
-        script_state_handle.borrow_mut().ensure_user_sprite_batch(font_w, font_h);
+        script_state_handle
+            .borrow_mut()
+            .ensure_user_sprite_batch(font_w, font_h);
         this.draw_ctx.clear();
-        this.draw_ctx.draw(session_handle, &mut *script_state_handle.borrow_mut(), avg_frametime, execution);
+        this.draw_ctx.draw(
+            session_handle,
+            &mut *script_state_handle.borrow_mut(),
+            avg_frametime,
+            execution,
+        );
         let session = session_handle.borrow_mut();
 
         let [screen_w, screen_h] = this.screen_texture.size();
@@ -1217,8 +1270,12 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let cursor_verts = this.draw_ctx.cursor_sprite.vertices();
 
         // Create uniform bind group with ortho and identity transform
-        let uniforms = TransformUniforms { ortho, transform: identity };
-        this.queue.write_buffer(&this.transform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        let uniforms = TransformUniforms {
+            ortho,
+            transform: identity,
+        };
+        this.queue
+            .write_buffer(&this.transform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let transform_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("transform_bind_group"),
@@ -1301,21 +1358,25 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: true,
         });
-        let staging_uniforms = TransformUniforms { ortho: view_ortho, transform: identity };
+        let staging_uniforms = TransformUniforms {
+            ortho: view_ortho,
+            transform: identity,
+        };
         view_uniform_buffer
             .slice(..)
             .get_mapped_range_mut()
             .copy_from_slice(bytemuck::bytes_of(&staging_uniforms));
         view_uniform_buffer.unmap();
 
-        let staging_transform_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("staging_transform_bind_group"),
-            layout: &this.transform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: view_uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let staging_transform_bind_group =
+            this.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("staging_transform_bind_group"),
+                layout: &this.transform_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: view_uniform_buffer.as_entire_binding(),
+                }],
+            });
 
         // Render to staging target (clear every frame so ghost disappears on ESC)
         {
@@ -1378,21 +1439,25 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: true,
             });
-            let final_uniforms = TransformUniforms { ortho: view_ortho, transform: identity };
+            let final_uniforms = TransformUniforms {
+                ortho: view_ortho,
+                transform: identity,
+            };
             view_uniform_buffer
                 .slice(..)
                 .get_mapped_range_mut()
                 .copy_from_slice(bytemuck::bytes_of(&final_uniforms));
             view_uniform_buffer.unmap();
 
-            let final_transform_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("final_transform_bind_group"),
-                layout: &this.transform_bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: view_uniform_buffer.as_entire_binding(),
-                }],
-            });
+            let final_transform_bind_group =
+                this.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("final_transform_bind_group"),
+                    layout: &this.transform_bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: view_uniform_buffer.as_entire_binding(),
+                    }],
+                });
 
             // Render to layer target (don't clear - preserve existing pixels)
             let mut final_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1454,7 +1519,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let encoder_handle = Rc::new(RefCell::new(encoder));
         drop(this);
         drop(session);
-        if let Err(e) = script_state_handle.borrow_mut().call_shade_event(&encoder_handle) {
+        if let Err(e) = script_state_handle
+            .borrow_mut()
+            .call_shade_event(&encoder_handle)
+        {
             warn!("Script shade error: {}", e);
         }
         let mut encoder = Rc::try_unwrap(encoder_handle).unwrap().into_inner();
@@ -1508,12 +1576,13 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     };
 
                     // Create a temporary buffer for view transform
-                    let view_transform_buffer = this.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("view_transform_buffer"),
-                        size: std::mem::size_of::<TransformUniforms>() as u64,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: true,
-                    });
+                    let view_transform_buffer =
+                        this.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("view_transform_buffer"),
+                            size: std::mem::size_of::<TransformUniforms>() as u64,
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: true,
+                        });
                     view_transform_buffer
                         .slice(..)
                         .get_mapped_range_mut()
@@ -1637,44 +1706,50 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                     transform: anim_transform.into(),
                                 };
 
-                                let anim_uniform_buffer = this.device.create_buffer(&wgpu::BufferDescriptor {
-                                    label: Some("anim_uniform_buffer"),
-                                    size: std::mem::size_of::<TransformUniforms>() as u64,
-                                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                                    mapped_at_creation: true,
-                                });
+                                let anim_uniform_buffer =
+                                    this.device.create_buffer(&wgpu::BufferDescriptor {
+                                        label: Some("anim_uniform_buffer"),
+                                        size: std::mem::size_of::<TransformUniforms>() as u64,
+                                        usage: wgpu::BufferUsages::UNIFORM
+                                            | wgpu::BufferUsages::COPY_DST,
+                                        mapped_at_creation: true,
+                                    });
                                 anim_uniform_buffer
                                     .slice(..)
                                     .get_mapped_range_mut()
                                     .copy_from_slice(bytemuck::bytes_of(&anim_uniforms));
                                 anim_uniform_buffer.unmap();
 
-                                let anim_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                    label: Some("anim_transform_bind_group"),
-                                    layout: &this.transform_bind_group_layout,
-                                    entries: &[wgpu::BindGroupEntry {
-                                        binding: 0,
-                                        resource: anim_uniform_buffer.as_entire_binding(),
-                                    }],
-                                });
+                                let anim_bind_group =
+                                    this.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                        label: Some("anim_transform_bind_group"),
+                                        layout: &this.transform_bind_group_layout,
+                                        entries: &[wgpu::BindGroupEntry {
+                                            binding: 0,
+                                            resource: anim_uniform_buffer.as_entire_binding(),
+                                        }],
+                                    });
 
                                 // Bind layer texture for animation
-                                let layer_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                    label: Some("anim_layer_bind_group"),
-                                    layout: &this.texture_bind_group_layout,
-                                    entries: &[
-                                        wgpu::BindGroupEntry {
-                                            binding: 0,
-                                            resource: wgpu::BindingResource::TextureView(
-                                                &view_data.layer.texture.borrow().view(),
-                                            ),
-                                        },
-                                        wgpu::BindGroupEntry {
-                                            binding: 1,
-                                            resource: wgpu::BindingResource::Sampler(&this.sampler),
-                                        },
-                                    ],
-                                });
+                                let layer_bind_group =
+                                    this.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                        label: Some("anim_layer_bind_group"),
+                                        layout: &this.texture_bind_group_layout,
+                                        entries: &[
+                                            wgpu::BindGroupEntry {
+                                                binding: 0,
+                                                resource: wgpu::BindingResource::TextureView(
+                                                    &view_data.layer.texture.borrow().view(),
+                                                ),
+                                            },
+                                            wgpu::BindGroupEntry {
+                                                binding: 1,
+                                                resource: wgpu::BindingResource::Sampler(
+                                                    &this.sampler,
+                                                ),
+                                            },
+                                        ],
+                                    });
 
                                 pass.set_pipeline(&this.sprite_pipeline);
                                 pass.set_bind_group(0, &anim_bind_group, &[]);
@@ -1694,7 +1769,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 draw::draw_help(&session, &mut help_text_batch, &mut help_shape_batch);
 
                 // Draw help shape (background)
-                if let Some((buffer, count)) = this.create_shape_vertices(&help_shape_batch.vertices()) {
+                if let Some((buffer, count)) =
+                    this.create_shape_vertices(&help_shape_batch.vertices())
+                {
                     pass.set_pipeline(&this.shape_pipeline);
                     pass.set_bind_group(0, &transform_bind_group, &[]);
                     pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1702,7 +1779,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 }
 
                 // Draw help text
-                if let Some((buffer, count)) = this.create_sprite_vertices(&help_text_batch.vertices()) {
+                if let Some((buffer, count)) =
+                    this.create_sprite_vertices(&help_text_batch.vertices())
+                {
                     pass.set_pipeline(&this.sprite_pipeline);
                     pass.set_bind_group(0, &transform_bind_group, &[]);
                     pass.set_bind_group(1, &font_bind_group, &[]);
@@ -1714,11 +1793,17 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let pass = pass.forget_lifetime();
             let pass_handle = Rc::new(RefCell::new(pass));
             let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-            let script_pass =
-                crate::script::ScriptPass::new(pass_handle, renderer_handle.clone(), script_storage_handle);
+            let script_pass = crate::script::ScriptPass::new(
+                pass_handle,
+                renderer_handle.clone(),
+                script_storage_handle,
+            );
             drop(this);
             drop(session);
-            if let Err(e) = script_state_handle.borrow_mut().call_render_event(script_pass) {
+            if let Err(e) = script_state_handle
+                .borrow_mut()
+                .call_render_event(script_pass)
+            {
                 warn!("Script render error: {}", e);
             }
             this = renderer_handle.borrow_mut();
@@ -1794,35 +1879,43 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     scale: (ui_scale * pixel_ratio) as f32,
                     _padding: [0.0; 7],
                 };
-                this.queue.write_buffer(&this.cursor_uniform_buffer, 0, bytemuck::bytes_of(&cursor_uniforms));
+                this.queue.write_buffer(
+                    &this.cursor_uniform_buffer,
+                    0,
+                    bytemuck::bytes_of(&cursor_uniforms),
+                );
 
-                let cursor_uniform_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("cursor_uniform_bind_group"),
-                    layout: &this.cursor_bind_group_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: this.cursor_uniform_buffer.as_entire_binding(),
-                    }],
-                });
-
-                let cursor_texture_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("cursor_texture_bind_group"),
-                    layout: &this.cursor_texture_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
+                let cursor_uniform_bind_group =
+                    this.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("cursor_uniform_bind_group"),
+                        layout: &this.cursor_bind_group_layout,
+                        entries: &[wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(this.cursors.view()),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(this.screen_texture.view()),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&this.sampler),
-                        },
-                    ],
-                });
+                            resource: this.cursor_uniform_buffer.as_entire_binding(),
+                        }],
+                    });
+
+                let cursor_texture_bind_group =
+                    this.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("cursor_texture_bind_group"),
+                        layout: &this.cursor_texture_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(this.cursors.view()),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(
+                                    this.screen_texture.view(),
+                                ),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(&this.sampler),
+                            },
+                        ],
+                    });
 
                 pass.set_pipeline(&this.cursor_pipeline);
                 pass.set_bind_group(0, &cursor_uniform_bind_group, &[]);
@@ -1833,36 +1926,40 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render debug/overlay text if debug setting is on or execution is not normal
             if session.settings["debug"].is_set() || !execution.is_normal() {
-                let overlay_vertices = this.create_sprite_vertices(&this.draw_ctx.overlay_batch.vertices());
+                let overlay_vertices =
+                    this.create_sprite_vertices(&this.draw_ctx.overlay_batch.vertices());
                 if let Some((buffer, count)) = overlay_vertices {
                     // Use BottomLeft ortho for overlay (like GL)
                     let [overlay_w, overlay_h] = this.screen_texture.size();
-                    let overlay_ortho: M44 = ortho_wgpu(overlay_w, overlay_h, Origin::BottomLeft).into();
+                    let overlay_ortho: M44 =
+                        ortho_wgpu(overlay_w, overlay_h, Origin::BottomLeft).into();
                     let overlay_uniforms = TransformUniforms {
                         ortho: overlay_ortho,
                         transform: identity,
                     };
 
-                    let overlay_uniform_buffer = this.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("overlay_uniform_buffer"),
-                        size: std::mem::size_of::<TransformUniforms>() as u64,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: true,
-                    });
+                    let overlay_uniform_buffer =
+                        this.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("overlay_uniform_buffer"),
+                            size: std::mem::size_of::<TransformUniforms>() as u64,
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: true,
+                        });
                     overlay_uniform_buffer
                         .slice(..)
                         .get_mapped_range_mut()
                         .copy_from_slice(bytemuck::bytes_of(&overlay_uniforms));
                     overlay_uniform_buffer.unmap();
 
-                    let overlay_bind_group = this.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("overlay_transform_bind_group"),
-                        layout: &this.transform_bind_group_layout,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: overlay_uniform_buffer.as_entire_binding(),
-                        }],
-                    });
+                    let overlay_bind_group =
+                        this.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("overlay_transform_bind_group"),
+                            layout: &this.transform_bind_group_layout,
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: overlay_uniform_buffer.as_entire_binding(),
+                            }],
+                        });
 
                     pass.set_pipeline(&this.sprite_pipeline);
                     pass.set_bind_group(0, &overlay_bind_group, &[]);
@@ -1942,13 +2039,7 @@ impl Renderer {
         height: u32,
         format: wgpu::TextureFormat,
     ) -> TextureHandle {
-        let texture = Texture::new(
-            &self.device,
-            width,
-            height,
-            format,
-            true,
-        );
+        let texture = Texture::new(&self.device, width, height, format, true);
         let id = storage.add_render_texture(texture);
         TextureHandle::ScriptCreated(id)
     }
@@ -2033,10 +2124,12 @@ impl Renderer {
         label: Option<&str>,
         wgsl_source: &str,
     ) -> u64 {
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: label.or(Some("script_shader")),
-            source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
-        });
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: label.or(Some("script_shader")),
+                source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
+            });
         storage.add_script_shader_module(module)
     }
 
@@ -2052,69 +2145,73 @@ impl Renderer {
         let module = storage
             .get_script_shader_module(shader_handle)
             .expect("create_render_pipeline: invalid shader handle");
-        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("script_pipeline_layout"),
-            bind_group_layouts: &[&self.transform_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("script_pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module,
-                entry_point: Some(vs_entry),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Sprite2dVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            offset: 0,
-                            shader_location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 12,
-                            shader_location: 1,
-                            format: wgpu::VertexFormat::Float32x2,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 20,
-                            shader_location: 2,
-                            format: wgpu::VertexFormat::Unorm8x4,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 24,
-                            shader_location: 3,
-                            format: wgpu::VertexFormat::Float32,
-                        },
-                    ],
-                }],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module,
-                entry_point: Some(fs_entry),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("script_pipeline_layout"),
+                bind_group_layouts: &[&self.transform_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        let pipeline = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("script_pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some(vs_entry),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Sprite2dVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                offset: 0,
+                                shader_location: 0,
+                                format: wgpu::VertexFormat::Float32x3,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 12,
+                                shader_location: 1,
+                                format: wgpu::VertexFormat::Float32x2,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 20,
+                                shader_location: 2,
+                                format: wgpu::VertexFormat::Unorm8x4,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 24,
+                                shader_location: 3,
+                                format: wgpu::VertexFormat::Float32,
+                            },
+                        ],
+                    }],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some(fs_entry),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
         storage.add_script_pipeline(pipeline)
     }
 
@@ -2130,72 +2227,76 @@ impl Renderer {
         let module = storage
             .get_script_shader_module(shader_handle)
             .expect("create_render_pipeline_with_texture: invalid shader handle");
-        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("script_pipeline_with_texture_layout"),
-            bind_group_layouts: &[
-                &self.transform_bind_group_layout,
-                &self.texture_bind_group_layout,
-            ],
-            push_constant_ranges: &[],
-        });
-        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("script_pipeline_with_texture"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module,
-                entry_point: Some(vs_entry),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Sprite2dVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            offset: 0,
-                            shader_location: 0,
-                            format: wgpu::VertexFormat::Float32x3,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 12,
-                            shader_location: 1,
-                            format: wgpu::VertexFormat::Float32x2,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 20,
-                            shader_location: 2,
-                            format: wgpu::VertexFormat::Unorm8x4,
-                        },
-                        wgpu::VertexAttribute {
-                            offset: 24,
-                            shader_location: 3,
-                            format: wgpu::VertexFormat::Float32,
-                        },
-                    ],
-                }],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module,
-                entry_point: Some(fs_entry),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("script_pipeline_with_texture_layout"),
+                bind_group_layouts: &[
+                    &self.transform_bind_group_layout,
+                    &self.texture_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+        let pipeline = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("script_pipeline_with_texture"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some(vs_entry),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Sprite2dVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                offset: 0,
+                                shader_location: 0,
+                                format: wgpu::VertexFormat::Float32x3,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 12,
+                                shader_location: 1,
+                                format: wgpu::VertexFormat::Float32x2,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 20,
+                                shader_location: 2,
+                                format: wgpu::VertexFormat::Unorm8x4,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 24,
+                                shader_location: 3,
+                                format: wgpu::VertexFormat::Float32,
+                            },
+                        ],
+                    }],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some(fs_entry),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
         storage.add_script_pipeline(pipeline)
     }
 
@@ -2343,10 +2444,10 @@ impl Renderer {
     /// Uses Sprite2dVertex layout (position, uv, color, opacity).
     pub fn create_fullscreen_triangle_vertex_buffer(&mut self, storage: &mut ScriptStorage) -> u64 {
         // Fullscreen triangle: (-1,-1,0), (3,-1,0), (-1,3,0); white, opacity 1
-        // position: Vector3 { x: 448.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 0.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 }, 
-        // position: Vector3 { x: 576.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 1.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 }, 
-        // position: Vector3 { x: 576.0, y: 424.0, z: -0.7 }, uv: Vector2 { x: 1.0, y: 0.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 }, 
- 
+        // position: Vector3 { x: 448.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 0.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 },
+        // position: Vector3 { x: 576.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 1.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 },
+        // position: Vector3 { x: 576.0, y: 424.0, z: -0.7 }, uv: Vector2 { x: 1.0, y: 0.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 },
+
         let verts = [
             Sprite2dVertex {
                 position: [448.0, 296.0, -0.7],
@@ -2377,7 +2478,6 @@ impl Renderer {
             .write_buffer(&buffer, 0, bytemuck::cast_slice(&verts));
         storage.add_script_buffer(buffer)
     }
-    
 
     /// Create a vertex buffer from sprite2d::Vertex slice and register it for script use. Returns handle.
     pub fn create_vertex_buffer_from_sprite_vertices(
@@ -2427,7 +2527,8 @@ impl Renderer {
         let h = (self.win_size.height / scale) as u32;
 
         if w > 0 && h > 0 {
-            self.screen_texture.resize(&self.device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
+            self.screen_texture
+                .resize(&self.device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
         }
     }
 
@@ -2499,11 +2600,11 @@ impl Renderer {
                         .view_data
                         .get(&v.id)
                         .expect("views must have associated view data");
-                    let mut encoder = self
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                            label: Some("clear_encoder"),
-                        });
+                    let mut encoder =
+                        self.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("clear_encoder"),
+                            });
                     {
                         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("clear_view"),
@@ -2529,7 +2630,9 @@ impl Renderer {
                 }
                 ViewOp::Blit(src, dst) => {
                     // Get pixels from the view's CPU snapshot
-                    if let Some((_, pixels)) = v.resource.layer.get_snapshot_rect(&src.map(|n| n as i32)) {
+                    if let Some((_, pixels)) =
+                        v.resource.layer.get_snapshot_rect(&src.map(|n| n as i32))
+                    {
                         let view_data = self
                             .view_data
                             .get_mut(&v.id)
@@ -2545,7 +2648,9 @@ impl Renderer {
                 }
                 ViewOp::Yank(src) => {
                     // Get pixels from the view's CPU snapshot (like GL)
-                    if let Some((_, pixels)) = v.resource.layer.get_snapshot_rect(&src.map(|n| n as i32)) {
+                    if let Some((_, pixels)) =
+                        v.resource.layer.get_snapshot_rect(&src.map(|n| n as i32))
+                    {
                         let (w, h) = (src.width() as u32, src.height() as u32);
 
                         // Resize paste texture if needed
@@ -2583,7 +2688,9 @@ impl Renderer {
                 }
                 ViewOp::Flip(src, dir) => {
                     // Get pixels from the view's CPU snapshot and flip in CPU
-                    if let Some((_, mut pixels)) = v.resource.layer.get_snapshot_rect(&src.map(|n| n as i32)) {
+                    if let Some((_, mut pixels)) =
+                        v.resource.layer.get_snapshot_rect(&src.map(|n| n as i32))
+                    {
                         let (w, h) = (src.width() as u32, src.height() as u32);
 
                         match dir {
@@ -2666,7 +2773,9 @@ impl Renderer {
 
                             let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                                 label: Some("paste_output_buffer"),
-                                size: (sprite_vertices.len() * std::mem::size_of::<Sprite2dVertex>()) as u64,
+                                size: (sprite_vertices.len()
+                                    * std::mem::size_of::<Sprite2dVertex>())
+                                    as u64,
                                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                                 mapped_at_creation: true,
                             });
@@ -2676,7 +2785,8 @@ impl Renderer {
                                 .copy_from_slice(bytemuck::cast_slice(&sprite_vertices));
                             buffer.unmap();
 
-                            self.paste_outputs.push((buffer, sprite_vertices.len() as u32));
+                            self.paste_outputs
+                                .push((buffer, sprite_vertices.len() as u32));
                         }
                     }
                 }
@@ -2742,15 +2852,14 @@ impl Renderer {
 
         let view_data = ViewData::new(&self.device, &self.queue, vw, vh, None);
 
-        if let Some((_, texels)) = view.layer.get_snapshot_rect(&Rect::origin(tw as i32, th as i32))
+        if let Some((_, texels)) = view
+            .layer
+            .get_snapshot_rect(&Rect::origin(tw as i32, th as i32))
         {
             let texels = util::align_u8(&texels);
-            view_data.layer.upload_part(
-                &self.queue,
-                [0, vh - th],
-                [tw, th],
-                texels,
-            );
+            view_data
+                .layer
+                .upload_part(&self.queue, [0, vh - th], [tw, th], texels);
         }
 
         self.view_data.insert(view.id, view_data);
@@ -2780,11 +2889,15 @@ impl Renderer {
                         })
                         .collect();
 
-                    info!("update_view_animations: sprite_vertices: {:?}", sprite_vertices);
+                    info!(
+                        "update_view_animations: sprite_vertices: {:?}",
+                        sprite_vertices
+                    );
 
                     let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("anim_vertex_buffer"),
-                        size: (sprite_vertices.len() * std::mem::size_of::<Sprite2dVertex>()) as u64,
+                        size: (sprite_vertices.len() * std::mem::size_of::<Sprite2dVertex>())
+                            as u64,
                         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: true,
                     });
@@ -2823,7 +2936,8 @@ impl Renderer {
 
                     let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("composite_vertex_buffer"),
-                        size: (sprite_vertices.len() * std::mem::size_of::<Sprite2dVertex>()) as u64,
+                        size: (sprite_vertices.len() * std::mem::size_of::<Sprite2dVertex>())
+                            as u64,
                         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: true,
                     });
@@ -2841,10 +2955,7 @@ impl Renderer {
     }
 
     /// Create a vertex buffer from sprite2d vertices.
-    fn create_sprite_vertices(
-        &self,
-        vertices: &[sprite2d::Vertex],
-    ) -> Option<(wgpu::Buffer, u32)> {
+    fn create_sprite_vertices(&self, vertices: &[sprite2d::Vertex]) -> Option<(wgpu::Buffer, u32)> {
         if vertices.is_empty() {
             return None;
         }
@@ -2875,10 +2986,7 @@ impl Renderer {
     }
 
     /// Create a vertex buffer from shape2d vertices.
-    fn create_shape_vertices(
-        &self,
-        vertices: &[shape2d::Vertex],
-    ) -> Option<(wgpu::Buffer, u32)> {
+    fn create_shape_vertices(&self, vertices: &[shape2d::Vertex]) -> Option<(wgpu::Buffer, u32)> {
         if vertices.is_empty() {
             return None;
         }

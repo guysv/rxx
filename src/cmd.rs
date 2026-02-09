@@ -715,7 +715,10 @@ impl Commands {
 
     /// Get script command names (for autocomplete).
     pub fn script_command_names(&self) -> Vec<String> {
-        self.script_commands.iter().map(|(n, _)| n.clone()).collect()
+        self.script_commands
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect()
     }
 
     /// Get script commands (name, help) for help display.
@@ -744,15 +747,18 @@ impl Commands {
                         }
                         let rest_after_name = &input[name.len()..];
                         // Check that command name is followed by whitespace or end
-                        if !rest_after_name.is_empty() && !rest_after_name.starts_with(char::is_whitespace) {
-                            return Err((format!("expected {} followed by whitespace", name).into(), input));
+                        if !rest_after_name.is_empty()
+                            && !rest_after_name.starts_with(char::is_whitespace)
+                        {
+                            return Err((
+                                format!("expected {} followed by whitespace", name).into(),
+                                input,
+                            ));
                         }
                         // Skip optional whitespace and get rest of line
                         let rest = rest_after_name.trim_start();
-                        let args: Vec<String> = rest
-                            .split_whitespace()
-                            .map(|s| s.to_string())
-                            .collect();
+                        let args: Vec<String> =
+                            rest.split_whitespace().map(|s| s.to_string()).collect();
                         Ok((Command::ScriptCommand(name_for_map.clone(), args), ""))
                     },
                     "<script-cmd>",

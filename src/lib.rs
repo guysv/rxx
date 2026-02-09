@@ -24,14 +24,12 @@ mod alloc;
 mod autocomplete;
 mod brush;
 mod cmd;
-mod script;
 mod color;
 mod draw;
 mod event;
 mod flood;
 mod font;
 mod history;
-mod wgpu;
 mod image;
 mod io;
 mod palette;
@@ -39,9 +37,11 @@ mod parser;
 mod pixels;
 mod platform;
 mod renderer;
+mod script;
 mod sprite;
 mod timer;
 mod view;
+mod wgpu;
 
 #[macro_use]
 pub mod util;
@@ -192,12 +192,10 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
     drop(session); // release so load_script can borrow session_handle
 
-    let script_state_handle: Rc<RefCell<ScriptState>> =
-        Rc::new(RefCell::new(ScriptState::new()));
+    let script_state_handle: Rc<RefCell<ScriptState>> = Rc::new(RefCell::new(ScriptState::new()));
     if let Some(path) = options.script.clone() {
         script_state_handle.borrow_mut().set_path(path);
-        if let Err(e) =
-            script::load_script(&script_state_handle, &session_handle, &renderer_handle)
+        if let Err(e) = script::load_script(&script_state_handle, &session_handle, &renderer_handle)
         {
             log::error!("Error loading script: {}", e);
         }
@@ -223,28 +221,33 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         thread::spawn(move || {
             use notify::{RecursiveMode, Watcher};
             let pending_cb = Arc::clone(&pending_clone);
-            let mut watcher = match notify::recommended_watcher(move |res: Result<notify::Event, _>| {
-                if let Ok(event) = res {
-                    let is_our_file = event.paths.iter().any(|p| {
-                        p.canonicalize().ok().as_ref() == script_canonical.as_ref()
-                    });
-                    let is_modify = matches!(
-                        event.kind,
-                        notify::EventKind::Modify(_) | notify::EventKind::Create(_)
-                    );
-                    if is_our_file && is_modify {
-                        pending_cb.store(true, Ordering::Relaxed);
-                        unsafe { glfw::ffi::glfwPostEmptyEvent() };
+            let mut watcher =
+                match notify::recommended_watcher(move |res: Result<notify::Event, _>| {
+                    if let Ok(event) = res {
+                        let is_our_file = event
+                            .paths
+                            .iter()
+                            .any(|p| p.canonicalize().ok().as_ref() == script_canonical.as_ref());
+                        let is_modify = matches!(
+                            event.kind,
+                            notify::EventKind::Modify(_) | notify::EventKind::Create(_)
+                        );
+                        if is_our_file && is_modify {
+                            pending_cb.store(true, Ordering::Relaxed);
+                            unsafe { glfw::ffi::glfwPostEmptyEvent() };
+                        }
                     }
-                }
-            }) {
-                Ok(w) => w,
-                Err(e) => {
-                    log::warn!("script watcher: {}", e);
-                    return;
-                }
-            };
-            if watcher.watch(&watch_dir, RecursiveMode::NonRecursive).is_err() {
+                }) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        log::warn!("script watcher: {}", e);
+                        return;
+                    }
+                };
+            if watcher
+                .watch(&watch_dir, RecursiveMode::NonRecursive)
+                .is_err()
+            {
                 log::warn!("script watcher: failed to watch {}", watch_dir.display());
                 return;
             }
@@ -280,7 +283,9 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
         if let Some(ref flag) = script_reload_pending {
             if flag.swap(false, Ordering::Relaxed)
-                && script_state_handle.borrow().script_file_modified_since_load()
+                && script_state_handle
+                    .borrow()
+                    .script_file_modified_since_load()
             {
                 drop(session);
                 script::reload_script(&script_state_handle, &session_handle, &renderer_handle);
@@ -419,8 +424,9 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         }
 
         drop(session);
-        let renderer_effects =
-            script_state_handle.borrow_mut().call_view_effects(&effects, &session_handle);
+        let renderer_effects = script_state_handle
+            .borrow_mut()
+            .call_view_effects(&effects, &session_handle);
 
         render_timer.run(|avg| {
             Renderer::frame(

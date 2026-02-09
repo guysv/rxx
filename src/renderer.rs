@@ -4,8 +4,8 @@ use crate::platform::{self, LogicalSize};
 use crate::script::ScriptState;
 use crate::session::{self, Effect, Session};
 
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::time;
 
 pub trait Renderer<'a>: std::marker::Sized {

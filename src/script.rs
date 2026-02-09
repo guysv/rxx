@@ -138,11 +138,7 @@ impl ScriptStorage {
         self.script_view_transform_bind_group_id
     }
 
-    pub fn set_script_view_transform(
-        &mut self,
-        buffer: wgpu_types::Buffer,
-        bind_group_id: u64,
-    ) {
+    pub fn set_script_view_transform(&mut self, buffer: wgpu_types::Buffer, bind_group_id: u64) {
         self.script_view_transform_buffer = Some(buffer);
         self.script_view_transform_bind_group_id = Some(bind_group_id);
     }
@@ -151,7 +147,10 @@ impl ScriptStorage {
 /// Type alias for the user batches shared between script and session.
 /// (shape batch, sprite batch for text). Sprite batch is created lazily with font size.
 #[allow(dead_code)]
-pub type UserBatch = (Rc<RefCell<shape2d::Batch>>, Rc<RefCell<Option<sprite2d::Batch>>>);
+pub type UserBatch = (
+    Rc<RefCell<shape2d::Batch>>,
+    Rc<RefCell<Option<sprite2d::Batch>>>,
+);
 
 /// Read-only view handle exposed to Rhai scripts.
 #[derive(Debug, Clone)]
@@ -165,7 +164,13 @@ struct ScriptView {
 
 impl From<&View<ViewResource>> for ScriptView {
     fn from(view: &View<ViewResource>) -> Self {
-        ScriptView { id: view.id, offset: view.offset, frame_width: view.fw as f32, frame_height: view.fh as f32, zoom: view.zoom }
+        ScriptView {
+            id: view.id,
+            offset: view.offset,
+            frame_width: view.fw as f32,
+            frame_height: view.fh as f32,
+            zoom: view.zoom,
+        }
     }
 }
 
@@ -183,13 +188,21 @@ pub struct ScriptSpriteVertexList {
 
 impl std::fmt::Debug for ScriptSpriteVertexList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ScriptSpriteVertexList {{ vertices: {:?} }}", self.vertices)
+        write!(
+            f,
+            "ScriptSpriteVertexList {{ vertices: {:?} }}",
+            self.vertices
+        )
     }
 }
 
 impl std::fmt::Display for ScriptSpriteVertexList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ScriptSpriteVertexList {{ vertices: {:?} }}", self.vertices)
+        write!(
+            f,
+            "ScriptSpriteVertexList {{ vertices: {:?} }}",
+            self.vertices
+        )
     }
 }
 
@@ -280,12 +293,10 @@ pub fn load_script(
     register_renderer_handle(&mut engine, renderer_handle, script_state_handle);
     register_wgpu_types(&mut engine);
 
-    let script_commands: Rc<RefCell<Vec<(String, String)>>> =
-        Rc::new(RefCell::new(Vec::new()));
+    let script_commands: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
     register_command_api(&mut engine, script_commands.clone());
 
-    let ast = compile_file(&engine, &path)
-        .map_err(|e| format!("Script compile error: {}", e))?;
+    let ast = compile_file(&engine, &path).map_err(|e| format!("Script compile error: {}", e))?;
     let mut scope = Scope::new();
     register_constants(&mut scope);
     call_init(&engine, &mut scope, &ast, session_handle, renderer_handle)
@@ -331,7 +342,6 @@ impl ScriptState {
         self.script_path.as_ref()
     }
 
-
     /// Traverse effects: call script's `view_added` / `view_removed` handlers and run script
     /// commands (with session messages on error). Returns effects not consumed for the renderer.
     pub fn call_view_effects(
@@ -360,7 +370,9 @@ impl ScriptState {
                         let _ = call_view_removed(engine, scope, &ast.borrow(), id.raw() as i64);
                         renderer_effects.push(eff.clone());
                     }
-                    Effect::RunScriptCommand(name, args) => script_commands.push((name.clone(), args.clone())),
+                    Effect::RunScriptCommand(name, args) => {
+                        script_commands.push((name.clone(), args.clone()))
+                    }
                     other => renderer_effects.push(other.clone()),
                 }
             }
@@ -404,7 +416,10 @@ impl ScriptState {
         call_draw(engine, scope, &ast.borrow())
     }
 
-    pub fn call_shade_event(&mut self, encoder: &Rc<RefCell<wgpu_types::CommandEncoder>>) -> Result<(), Box<rhai::EvalAltResult>> {
+    pub fn call_shade_event(
+        &mut self,
+        encoder: &Rc<RefCell<wgpu_types::CommandEncoder>>,
+    ) -> Result<(), Box<rhai::EvalAltResult>> {
         let (engine, scope, ast) = match (
             self.script_engine.as_ref(),
             self.script_scope.as_mut(),
@@ -416,7 +431,10 @@ impl ScriptState {
         call_shade(engine, scope, &ast.borrow(), encoder)
     }
 
-    pub fn call_render_event(&mut self, script_pass: ScriptPass) -> Result<(), Box<rhai::EvalAltResult>> {
+    pub fn call_render_event(
+        &mut self,
+        script_pass: ScriptPass,
+    ) -> Result<(), Box<rhai::EvalAltResult>> {
         let (engine, scope, ast) = match (
             self.script_engine.as_ref(),
             self.script_scope.as_mut(),
@@ -430,12 +448,22 @@ impl ScriptState {
 
     /// Get the user shape batch vertices for rendering.
     pub fn user_batch_vertices(&self) -> Vec<crate::gfx::shape2d::Vertex> {
-        self.script_storage.borrow().user_batch.0.borrow().vertices()
+        self.script_storage
+            .borrow()
+            .user_batch
+            .0
+            .borrow()
+            .vertices()
     }
 
     /// Check if the user shape batch is empty.
     pub fn user_batch_is_empty(&self) -> bool {
-        self.script_storage.borrow().user_batch.0.borrow().is_empty()
+        self.script_storage
+            .borrow()
+            .user_batch
+            .0
+            .borrow()
+            .is_empty()
     }
 
     /// Get the user sprite batch vertices for rendering (text). Empty if batch not yet created.
@@ -504,14 +532,26 @@ pub fn compile_file(engine: &Engine, path: &Path) -> Result<AST, Box<rhai::EvalA
 pub fn register_session_handle(engine: &mut Engine) {
     engine
         .register_type_with_name::<Rc<RefCell<Session>>>("Session")
-        .register_get("width", |s: &mut Rc<RefCell<Session>>| s.borrow().width as f64)
-        .register_get("height", |s: &mut Rc<RefCell<Session>>| s.borrow().height as f64)
-        .register_get("offset_x", |s: &mut Rc<RefCell<Session>>| s.borrow().offset.x as f64)
-        .register_get("offset_y", |s: &mut Rc<RefCell<Session>>| s.borrow().offset.y as f64)
-        .register_get("active_view_id", |s: &mut Rc<RefCell<Session>>| s.borrow().views.active_id.raw() as i64)
+        .register_get("width", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow().width as f64
+        })
+        .register_get("height", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow().height as f64
+        })
+        .register_get("offset_x", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow().offset.x as f64
+        })
+        .register_get("offset_y", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow().offset.y as f64
+        })
+        .register_get("active_view_id", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow().views.active_id.raw() as i64
+        })
         .register_type_with_name::<ScriptView>("View")
         .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
-        .register_get("offset", |v: &mut ScriptView| Vector2::new(v.offset.x as f32, v.offset.y as f32))
+        .register_get("offset", |v: &mut ScriptView| {
+            Vector2::new(v.offset.x as f32, v.offset.y as f32)
+        })
         .register_get("frame_width", |v: &mut ScriptView| v.frame_width)
         .register_get("frame_height", |v: &mut ScriptView| v.frame_height)
         .register_get("zoom", |v: &mut ScriptView| v.zoom)
@@ -584,7 +624,11 @@ impl ScriptPass {
         Ok(())
     }
 
-    pub fn set_bind_group(&mut self, index: i64, handle: i64) -> Result<(), Box<rhai::EvalAltResult>> {
+    pub fn set_bind_group(
+        &mut self,
+        index: i64,
+        handle: i64,
+    ) -> Result<(), Box<rhai::EvalAltResult>> {
         let id = handle as u64;
         let storage_ref = self.script_storage.borrow();
         let bind_group = storage_ref.get_script_bind_group(id).ok_or_else(|| {
@@ -593,11 +637,17 @@ impl ScriptPass {
                 rhai::Position::NONE,
             )
         })?;
-        self.pass.borrow_mut().set_bind_group(index as u32, bind_group, &[]);
+        self.pass
+            .borrow_mut()
+            .set_bind_group(index as u32, bind_group, &[]);
         Ok(())
     }
 
-    pub fn set_vertex_buffer(&mut self, slot: i64, handle: i64) -> Result<(), Box<rhai::EvalAltResult>> {
+    pub fn set_vertex_buffer(
+        &mut self,
+        slot: i64,
+        handle: i64,
+    ) -> Result<(), Box<rhai::EvalAltResult>> {
         let id = handle as u64;
         let storage_ref = self.script_storage.borrow();
         let buffer = storage_ref.get_script_buffer(id).ok_or_else(|| {
@@ -606,7 +656,9 @@ impl ScriptPass {
                 rhai::Position::NONE,
             )
         })?;
-        self.pass.borrow_mut().set_vertex_buffer(slot as u32, buffer.slice(..));
+        self.pass
+            .borrow_mut()
+            .set_vertex_buffer(slot as u32, buffer.slice(..));
         Ok(())
     }
 
@@ -631,7 +683,6 @@ pub fn register_renderer_handle(
     _renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
     script_state_handle: &Rc<RefCell<ScriptState>>,
 ) {
-    let script_storage_handle = script_state_handle.borrow().script_storage().clone();
     engine
         .register_type_with_name::<wgpu_types::TextureFormat>("TextureFormat")
         .register_type_with_name::<TextureHandle>("TextureHandle")
@@ -640,7 +691,9 @@ pub fn register_renderer_handle(
         .register_type_with_name::<ScriptColorAttachment>("ColorAttachment")
         .register_type_with_name::<ScriptPass>("ScriptPass")
         .register_fn("load_load", || ScriptLoadOp::Load)
-        .register_fn("load_clear", |r: f64, g: f64, b: f64, a: f64| ScriptLoadOp::Clear { r, g, b, a })
+        .register_fn("load_clear", |r: f64, g: f64, b: f64, a: f64| {
+            ScriptLoadOp::Clear { r, g, b, a }
+        })
         .register_fn("store_store", || ScriptStoreOp::Store)
         .register_fn(
             "color_attachment",
@@ -660,13 +713,19 @@ pub fn register_renderer_handle(
         )
         .register_fn(
             "set_bind_group",
-            |pass: &mut ScriptPass, index: i64, handle: i64| -> Result<(), Box<rhai::EvalAltResult>> {
+            |pass: &mut ScriptPass,
+             index: i64,
+             handle: i64|
+             -> Result<(), Box<rhai::EvalAltResult>> {
                 pass.set_bind_group(index, handle)
             },
         )
         .register_fn(
             "set_vertex_buffer",
-            |pass: &mut ScriptPass, slot: i64, handle: i64| -> Result<(), Box<rhai::EvalAltResult>> {
+            |pass: &mut ScriptPass,
+             slot: i64,
+             handle: i64|
+             -> Result<(), Box<rhai::EvalAltResult>> {
                 pass.set_vertex_buffer(slot, handle)
             },
         )
@@ -681,164 +740,148 @@ pub fn register_renderer_handle(
             },
         )
         .register_type_with_name::<Rc<RefCell<wgpu::Renderer>>>("Renderer")
-        .register_fn(
-            "create_render_texture",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>, width: i64, height: i64| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                    r.borrow_mut().create_render_texture(&mut *storage, width as u32, height as u32)
+        .register_fn("create_render_texture", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, width: i64, height: i64| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut()
+                    .create_render_texture(&mut *storage, width as u32, height as u32)
+            }
+        })
+        .register_fn("create_compute_texture", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  width: i64,
+                  height: i64,
+                  format: wgpu_types::TextureFormat| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut().create_compute_texture(
+                    &mut *storage,
+                    width as u32,
+                    height as u32,
+                    format,
+                )
+            }
+        })
+        .register_fn("view_render_texture", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, view_id: i64| -> Dynamic {
+                let id = ViewId(view_id as u16);
+                match r.borrow().view_render_texture(id) {
+                    Some(h) => Dynamic::from(h),
+                    None => Dynamic::UNIT,
                 }
-            },
-        )
-        .register_fn(
-            "create_compute_texture",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                    move |r: &mut Rc<RefCell<wgpu::Renderer>>, width: i64, height: i64, format: wgpu_types::TextureFormat| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                    r.borrow_mut().create_compute_texture(&mut *storage, width as u32, height as u32, format)
-                }
-            },
-        )
-        .register_fn(
-            "view_render_texture",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>, view_id: i64| -> Dynamic {
-                    let storage = script_storage_handle.borrow();
-                    let id = ViewId(view_id as u16);
-                    match r.borrow().view_render_texture(id) {
-                        Some(h) => Dynamic::from(h),
-                        None => Dynamic::UNIT,
-                    }
-                }
-            },
-        )
-        .register_fn(
-            "create_texture_sampler_bind_group",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                    move |r: &mut Rc<RefCell<wgpu::Renderer>>, handle: TextureHandle| {
-                    let mut storage = script_storage_handle.borrow_mut();
+            }
+        })
+        .register_fn("create_texture_sampler_bind_group", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, handle: TextureHandle| {
+                let mut storage = script_storage_handle.borrow_mut();
                 r.borrow_mut()
                     .create_texture_sampler_bind_group(&mut *storage, handle)
                     .expect("create_texture_sampler_bind_group failed") as i64
-                }
-            },
-        )
-        .register_fn(
-            "create_shader_module",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>, wgsl_source: ImmutableString| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                r.borrow_mut().create_shader_module(&mut *storage, None, wgsl_source.as_str()) as i64
-                }
-            },
-        )
-        .register_fn(
-            "create_render_pipeline",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>,
-                shader_handle: i64,
-                vs_entry: ImmutableString,
-                fs_entry: ImmutableString| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                    r.borrow_mut().create_render_pipeline(
-                        &mut *storage,
-                        shader_handle as u64,
-                        vs_entry.as_str(),
-                        fs_entry.as_str(),
-                    ) as i64
-                }
-            },
-        )
-        .register_fn(
-            "create_render_pipeline_with_texture",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>,
-                shader_handle: i64,
-                vs_entry: ImmutableString,
-                fs_entry: ImmutableString| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                    r.borrow_mut().create_render_pipeline_with_texture(
-                        &mut *storage,
-                        shader_handle as u64,
-                        vs_entry.as_str(),
-                        fs_entry.as_str(),
-                        ) as i64
-                }
-            },
-        )
-        .register_fn(
-            "create_buffer",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>, size: i64, usage_str: ImmutableString| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                    r.borrow_mut().create_buffer(&mut *storage, size as u64, usage_str.as_str(), None) as i64
-                }
-            },
-        )
-        .register_fn(
-            "create_buffer",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>,
-             size: i64,
-             usage_str: ImmutableString,
-             data: Array| {
-                    let mut storage = script_storage_handle.borrow_mut();
+            }
+        })
+        .register_fn("create_shader_module", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, wgsl_source: ImmutableString| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut()
+                    .create_shader_module(&mut *storage, None, wgsl_source.as_str())
+                    as i64
+            }
+        })
+        .register_fn("create_render_pipeline", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  shader_handle: i64,
+                  vs_entry: ImmutableString,
+                  fs_entry: ImmutableString| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut().create_render_pipeline(
+                    &mut *storage,
+                    shader_handle as u64,
+                    vs_entry.as_str(),
+                    fs_entry.as_str(),
+                ) as i64
+            }
+        })
+        .register_fn("create_render_pipeline_with_texture", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  shader_handle: i64,
+                  vs_entry: ImmutableString,
+                  fs_entry: ImmutableString| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut().create_render_pipeline_with_texture(
+                    &mut *storage,
+                    shader_handle as u64,
+                    vs_entry.as_str(),
+                    fs_entry.as_str(),
+                ) as i64
+            }
+        })
+        .register_fn("create_buffer", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, size: i64, usage_str: ImmutableString| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut()
+                    .create_buffer(&mut *storage, size as u64, usage_str.as_str(), None)
+                    as i64
+            }
+        })
+        .register_fn("create_buffer", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  size: i64,
+                  usage_str: ImmutableString,
+                  data: Array| {
+                let mut storage = script_storage_handle.borrow_mut();
                 let bytes: Vec<u8> = data
                     .iter()
                     .map(|v| v.clone().cast::<i64>().clamp(0, 255) as u8)
                     .collect();
-                let slice = if bytes.is_empty() { None } else { Some(bytes.as_slice()) };
-                r.borrow_mut().create_buffer(&mut *storage, size as u64, usage_str.as_str(), slice) as i64
-                }
-            },
-        )
-        .register_fn(
-            "create_transform_bind_group",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>, buffer_handle: i64| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                    r.borrow_mut().create_transform_bind_group(&mut *storage, buffer_handle as u64) as i64
-                }
-            },
-        )
-        .register_fn(
-            "create_identity_transform_bind_group",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                r.borrow_mut().create_identity_transform_bind_group(&mut *storage) as i64
-                }
-            },
-        )
-        .register_fn(
-            "create_view_transform_bind_group",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                move |r: &mut Rc<RefCell<wgpu::Renderer>>,
-             translation_x: f64,
-             translation_y: f64,
-             zoom: f64| {
-                    let mut storage = script_storage_handle.borrow_mut();
+                let slice = if bytes.is_empty() {
+                    None
+                } else {
+                    Some(bytes.as_slice())
+                };
+                r.borrow_mut()
+                    .create_buffer(&mut *storage, size as u64, usage_str.as_str(), slice)
+                    as i64
+            }
+        })
+        .register_fn("create_transform_bind_group", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, buffer_handle: i64| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut()
+                    .create_transform_bind_group(&mut *storage, buffer_handle as u64)
+                    as i64
+            }
+        })
+        .register_fn("create_identity_transform_bind_group", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut()
+                    .create_identity_transform_bind_group(&mut *storage) as i64
+            }
+        })
+        .register_fn("create_view_transform_bind_group", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  translation_x: f64,
+                  translation_y: f64,
+                  zoom: f64| {
+                let mut storage = script_storage_handle.borrow_mut();
                 r.borrow_mut().create_view_transform_bind_group(
                     &mut *storage,
                     translation_x as f32,
                     translation_y as f32,
                     zoom as f32,
                 ) as i64
-                }
-            },
-        )
+            }
+        })
         .register_type_with_name::<ScriptSpriteBatch>("ScriptSpriteBatch")
         .register_fn(
             "sprite_singleton_batch",
@@ -862,33 +905,35 @@ pub fn register_renderer_handle(
                 ScriptSpriteBatch { batch }
             },
         )
-        .register_fn("vertices", |batch: &mut ScriptSpriteBatch| ScriptSpriteVertexList {
-            vertices: batch.batch.vertices(),
+        .register_fn("vertices", |batch: &mut ScriptSpriteBatch| {
+            ScriptSpriteVertexList {
+                vertices: batch.batch.vertices(),
+            }
         })
         .register_type_with_name::<ScriptSpriteVertexList>("ScriptSpriteVertexList")
-        .register_fn("to_string", |list: &mut ScriptSpriteVertexList| list.to_string())
-        .register_fn("to_debug", |list: &mut ScriptSpriteVertexList| format!("{list:?}"))
-        .register_fn(
-            "create_vertex_buffer_from_sprite_vertices",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                    move |r: &mut Rc<RefCell<wgpu::Renderer>>, list: ScriptSpriteVertexList| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                    r.borrow_mut()
-                        .create_vertex_buffer_from_sprite_vertices(&mut *storage, &list.vertices) as i64
-                }
-            },
-        )
-        .register_fn(
-            "create_fullscreen_triangle_vertex_buffer",
-            {
-                let script_storage_handle = script_state_handle.borrow().script_storage().clone();
-                    move |r: &mut Rc<RefCell<wgpu::Renderer>>| {
-                    let mut storage = script_storage_handle.borrow_mut();
-                    r.borrow_mut().create_fullscreen_triangle_vertex_buffer(&mut *storage) as i64
-                }
-            },
-        )
+        .register_fn("to_string", |list: &mut ScriptSpriteVertexList| {
+            list.to_string()
+        })
+        .register_fn("to_debug", |list: &mut ScriptSpriteVertexList| {
+            format!("{list:?}")
+        })
+        .register_fn("create_vertex_buffer_from_sprite_vertices", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, list: ScriptSpriteVertexList| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut()
+                    .create_vertex_buffer_from_sprite_vertices(&mut *storage, &list.vertices)
+                    as i64
+            }
+        })
+        .register_fn("create_fullscreen_triangle_vertex_buffer", {
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>| {
+                let mut storage = script_storage_handle.borrow_mut();
+                r.borrow_mut()
+                    .create_fullscreen_triangle_vertex_buffer(&mut *storage) as i64
+            }
+        })
         .register_raw_fn(
             "begin_render_pass",
             [
@@ -922,19 +967,19 @@ pub fn register_renderer_handle(
                             )
                         })?;
                     let label = args[2].clone().into_immutable_string().unwrap_or_default();
-                    let attachments = args[3]
-                        .clone()
-                        .try_cast::<Array>()
-                        .ok_or_else(|| {
-                            rhai::EvalAltResult::ErrorMismatchDataType(
-                                "Array".into(),
-                                args[3].type_name().into(),
-                                rhai::Position::NONE,
-                            )
-                        })?;
+                    let attachments = args[3].clone().try_cast::<Array>().ok_or_else(|| {
+                        rhai::EvalAltResult::ErrorMismatchDataType(
+                            "Array".into(),
+                            args[3].type_name().into(),
+                            rhai::Position::NONE,
+                        )
+                    })?;
                     let renderer = r.borrow();
                     let mut texture_refs: Vec<Ref<Texture>> = Vec::new();
-                    let mut ops_list: Vec<(wgpu_types::LoadOp<wgpu_types::Color>, wgpu_types::StoreOp)> = Vec::new();
+                    let mut ops_list: Vec<(
+                        wgpu_types::LoadOp<wgpu_types::Color>,
+                        wgpu_types::StoreOp,
+                    )> = Vec::new();
                     for att in attachments.iter() {
                         let Some(att) = att.clone().try_cast::<ScriptColorAttachment>() else {
                             continue;
@@ -946,12 +991,14 @@ pub fn register_renderer_handle(
                             };
                             let load_op = match &att.load_op {
                                 ScriptLoadOp::Load => wgpu_types::LoadOp::Load,
-                                ScriptLoadOp::Clear { r, g, b, a } => wgpu_types::LoadOp::Clear(wgpu_types::Color {
-                                    r: *r,
-                                    g: *g,
-                                    b: *b,
-                                    a: *a,
-                                }),
+                                ScriptLoadOp::Clear { r, g, b, a } => {
+                                    wgpu_types::LoadOp::Clear(wgpu_types::Color {
+                                        r: *r,
+                                        g: *g,
+                                        b: *b,
+                                        a: *a,
+                                    })
+                                }
                             };
                             let store_op = match &att.store_op {
                                 ScriptStoreOp::Store => wgpu_types::StoreOp::Store,
@@ -963,21 +1010,22 @@ pub fn register_renderer_handle(
                     if texture_refs.is_empty() {
                         return Ok(Dynamic::UNIT);
                     }
-                    let color_attachments: Vec<Option<wgpu_types::RenderPassColorAttachment>> = texture_refs
-                        .iter()
-                        .zip(ops_list.iter())
-                        .map(|(r, (load_op, store_op))| {
-                            let ops = wgpu_types::Operations {
-                                load: load_op.clone(),
-                                store: *store_op,
-                            };
-                            Some(wgpu_types::RenderPassColorAttachment {
-                                view: r.view(),
-                                resolve_target: None,
-                                ops,
+                    let color_attachments: Vec<Option<wgpu_types::RenderPassColorAttachment>> =
+                        texture_refs
+                            .iter()
+                            .zip(ops_list.iter())
+                            .map(|(r, (load_op, store_op))| {
+                                let ops = wgpu_types::Operations {
+                                    load: load_op.clone(),
+                                    store: *store_op,
+                                };
+                                Some(wgpu_types::RenderPassColorAttachment {
+                                    view: r.view(),
+                                    resolve_target: None,
+                                    ops,
+                                })
                             })
-                        })
-                        .collect();
+                            .collect();
                     let descriptor = wgpu_types::RenderPassDescriptor {
                         label: Some(label.as_str()),
                         color_attachments: &color_attachments,
@@ -988,10 +1036,11 @@ pub fn register_renderer_handle(
                     let mut encoder_mut = encoder.borrow_mut();
                     let pass = encoder_mut.begin_render_pass(&descriptor);
                     let pass_handle = Rc::new(RefCell::new(pass.forget_lifetime()));
-                    let script_pass = ScriptPass::new(pass_handle, r.clone(), script_storage_handle.clone());
+                    let script_pass =
+                        ScriptPass::new(pass_handle, r.clone(), script_storage_handle.clone());
                     Ok(Dynamic::from(script_pass))
-                }    
-            }
+                }
+            },
         );
 }
 
@@ -1060,18 +1109,15 @@ pub fn register_draw_primitives(
     register_draw_types(engine);
 
     let shape_batch_line = shape_batch.clone();
-    engine.register_fn(
-        "draw_line",
-        move |p1: Vector2<f32>, p2: Vector2<f32>| {
-            let shape = Shape::Line(
-                Line::new(Point2::new(p1.x, p1.y), Point2::new(p2.x, p2.y)),
-                USER_LAYER,
-                Rotation::ZERO,
-                Stroke::new(1.0, Rgba::WHITE),
-            );
-            shape_batch_line.borrow_mut().add(shape);
-        },
-    );
+    engine.register_fn("draw_line", move |p1: Vector2<f32>, p2: Vector2<f32>| {
+        let shape = Shape::Line(
+            Line::new(Point2::new(p1.x, p1.y), Point2::new(p2.x, p2.y)),
+            USER_LAYER,
+            Rotation::ZERO,
+            Stroke::new(1.0, Rgba::WHITE),
+        );
+        shape_batch_line.borrow_mut().add(shape);
+    });
     engine.register_fn(
         "draw_line",
         move |p1: Vector2<f32>, p2: Vector2<f32>, color: Rgba8| {
@@ -1111,27 +1157,30 @@ pub fn register_draw_primitives(
             }
         }
     });
-    engine.register_fn("draw_text", move |pos: Vector2<f32>, text: &str, color: Rgba8| {
-        let color: Rgba = color.into();
-        if let Some(ref mut batch) = *sprite_batch.borrow_mut() {
-            let mut sx = pos.x;
-            let sy = pos.y;
-            for c in text.bytes() {
-                let i = c as usize - FONT_OFFSET;
-                let tx = (i % 16) as f32 * gw;
-                let ty = (i / 16) as f32 * gh;
-                batch.add(
-                    Rect::new(tx, ty, tx + gw, ty + gh),
-                    Rect::new(sx, sy, sx + gw, sy + gh),
-                    USER_LAYER,
-                    color,
-                    1.0,
-                    Repeat::default(),
-                );
-                sx += gw;
+    engine.register_fn(
+        "draw_text",
+        move |pos: Vector2<f32>, text: &str, color: Rgba8| {
+            let color: Rgba = color.into();
+            if let Some(ref mut batch) = *sprite_batch.borrow_mut() {
+                let mut sx = pos.x;
+                let sy = pos.y;
+                for c in text.bytes() {
+                    let i = c as usize - FONT_OFFSET;
+                    let tx = (i % 16) as f32 * gw;
+                    let ty = (i / 16) as f32 * gh;
+                    batch.add(
+                        Rect::new(tx, ty, tx + gw, ty + gh),
+                        Rect::new(sx, sy, sx + gw, sy + gh),
+                        USER_LAYER,
+                        color,
+                        1.0,
+                        Repeat::default(),
+                    );
+                    sx += gw;
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 pub fn register_wgpu_types(engine: &mut Engine) {
@@ -1142,12 +1191,17 @@ pub fn register_wgpu_types(engine: &mut Engine) {
 /// Commands are collected in the provided `Rc<RefCell<Vec<(String, String)>>>`.
 fn register_command_api(engine: &mut Engine, commands: Rc<RefCell<Vec<(String, String)>>>) {
     engine.register_fn("register_command", move |name: &str, help: &str| {
-        commands.borrow_mut().push((name.to_string(), help.to_string()));
+        commands
+            .borrow_mut()
+            .push((name.to_string(), help.to_string()));
     });
 }
 
 fn register_constants(scope: &mut Scope) {
-    scope.push_constant("TEXTURE_FORMAT_RGBA8_UNORM", wgpu_types::TextureFormat::Rgba8Unorm);
+    scope.push_constant(
+        "TEXTURE_FORMAT_RGBA8_UNORM",
+        wgpu_types::TextureFormat::Rgba8Unorm,
+    );
 }
 
 /// Call the script's `init(session, renderer)` function with options so that new variables
@@ -1162,9 +1216,7 @@ pub fn call_init(
     session_handle: &Rc<RefCell<Session>>,
     renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    let options = CallFnOptions::new()
-        .eval_ast(false)
-        .rewind_scope(false);
+    let options = CallFnOptions::new().eval_ast(false).rewind_scope(false);
 
     let session = session_handle.clone();
     let renderer = renderer_handle.clone();
