@@ -15,10 +15,9 @@ use crate::gfx::{Repeat, Rgba8};
 use crate::session::{Effect, MessageType, Session};
 use crate::view::{View, ViewId, ViewResource};
 use crate::wgpu::{
-    self, Color, Operations, RenderPassColorAttachment, RenderPassDescriptor,
-    Texture, TextureHandle, StoreOp, TextureFormat,
+    self, Texture, TextureHandle
 };
-use ::wgpu::LoadOp;
+use ::wgpu as wgpu_types;
 
 use rhai::{Array, CallFnOptions, Dynamic, Engine, ImmutableString, Scope, AST};
 
@@ -297,7 +296,7 @@ impl ScriptState {
         call_draw(engine, scope, &ast.borrow())
     }
 
-    pub fn call_shade_event(&mut self, encoder: &Rc<RefCell<wgpu::Encoder>>) -> Result<(), Box<rhai::EvalAltResult>> {
+    pub fn call_shade_event(&mut self, encoder: &Rc<RefCell<wgpu_types::CommandEncoder>>) -> Result<(), Box<rhai::EvalAltResult>> {
         let (engine, scope, ast) = match (
             self.script_engine.as_ref(),
             self.script_scope.as_mut(),
@@ -442,12 +441,12 @@ pub struct ScriptColorAttachment {
 /// without borrowing ScriptState (which is already borrowed to call render()).
 #[derive(Clone)]
 pub struct ScriptPass {
-    pass: Rc<RefCell<wgpu::Pass<'static>>>,
+    pass: Rc<RefCell<wgpu_types::RenderPass<'static>>>,
     renderer: Rc<RefCell<wgpu::Renderer>>,
 }
 
 impl ScriptPass {
-    pub fn new(pass: Rc<RefCell<wgpu::Pass<'static>>>, renderer: Rc<RefCell<wgpu::Renderer>>) -> Self {
+    pub fn new(pass: Rc<RefCell<wgpu_types::RenderPass<'static>>>, renderer: Rc<RefCell<wgpu::Renderer>>) -> Self {
         Self { pass, renderer }
     }
 
@@ -515,7 +514,7 @@ pub fn register_renderer_handle(
     let script_state_for_texture_bind_group = script_state_handle.clone();
     let script_state_for_compute_texture = script_state_handle.clone();
     engine
-        .register_type_with_name::<TextureFormat>("TextureFormat")
+        .register_type_with_name::<wgpu_types::TextureFormat>("TextureFormat")
         .register_type_with_name::<TextureHandle>("TextureHandle")
         .register_type_with_name::<ScriptLoadOp>("LoadOp")
         .register_type_with_name::<ScriptStoreOp>("StoreOp")
@@ -572,7 +571,7 @@ pub fn register_renderer_handle(
         )
         .register_fn(
             "create_compute_texture",
-            move |r: &mut Rc<RefCell<wgpu::Renderer>>, width: i64, height: i64, format: TextureFormat| {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, width: i64, height: i64, format: wgpu_types::TextureFormat| {
                 let mut script_state = script_state_for_compute_texture.borrow_mut();
                 r.borrow_mut().create_compute_texture(&mut *script_state, width as u32, height as u32, format)
             },
@@ -719,7 +718,7 @@ pub fn register_renderer_handle(
             "begin_render_pass",
             [
                 TypeId::of::<Rc<RefCell<wgpu::Renderer>>>(),
-                TypeId::of::<Rc<RefCell<wgpu::Encoder>>>(),
+                TypeId::of::<Rc<RefCell<wgpu_types::CommandEncoder>>>(),
                 TypeId::of::<ImmutableString>(),
                 TypeId::of::<Array>(),
             ],
@@ -737,7 +736,7 @@ pub fn register_renderer_handle(
                     })?;
                 let encoder = args[1]
                     .clone()
-                    .try_cast::<Rc<RefCell<wgpu::Encoder>>>()
+                    .try_cast::<Rc<RefCell<wgpu_types::CommandEncoder>>>()
                     .ok_or_else(|| {
                         rhai::EvalAltResult::ErrorMismatchDataType(
                             "Encoder".into(),
@@ -758,7 +757,7 @@ pub fn register_renderer_handle(
                     })?;
                 let renderer = r.borrow();
                 let mut texture_refs: Vec<Ref<Texture>> = Vec::new();
-                let mut ops_list: Vec<(LoadOp<Color>, StoreOp)> = Vec::new();
+                let mut ops_list: Vec<(wgpu_types::LoadOp<wgpu_types::Color>, wgpu_types::StoreOp)> = Vec::new();
                 for att in attachments.iter() {
                     let Some(att) = att.clone().try_cast::<ScriptColorAttachment>() else {
                         continue;
@@ -769,8 +768,8 @@ pub fn register_renderer_handle(
                             None => continue,
                         };
                         let load_op = match &att.load_op {
-                            ScriptLoadOp::Load => LoadOp::Load,
-                            ScriptLoadOp::Clear { r, g, b, a } => LoadOp::Clear(Color {
+                            ScriptLoadOp::Load => wgpu_types::LoadOp::Load,
+                            ScriptLoadOp::Clear { r, g, b, a } => wgpu_types::LoadOp::Clear(wgpu_types::Color {
                                 r: *r,
                                 g: *g,
                                 b: *b,
@@ -778,7 +777,7 @@ pub fn register_renderer_handle(
                             }),
                         };
                         let store_op = match &att.store_op {
-                            ScriptStoreOp::Store => StoreOp::Store,
+                            ScriptStoreOp::Store => wgpu_types::StoreOp::Store,
                         };
                         texture_refs.push(vd.layer.texture.borrow());
                         ops_list.push((load_op, store_op));
@@ -787,22 +786,22 @@ pub fn register_renderer_handle(
                 if texture_refs.is_empty() {
                     return Ok(Dynamic::UNIT);
                 }
-                let color_attachments: Vec<Option<RenderPassColorAttachment>> = texture_refs
+                let color_attachments: Vec<Option<wgpu_types::RenderPassColorAttachment>> = texture_refs
                     .iter()
                     .zip(ops_list.iter())
                     .map(|(r, (load_op, store_op))| {
-                        let ops = Operations {
+                        let ops = wgpu_types::Operations {
                             load: load_op.clone(),
                             store: *store_op,
                         };
-                        Some(RenderPassColorAttachment {
+                        Some(wgpu_types::RenderPassColorAttachment {
                             view: r.view(),
                             resolve_target: None,
                             ops,
                         })
                     })
                     .collect();
-                let descriptor = RenderPassDescriptor {
+                let descriptor = wgpu_types::RenderPassDescriptor {
                     label: Some(label.as_str()),
                     color_attachments: &color_attachments,
                     depth_stencil_attachment: None,
@@ -958,7 +957,7 @@ pub fn register_draw_primitives(
 }
 
 pub fn register_wgpu_types(engine: &mut Engine) {
-    engine.register_type_with_name::<Rc<RefCell<wgpu::Encoder>>>("Encoder");
+    engine.register_type_with_name::<Rc<RefCell<wgpu_types::CommandEncoder>>>("CommandEncoder");
 }
 
 /// Register the `register_command(name, help)` function for scripts to register custom commands.
@@ -970,7 +969,7 @@ fn register_command_api(engine: &mut Engine, commands: Rc<RefCell<Vec<(String, S
 }
 
 fn register_constants(scope: &mut Scope) {
-    scope.push_constant("TEXTURE_FORMAT_RGBA8_UNORM", TextureFormat::Rgba8Unorm);
+    scope.push_constant("TEXTURE_FORMAT_RGBA8_UNORM", wgpu_types::TextureFormat::Rgba8Unorm);
 }
 
 /// Call the script's `init(session, renderer)` function with options so that new variables
@@ -1020,7 +1019,7 @@ pub fn call_shade(
     engine: &Engine,
     scope: &mut Scope,
     ast: &AST,
-    encoder: &Rc<RefCell<wgpu::Encoder>>,
+    encoder: &Rc<RefCell<wgpu_types::CommandEncoder>>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "shade", (encoder.clone(),)) {
         Ok(()) => Ok(()),

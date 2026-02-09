@@ -446,16 +446,6 @@ impl ViewData {
     }
 }
 
-pub type Encoder = wgpu::CommandEncoder;
-pub type Pass<'a> = wgpu::RenderPass<'a>;
-pub type RenderPassColorAttachment<'a> = wgpu::RenderPassColorAttachment<'a>;
-pub type TextureFormat = wgpu::TextureFormat;
-
-// Re-export for script.rs so it can build render pass descriptors.
-pub use wgpu::{
-    Color, Operations, RenderPassDescriptor, StoreOp,
-};
-
 /// The wgpu renderer.
 pub struct Renderer {
     pub win_size: LogicalSize,
