@@ -1999,6 +1999,70 @@ impl Renderer {
         }
     }
 
+    /// Create a bind group (texture + sampler) from a script texture handle for use as @group(1) uniform sampler.
+    /// Resolves ViewLayer from view_data and ScriptCreated from script_state. Returns bind group handle (u64).
+    pub fn create_texture_sampler_bind_group(
+        &mut self,
+        script_state: &ScriptState,
+        handle: RenderTextureHandle,
+    ) -> Result<u64, String> {
+        let layout = &self.texture_bind_group_layout;
+        let sampler = &self.sampler;
+        let bind_group = match handle {
+            RenderTextureHandle::ViewLayer(vid) => {
+                let vd = self
+                    .view_data
+                    .get(&vid)
+                    .ok_or_else(|| "view not found".to_string())?;
+                let bind_group = {
+                    let guard = vd.layer.texture.borrow();
+                    let view = guard.view();
+                    self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("script_texture_sampler_bind_group"),
+                        layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(sampler),
+                            },
+                        ],
+                    })
+                };
+                bind_group
+            }
+            RenderTextureHandle::ScriptCreated(id) => {
+                let tex = script_state
+                    .script_render_textures
+                    .get(&id)
+                    .ok_or_else(|| "script texture not found".to_string())?;
+                let bind_group = {
+                    let guard = tex.borrow();
+                    let view = guard.view();
+                    self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("script_texture_sampler_bind_group"),
+                        layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(sampler),
+                            },
+                        ],
+                    })
+                };
+                bind_group
+            }
+        };
+        Ok(self.add_script_bind_group(bind_group))
+    }
+
     /// Script GPU resource storage (so render() can resolve handles without borrowing ScriptState).
     pub fn add_script_shader_module(&mut self, module: wgpu::ShaderModule) -> u64 {
         let id = self.next_script_shader_id;
@@ -2064,6 +2128,86 @@ impl Renderer {
         });
         let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("script_pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some(vs_entry),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Sprite2dVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 12,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 20,
+                            shader_location: 2,
+                            format: wgpu::VertexFormat::Unorm8x4,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 24,
+                            shader_location: 3,
+                            format: wgpu::VertexFormat::Float32,
+                        },
+                    ],
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some(fs_entry),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        self.add_script_pipeline(pipeline)
+    }
+
+    /// Create a render pipeline with transform (group 0) and texture+sampler (group 1) bind group layouts.
+    /// Shader must declare @group(1) @binding(0) texture_2d and @binding(1) sampler.
+    pub fn create_render_pipeline_with_texture(
+        &mut self,
+        shader_handle: u64,
+        vs_entry: &str,
+        fs_entry: &str,
+    ) -> u64 {
+        let module = self
+            .get_script_shader_module(shader_handle)
+            .expect("create_render_pipeline_with_texture: invalid shader handle");
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("script_pipeline_with_texture_layout"),
+            bind_group_layouts: &[
+                &self.transform_bind_group_layout,
+                &self.texture_bind_group_layout,
+            ],
+            push_constant_ranges: &[],
+        });
+        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("script_pipeline_with_texture"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module,

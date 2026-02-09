@@ -511,6 +511,7 @@ pub fn register_renderer_handle(
     script_state_handle: &Rc<RefCell<ScriptState>>,
 ) {
     let script_state_create = script_state_handle.clone();
+    let script_state_for_texture_bind_group = script_state_handle.clone();
 
     engine
         .register_type_with_name::<RenderTextureHandle>("RenderTextureHandle")
@@ -578,6 +579,15 @@ pub fn register_renderer_handle(
             },
         )
         .register_fn(
+            "create_texture_sampler_bind_group",
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, handle: RenderTextureHandle| {
+                let script_state = script_state_for_texture_bind_group.borrow();
+                r.borrow_mut()
+                    .create_texture_sampler_bind_group(&*script_state, handle)
+                    .expect("create_texture_sampler_bind_group failed") as i64
+            },
+        )
+        .register_fn(
             "create_shader_module",
             |r: &mut Rc<RefCell<wgpu::Renderer>>, wgsl_source: ImmutableString| {
                 r.borrow_mut().create_shader_module(None, wgsl_source.as_str()) as i64
@@ -590,6 +600,19 @@ pub fn register_renderer_handle(
              vs_entry: ImmutableString,
              fs_entry: ImmutableString| {
                 r.borrow_mut().create_render_pipeline(
+                    shader_handle as u64,
+                    vs_entry.as_str(),
+                    fs_entry.as_str(),
+                ) as i64
+            },
+        )
+        .register_fn(
+            "create_render_pipeline_with_texture",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>,
+             shader_handle: i64,
+             vs_entry: ImmutableString,
+             fs_entry: ImmutableString| {
+                r.borrow_mut().create_render_pipeline_with_texture(
                     shader_handle as u64,
                     vs_entry.as_str(),
                     fs_entry.as_str(),

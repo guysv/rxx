@@ -14,6 +14,8 @@ fn init(session_in, renderer_in) {
     // Demo shader / pipeline / bind group / buffer APIs (for render(pass))
     // Simple vertex-color shader (sprite vertex layout, no texture).
     let script_wgsl = `
+// Sprite shader for rendering text, sprites, and views.
+
 struct TransformUniforms {
     ortho: mat4x4<f32>,
     transform: mat4x4<f32>,
@@ -21,6 +23,11 @@ struct TransformUniforms {
 
 @group(0) @binding(0)
 var<uniform> uniforms: TransformUniforms;
+
+@group(1) @binding(0)
+var tex: texture_2d<f32>;
+@group(1) @binding(1)
+var tex_sampler: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -31,9 +38,12 @@ struct VertexInput {
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) opacity: f32,
 }
 
+// Convert an sRGB color to linear space.
 fn linearize(srgb: vec3<f32>) -> vec3<f32> {
     let cutoff = srgb < vec3<f32>(0.04045);
     let higher = pow((srgb + vec3<f32>(0.055)) / vec3<f32>(1.055), vec3<f32>(2.4));
@@ -44,19 +54,30 @@ fn linearize(srgb: vec3<f32>) -> vec3<f32> {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.color = vec4<f32>(linearize(in.color.rgb), in.color.a * in.opacity);
+    out.color = vec4<f32>(linearize(in.color.rgb), in.color.a);
+    out.uv = in.uv;
+    out.opacity = in.opacity;
     out.clip_position = uniforms.ortho * uniforms.transform * vec4<f32>(in.position, 1.0);
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return in.color;
+    let texel = textureSample(tex, tex_sampler, in.uv);
+    return vec4<f32>(
+        mix(texel.rgb, in.color.rgb, in.color.a),
+        texel.a * in.opacity
+    );
 }
 `;
     let script_shader = renderer.create_shader_module(script_wgsl);
-    let script_pipeline = renderer.create_render_pipeline(script_shader, "vs_main", "fs_main");
+    let script_pipeline = renderer.create_render_pipeline_with_texture(script_shader, "vs_main", "fs_main");
     let script_bind_group = renderer.create_identity_transform_bind_group();
+    let view_tex_bind_group = if view_handle != () {
+        renderer.create_texture_sampler_bind_group(view_handle)
+    } else {
+        -1
+    };
     print(`script pipeline/bind group/vertex buffer created`);
     
     print(`script initialized`);
@@ -114,7 +135,7 @@ fn render(pass) {
             rect(0.0, 0.0, fw, fh),
             rect(-fw, 0.0, 0.0, fh),
             0.0,
-            rgb8(255, 255, 255));
+            rgb8(0, 0, 0, 0));
         let vertices = batch.vertices();
         debug(`vertices: ${vertices}`);
         let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
@@ -122,6 +143,9 @@ fn render(pass) {
         let view_bind_group = renderer.create_view_transform_bind_group(x, y, zoom.to_float());
         pass.set_pipeline(script_pipeline);
         pass.set_bind_group(0, view_bind_group);
+        if view_tex_bind_group >= 0 {
+            pass.set_bind_group(1, view_tex_bind_group);
+        }
         pass.set_vertex_buffer(0, vertex_buffer);
         pass.draw(6, 1, 0, 0);
     }
