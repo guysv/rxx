@@ -86,91 +86,13 @@ struct CursorUniforms {
     _padding: [f32; 7],   // 28 bytes to reach 96 total (WGSL alignment)
 }
 
-/// Bundle of texture, view, and sampler for a texture resource.
-struct TextureBundle {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    size: [u32; 2],
-}
-
-impl TextureBundle {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, data: Option<&[u8]>) -> Self {
-        let size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("texture"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-
-        if let Some(data) = data {
-            queue.write_texture(
-                wgpu::ImageCopyTexture {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                data,
-                wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * width),
-                    rows_per_image: Some(height),
-                },
-                size,
-            );
-        }
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        Self {
-            texture,
-            view,
-            size: [width, height],
-        }
-    }
-
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-
-        self.texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("texture"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-
-        self.view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.size = [width, height];
-    }
-}
-
-/// Render texture (like a framebuffer). Public so script state can own script-created textures.
+/// Render texture (like a framebuffer). Used for both render targets and source textures (font, cursors, etc.).
+/// Public so script state can own script-created textures.
 pub struct RenderTexture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     size: [u32; 2],
+    format: wgpu::TextureFormat,
 }
 
 impl RenderTexture {
@@ -201,7 +123,43 @@ impl RenderTexture {
             texture,
             view,
             size: [width, height],
+            format,
         }
+    }
+
+    /// Create a texture with optional initial pixel data (e.g. font atlas, cursors, checker).
+    fn new_with_data(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        data: Option<&[u8]>,
+    ) -> Self {
+        let tex = Self::new(device, width, height, format);
+        if let Some(data) = data {
+            let size = wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            };
+            queue.write_texture(
+                wgpu::ImageCopyTexture {
+                    texture: &tex.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                data,
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * width),
+                    rows_per_image: Some(height),
+                },
+                size,
+            );
+        }
+        tex
     }
 
     /// Public so script can resolve RenderTextureHandle to a view (clone) for render pass descriptors.
@@ -209,8 +167,21 @@ impl RenderTexture {
         &self.view
     }
 
+    pub(crate) fn size(&self) -> [u32; 2] {
+        self.size
+    }
+
+    pub(crate) fn texture(&self) -> &wgpu::Texture {
+        &self.texture
+    }
+
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) {
         *self = Self::new(device, width, height, format);
+    }
+
+    /// Resize keeping current format (e.g. for paste texture).
+    fn resize_same_format(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        self.resize(device, width, height, self.format);
     }
 
     #[allow(dead_code)]
@@ -402,7 +373,7 @@ impl LayerData {
             let aligned = util::align_u8(pixels);
             queue.write_texture(
                 wgpu::ImageCopyTexture {
-                    texture: &texture.texture,
+                    texture: texture.texture(),
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
@@ -506,11 +477,11 @@ pub struct Renderer {
     staging_batch: shape2d::Batch,
     final_batch: shape2d::Batch,
 
-    // Textures
-    font: TextureBundle,
-    cursors: TextureBundle,
-    checker: TextureBundle,
-    paste: TextureBundle,
+    // Textures (font, cursors, checker, paste - all use RenderTexture)
+    font: RenderTexture,
+    cursors: RenderTexture,
+    checker: RenderTexture,
+    paste: RenderTexture,
 
     // Sampler
     sampler: wgpu::Sampler,
@@ -697,10 +668,11 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let (checker_w, checker_h) = (2, 2);
         let (paste_w, paste_h) = (8, 8);
 
-        let font = TextureBundle::new(&device, &queue, font_w, font_h, Some(&font_img));
-        let cursors = TextureBundle::new(&device, &queue, cursors_w, cursors_h, Some(&cursors_img));
-        let checker = TextureBundle::new(&device, &queue, checker_w, checker_h, Some(&draw::CHECKER));
-        let paste = TextureBundle::new(&device, &queue, paste_w, paste_h, None);
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let font = RenderTexture::new_with_data(&device, &queue, font_w, font_h, format, Some(&font_img));
+        let cursors = RenderTexture::new_with_data(&device, &queue, cursors_w, cursors_h, format, Some(&cursors_img));
+        let checker = RenderTexture::new_with_data(&device, &queue, checker_w, checker_h, format, Some(&draw::CHECKER));
+        let paste = RenderTexture::new_with_data(&device, &queue, paste_w, paste_h, format, None);
 
         // Create screen render target
         let screen_texture = RenderTexture::new(
@@ -1153,8 +1125,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         // Create draw context
         let draw_ctx = draw::Context {
             ui_batch: shape2d::Batch::new(),
-            text_batch: text_batch(font.size),
-            overlay_batch: text_batch(font.size),
+            text_batch: text_batch(font.size()),
+            overlay_batch: text_batch(font.size()),
             cursor_sprite: sprite::Sprite::new(cursors_w, cursors_h),
             tool_batch: sprite2d::Batch::new(cursors_w, cursors_h),
             paste_batch: sprite2d::Batch::new(paste_w, paste_h),
@@ -1248,13 +1220,13 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Prepare draw context
         drop(session);
-        let [font_w, font_h] = this.font.size;
+        let [font_w, font_h] = this.font.size();
         script_state_handle.borrow_mut().ensure_user_sprite_batch(font_w, font_h);
         this.draw_ctx.clear();
         this.draw_ctx.draw(session_handle, &mut *script_state_handle.borrow_mut(), avg_frametime, execution);
         let session = session_handle.borrow_mut();
 
-        let [screen_w, screen_h] = this.screen_texture.size;
+        let [screen_w, screen_h] = this.screen_texture.size();
         let ortho: M44 = ortho_wgpu(screen_w, screen_h, Origin::TopLeft).into();
         let identity: M44 = Matrix4::identity().into();
 
@@ -1295,7 +1267,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&this.font.view),
+                    resource: wgpu::BindingResource::TextureView(this.font.view()),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1310,7 +1282,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&this.cursors.view),
+                    resource: wgpu::BindingResource::TextureView(this.cursors.view()),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1325,7 +1297,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&this.checker.view),
+                    resource: wgpu::BindingResource::TextureView(this.checker.view()),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1381,7 +1353,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let mut staging_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("staging_brush_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view_data.staging_texture.view,
+                    view: view_data.staging_texture.view(),
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1409,7 +1381,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&this.paste.view),
+                            resource: wgpu::BindingResource::TextureView(this.paste.view()),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
@@ -1457,7 +1429,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let mut final_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("final_brush_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view_data.layer.texture.borrow().view,
+                    view: &view_data.layer.texture.borrow().view(),
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -1490,7 +1462,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&this.paste.view),
+                            resource: wgpu::BindingResource::TextureView(this.paste.view()),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
@@ -1526,7 +1498,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("screen_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &this.screen_texture.view,
+                    view: this.screen_texture.view(),
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1597,7 +1569,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                 wgpu::BindGroupEntry {
                                     binding: 0,
                                     resource: wgpu::BindingResource::TextureView(
-                                        &view_data.layer.texture.borrow().view,
+                                        &view_data.layer.texture.borrow().view(),
                                     ),
                                 },
                                 wgpu::BindGroupEntry {
@@ -1622,7 +1594,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                 wgpu::BindGroupEntry {
                                     binding: 0,
                                     resource: wgpu::BindingResource::TextureView(
-                                        &view_data.staging_texture.view,
+                                        view_data.staging_texture.view(),
                                     ),
                                 },
                                 wgpu::BindGroupEntry {
@@ -1725,7 +1697,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                         wgpu::BindGroupEntry {
                                             binding: 0,
                                             resource: wgpu::BindingResource::TextureView(
-                                                &view_data.layer.texture.borrow().view,
+                                                &view_data.layer.texture.borrow().view(),
                                             ),
                                         },
                                         wgpu::BindGroupEntry {
@@ -1749,7 +1721,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             // Render help overlay if in help mode
             if session.mode == session::Mode::Help {
                 let mut help_shape_batch = shape2d::Batch::new();
-                let mut help_text_batch = text_batch(this.font.size);
+                let mut help_text_batch = text_batch(this.font.size());
                 draw::draw_help(&session, &mut help_text_batch, &mut help_shape_batch);
 
                 // Draw help shape (background)
@@ -1790,7 +1762,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&this.screen_texture.view),
+                        resource: wgpu::BindingResource::TextureView(this.screen_texture.view()),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -1842,7 +1814,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 cursor_buffer.unmap();
 
                 // Create cursor uniforms - use screen_texture size since cursor positions are in that coordinate space
-                let [cursor_w, cursor_h] = this.screen_texture.size;
+                let [cursor_w, cursor_h] = this.screen_texture.size();
                 let cursor_ortho: M44 = ortho_wgpu(cursor_w, cursor_h, Origin::TopLeft).into();
                 let ui_scale = session.settings["scale"].to_f64();
                 let pixel_ratio = platform::pixel_ratio(this.scale_factor);
@@ -1868,11 +1840,11 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&this.cursors.view),
+                            resource: wgpu::BindingResource::TextureView(this.cursors.view()),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&this.screen_texture.view),
+                            resource: wgpu::BindingResource::TextureView(this.screen_texture.view()),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
@@ -1893,7 +1865,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 let overlay_vertices = this.create_sprite_vertices(&this.draw_ctx.overlay_batch.vertices());
                 if let Some((buffer, count)) = overlay_vertices {
                     // Use BottomLeft ortho for overlay (like GL)
-                    let [overlay_w, overlay_h] = this.screen_texture.size;
+                    let [overlay_w, overlay_h] = this.screen_texture.size();
                     let overlay_ortho: M44 = ortho_wgpu(overlay_w, overlay_h, Origin::BottomLeft).into();
                     let overlay_uniforms = TransformUniforms {
                         ortho: overlay_ortho,
@@ -1958,7 +1930,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Record snapshots if needed
         if !execution.is_normal() {
-            let [w, h] = this.screen_texture.size;
+            let [w, h] = this.screen_texture.size();
             let texels = this.read_screen_pixels(w, h);
             execution.record(&texels).ok();
         }
@@ -2357,7 +2329,7 @@ impl Renderer {
         translation_y: f32,
         zoom: f32,
     ) -> u64 {
-        let [screen_w, screen_h] = self.screen_texture.size;
+        let [screen_w, screen_h] = self.screen_texture.size();
         let ortho: M44 = ortho_wgpu(screen_w, screen_h, Origin::TopLeft).into();
         let transform = Matrix4::from_translation(
             Vector2::new(translation_x, translation_y).extend(*draw::VIEW_LAYER),
@@ -2570,7 +2542,7 @@ impl Renderer {
                         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("clear_view"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view_data.layer.texture.borrow().view,
+                                view: &view_data.layer.texture.borrow().view(),
                                 resolve_target: None,
                                 ops: wgpu::Operations {
                                     load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -2611,16 +2583,16 @@ impl Renderer {
                         let (w, h) = (src.width() as u32, src.height() as u32);
 
                         // Resize paste texture if needed
-                        let [paste_w, paste_h] = self.paste.size;
+                        let [paste_w, paste_h] = self.paste.size();
                         if paste_w != w || paste_h != h {
-                            self.paste.resize(&self.device, w, h);
+                            self.paste.resize_same_format(&self.device, w, h);
                         }
 
                         // Upload to paste texture
                         let body = util::align_u8(&pixels);
                         self.queue.write_texture(
                             wgpu::ImageCopyTexture {
-                                texture: &self.paste.texture,
+                                texture: self.paste.texture(),
                                 mip_level: 0,
                                 origin: wgpu::Origin3d::ZERO,
                                 aspect: wgpu::TextureAspect::All,
@@ -2667,16 +2639,16 @@ impl Renderer {
                         }
 
                         // Resize paste texture if needed
-                        let [paste_w, paste_h] = self.paste.size;
+                        let [paste_w, paste_h] = self.paste.size();
                         if paste_w != w || paste_h != h {
-                            self.paste.resize(&self.device, w, h);
+                            self.paste.resize_same_format(&self.device, w, h);
                         }
 
                         // Upload to paste texture
                         let body = util::align_u8(&pixels);
                         self.queue.write_texture(
                             wgpu::ImageCopyTexture {
-                                texture: &self.paste.texture,
+                                texture: self.paste.texture(),
                                 mip_level: 0,
                                 origin: wgpu::Origin3d::ZERO,
                                 aspect: wgpu::TextureAspect::All,
@@ -2701,7 +2673,7 @@ impl Renderer {
                 }
                 ViewOp::Paste(dst) => {
                     // Create a sprite batch for the paste quad (like GL's paste_outputs)
-                    let [paste_w, paste_h] = self.paste.size;
+                    let [paste_w, paste_h] = self.paste.size();
                     if paste_w > 0 && paste_h > 0 {
                         let batch = sprite2d::Batch::singleton(
                             paste_w,
@@ -2972,7 +2944,7 @@ impl Renderer {
 
     /// Read pixels from the screen texture (blocking).
     pub fn read_screen_pixels(&self, width: u32, height: u32) -> Vec<Rgba8> {
-        self.read_texture_pixels(&self.screen_texture.texture, width, height)
+        self.read_texture_pixels(self.screen_texture.texture(), width, height)
     }
 
     /// Read pixels from a texture (blocking). Creates its own encoder and submit.
