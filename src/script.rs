@@ -16,7 +16,7 @@ use crate::session::{Effect, MessageType, Session};
 use crate::view::{View, ViewId, ViewResource};
 use crate::wgpu::{
     self, Color, Operations, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderTexture, RenderTextureHandle, StoreOp, TextureFormat,
+    Texture, TextureHandle, StoreOp, TextureFormat,
 };
 use ::wgpu::LoadOp;
 
@@ -89,7 +89,7 @@ pub struct ScriptState {
     /// User batches for script's draw() event (shape + sprite for text), shared with Rhai closures.
     pub script_user_batch: UserBatch,
     /// Script-created render textures (owned here so renderer stays stateless for script resources).
-    pub script_render_textures: BTreeMap<u64, Rc<RefCell<RenderTexture>>>,
+    pub script_render_textures: BTreeMap<u64, Rc<RefCell<Texture>>>,
     /// Next id for script_render_textures.
     pub next_script_texture_id: u64,
 }
@@ -112,7 +112,7 @@ impl ScriptState {
     }
 
     /// Store a render texture and return its script handle id. Used by the renderer when creating script textures.
-    pub fn add_render_texture(&mut self, texture: RenderTexture) -> u64 {
+    pub fn add_render_texture(&mut self, texture: Texture) -> u64 {
         let id = self.next_script_texture_id;
         self.next_script_texture_id = self.next_script_texture_id.saturating_add(1);
         self.script_render_textures.insert(id, Rc::new(RefCell::new(texture)));
@@ -433,7 +433,7 @@ pub enum ScriptStoreOp {
 /// Script-side color attachment: handle + load/store ops.
 #[derive(Clone)]
 pub struct ScriptColorAttachment {
-    pub handle: RenderTextureHandle,
+    pub handle: TextureHandle,
     pub load_op: ScriptLoadOp,
     pub store_op: ScriptStoreOp,
 }
@@ -516,7 +516,7 @@ pub fn register_renderer_handle(
     let script_state_for_compute_texture = script_state_handle.clone();
     engine
         .register_type_with_name::<TextureFormat>("TextureFormat")
-        .register_type_with_name::<RenderTextureHandle>("RenderTextureHandle")
+        .register_type_with_name::<TextureHandle>("TextureHandle")
         .register_type_with_name::<ScriptLoadOp>("LoadOp")
         .register_type_with_name::<ScriptStoreOp>("StoreOp")
         .register_type_with_name::<ScriptColorAttachment>("ColorAttachment")
@@ -526,7 +526,7 @@ pub fn register_renderer_handle(
         .register_fn("store_store", || ScriptStoreOp::Store)
         .register_fn(
             "color_attachment",
-            |handle: RenderTextureHandle, load_op: ScriptLoadOp, store_op: ScriptStoreOp| {
+            |handle: TextureHandle, load_op: ScriptLoadOp, store_op: ScriptStoreOp| {
                 ScriptColorAttachment {
                     handle,
                     load_op,
@@ -589,7 +589,7 @@ pub fn register_renderer_handle(
         )
         .register_fn(
             "create_texture_sampler_bind_group",
-            move |r: &mut Rc<RefCell<wgpu::Renderer>>, handle: RenderTextureHandle| {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, handle: TextureHandle| {
                 let script_state = script_state_for_texture_bind_group.borrow();
                 r.borrow_mut()
                     .create_texture_sampler_bind_group(&*script_state, handle)
@@ -757,13 +757,13 @@ pub fn register_renderer_handle(
                         )
                     })?;
                 let renderer = r.borrow();
-                let mut texture_refs: Vec<Ref<RenderTexture>> = Vec::new();
+                let mut texture_refs: Vec<Ref<Texture>> = Vec::new();
                 let mut ops_list: Vec<(LoadOp<Color>, StoreOp)> = Vec::new();
                 for att in attachments.iter() {
                     let Some(att) = att.clone().try_cast::<ScriptColorAttachment>() else {
                         continue;
                     };
-                    if let RenderTextureHandle::ViewLayer(vid) = att.handle {
+                    if let TextureHandle::ViewLayer(vid) = att.handle {
                         let vd = match renderer.view_data.get(&vid) {
                             Some(v) => v,
                             None => continue,
