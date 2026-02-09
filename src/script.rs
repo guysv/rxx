@@ -4,12 +4,13 @@
 //! one main script with `init(session, renderer)`; custom Scope + CallFnOptions (eval_ast false,
 //! rewind_scope false) so variables defined in `init()` persist.
 
-use crate::draw::{self, USER_LAYER};
+use crate::draw::{self, USER_LAYER, VIEW_LAYER};
 use crate::gfx::color::Rgba;
 use crate::gfx::math::{Point2, Vector2};
 use crate::gfx::rect::Rect;
 use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
 use crate::gfx::sprite2d;
+use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
 use crate::session::{Effect, MessageType, Session};
 use crate::view::{View, ViewId, ViewResource};
@@ -37,11 +38,38 @@ pub type UserBatch = (Rc<RefCell<shape2d::Batch>>, Rc<RefCell<Option<sprite2d::B
 struct ScriptView {
     id: ViewId,
     offset: Vector2<f32>,
+    frame_width: f32,
+    frame_height: f32,
+    zoom: f32,
 }
 
 impl From<&View<ViewResource>> for ScriptView {
     fn from(view: &View<ViewResource>) -> Self {
-        ScriptView { id: view.id, offset: view.offset }
+        ScriptView { id: view.id, offset: view.offset, frame_width: view.fw as f32, frame_height: view.fh as f32, zoom: view.zoom }
+    }
+}
+
+/// Script-held sprite batch (singleton or built via API). Has vertices() to compile.
+#[derive(Clone, Debug)]
+pub struct ScriptSpriteBatch {
+    pub(crate) batch: sprite2d::Batch,
+}
+
+/// Opaque vertex list from ScriptSpriteBatch.vertices(); passed to create_vertex_buffer_from_sprite_vertices.
+#[derive(Clone)]
+pub struct ScriptSpriteVertexList {
+    pub(crate) vertices: Vec<sprite2d::Vertex>,
+}
+
+impl std::fmt::Debug for ScriptSpriteVertexList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ScriptSpriteVertexList {{ vertices: {:?} }}", self.vertices)
+    }
+}
+
+impl std::fmt::Display for ScriptSpriteVertexList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ScriptSpriteVertexList {{ vertices: {:?} }}", self.vertices)
     }
 }
 
@@ -372,6 +400,9 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_type_with_name::<ScriptView>("View")
         .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
         .register_get("offset", |v: &mut ScriptView| Vector2::new(v.offset.x as f32, v.offset.y as f32))
+        .register_get("frame_width", |v: &mut ScriptView| v.frame_width)
+        .register_get("frame_height", |v: &mut ScriptView| v.frame_height)
+        .register_get("zoom", |v: &mut ScriptView| v.zoom)
         .register_fn("views", |s: &mut Rc<RefCell<Session>>| {
             s.borrow()
                 .views
@@ -404,35 +435,6 @@ pub struct ScriptColorAttachment {
     pub handle: RenderTextureHandle,
     pub load_op: ScriptLoadOp,
     pub store_op: ScriptStoreOp,
-}
-
-/// Pass proxy passed to the script callback. Holds a raw pointer to the live RenderPass.
-/// SAFETY: Only used synchronously; the pass is dropped after the callback returns.
-/// Clone copies the pointer so the script can pass the proxy to the callback; both refer to the same pass.
-#[derive(Clone)]
-pub struct ScriptRenderPass {
-    pass: *mut (),
-}
-
-impl ScriptRenderPass {
-    pub fn new(pass: &mut RenderPass<'_>) -> Self {
-        Self {
-            pass: pass as *mut RenderPass<'_> as *mut (),
-        }
-    }
-
-    pub fn draw(
-        &mut self,
-        vertex_count: u32,
-        instance_count: u32,
-        first_vertex: u32,
-        first_instance: u32,
-    ) {
-        let pass = self.pass as *mut RenderPass<'_>;
-        let vertices = first_vertex..first_vertex + vertex_count;
-        let instances = first_instance..first_instance + instance_count;
-        unsafe { (*pass).draw(vertices, instances) }
-    }
 }
 
 /// Unified pass type for script: wraps the wgpu pass and renderer so pass methods can resolve handles
@@ -627,6 +629,55 @@ pub fn register_renderer_handle(
             },
         )
         .register_fn(
+            "create_view_transform_bind_group",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>,
+             translation_x: f64,
+             translation_y: f64,
+             zoom: f64| {
+                r.borrow_mut().create_view_transform_bind_group(
+                    translation_x as f32,
+                    translation_y as f32,
+                    zoom as f32,
+                ) as i64
+            },
+        )
+        .register_type_with_name::<ScriptSpriteBatch>("ScriptSpriteBatch")
+        .register_fn(
+            "sprite_singleton_batch",
+            |_r: &mut Rc<RefCell<wgpu::Renderer>>,
+             w: i64,
+             h: i64,
+             src: Rect<f32>,
+             dst: Rect<f32>,
+             zdepth: f64,
+             color: Rgba8| {
+                let batch = sprite2d::Batch::singleton(
+                    w as u32,
+                    h as u32,
+                    src,
+                    dst,
+                    crate::gfx::ZDepth(zdepth as f32),
+                    Rgba::from(color),
+                    1.0,
+                    Repeat::default(),
+                );
+                ScriptSpriteBatch { batch }
+            },
+        )
+        .register_fn("vertices", |batch: &mut ScriptSpriteBatch| ScriptSpriteVertexList {
+            vertices: batch.batch.vertices(),
+        })
+        .register_type_with_name::<ScriptSpriteVertexList>("ScriptSpriteVertexList")
+        .register_fn("to_string", |list: &mut ScriptSpriteVertexList| list.to_string())
+        .register_fn("to_debug", |list: &mut ScriptSpriteVertexList| format!("{list:?}"))
+        .register_fn(
+            "create_vertex_buffer_from_sprite_vertices",
+            |r: &mut Rc<RefCell<wgpu::Renderer>>, list: ScriptSpriteVertexList| {
+                r.borrow_mut()
+                    .create_vertex_buffer_from_sprite_vertices(&list.vertices) as i64
+            },
+        )
+        .register_fn(
             "create_fullscreen_triangle_vertex_buffer",
             |r: &mut Rc<RefCell<wgpu::Renderer>>| {
                 r.borrow_mut().create_fullscreen_triangle_vertex_buffer() as i64
@@ -741,7 +792,8 @@ fn register_draw_types(engine: &mut Engine) {
         .register_type_with_name::<Vector2<f32>>("Vector2")
         .register_get("x", |v: &mut Vector2<f32>| v.x as f64)
         .register_get("y", |v: &mut Vector2<f32>| v.y as f64)
-        .register_fn("vec2", |x: f64, y: f64| Vector2::new(x as f32, y as f32));
+        .register_fn("vec2", |x: f64, y: f64| Vector2::new(x as f32, y as f32))
+        .register_fn("+", |v1: Vector2<f32>, v2: Vector2<f32>| v1 + v2);
 
     engine
         .register_type_with_name::<Rgba8>("Rgba8")
@@ -765,6 +817,28 @@ fn register_draw_types(engine: &mut Engine) {
                 a.clamp(0, 255) as u8,
             )
         });
+
+    engine
+        .register_type_with_name::<Rect<f32>>("Rect")
+        .register_get("x1", |r: &mut Rect<f32>| r.x1 as f64)
+        .register_get("y1", |r: &mut Rect<f32>| r.y1 as f64)
+        .register_get("x2", |r: &mut Rect<f32>| r.x2 as f64)
+        .register_get("y2", |r: &mut Rect<f32>| r.y2 as f64)
+        .register_fn("rect", |x1: f64, y1: f64, x2: f64, y2: f64| {
+            Rect::new(x1 as f32, y1 as f32, x2 as f32, y2 as f32)
+        })
+        .register_fn("+", |r: Rect<f32>, v: Vector2<f32>| r + v)
+        .register_fn("*", |r: Rect<f32>, v: f32| r * v);
+
+    engine
+        .register_type_with_name::<ZDepth>("ZDepth")
+        .register_fn("zdepth", |z: f64| ZDepth(z as f32));
+
+    engine
+        .register_type_with_name::<Repeat>("Repeat")
+        .register_get("x", |r: &mut Repeat| r.x as f64)
+        .register_get("y", |r: &mut Repeat| r.y as f64)
+        .register_fn("repeat", |x: f64, y: f64| Repeat::new(x as f32, y as f32));
 }
 
 /// Register draw primitives on the engine. Call this once when loading a script.
@@ -927,7 +1001,6 @@ pub fn call_render(
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "render", (script_pass,)) {
         Ok(()) => Ok(()),
-        Err(ref e) if is_function_not_found(e) => Ok(()),
         Err(e) => Err(e),
     }
 }

@@ -552,6 +552,10 @@ pub struct Renderer {
     next_script_bind_group_id: u64,
     script_buffers: BTreeMap<u64, wgpu::Buffer>,
     next_script_buffer_id: u64,
+    /// Reusable buffer for script view-transform bind group (ortho + view transform).
+    script_view_transform_buffer: Option<wgpu::Buffer>,
+    /// Cached bind group id for script view transform (same layout as transform_bind_group_layout).
+    script_view_transform_bind_group_id: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -1199,6 +1203,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             next_script_bind_group_id: 0,
             script_buffers: BTreeMap::new(),
             next_script_buffer_id: 0,
+            script_view_transform_buffer: None,
+            script_view_transform_bind_group_id: None,
         })
     }
 
@@ -2040,8 +2046,8 @@ impl Renderer {
         self.add_script_shader_module(module)
     }
 
-    /// Create a render pipeline using the transform bind group layout and Shape2dVertex layout.
-    /// Shader must have vs_main and fs_main with the same layout as the built-in shape shader.
+    /// Create a render pipeline using the transform bind group layout and Sprite2dVertex layout.
+    /// Shader must have vs_main and fs_main with the same vertex layout as the built-in sprite shader.
     pub fn create_render_pipeline(
         &mut self,
         shader_handle: u64,
@@ -2063,7 +2069,7 @@ impl Renderer {
                 module,
                 entry_point: Some(vs_entry),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Shape2dVertex>() as u64,
+                    array_stride: std::mem::size_of::<Sprite2dVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[
                         wgpu::VertexAttribute {
@@ -2074,17 +2080,17 @@ impl Renderer {
                         wgpu::VertexAttribute {
                             offset: 12,
                             shader_location: 1,
-                            format: wgpu::VertexFormat::Float32,
+                            format: wgpu::VertexFormat::Float32x2,
                         },
                         wgpu::VertexAttribute {
-                            offset: 16,
+                            offset: 20,
                             shader_location: 2,
-                            format: wgpu::VertexFormat::Float32x2,
+                            format: wgpu::VertexFormat::Unorm8x4,
                         },
                         wgpu::VertexAttribute {
                             offset: 24,
                             shader_location: 3,
-                            format: wgpu::VertexFormat::Unorm8x4,
+                            format: wgpu::VertexFormat::Float32,
                         },
                     ],
                 }],
@@ -2198,32 +2204,120 @@ impl Renderer {
         self.add_script_bind_group(bind_group)
     }
 
+    /// Create or update a transform bind group with ortho and view transform (same as main view pass).
+    /// Uses a single cached buffer/bind group; subsequent calls update the buffer and return the same handle.
+    /// Script should pass translation = session.offset + view.offset and view.zoom so pixel-space vertices render on-screen.
+    pub fn create_view_transform_bind_group(
+        &mut self,
+        translation_x: f32,
+        translation_y: f32,
+        zoom: f32,
+    ) -> u64 {
+        let [screen_w, screen_h] = self.screen_texture.size;
+        let ortho: M44 = ortho_wgpu(screen_w, screen_h, Origin::TopLeft).into();
+        let transform = Matrix4::from_translation(
+            Vector2::new(translation_x, translation_y).extend(*draw::VIEW_LAYER),
+        ) * Matrix4::from_nonuniform_scale(zoom, zoom, 1.0);
+        let uniforms = TransformUniforms {
+            ortho,
+            transform: transform.into(),
+        };
+
+        if let (Some(ref buffer), Some(id)) = (
+            &self.script_view_transform_buffer,
+            self.script_view_transform_bind_group_id,
+        ) {
+            self.queue
+                .write_buffer(buffer, 0, bytemuck::bytes_of(&uniforms));
+            return id;
+        }
+
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("script_view_transform_buffer"),
+            size: std::mem::size_of::<TransformUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::bytes_of(&uniforms));
+        buffer.unmap();
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("script_view_transform_bind_group"),
+            layout: &self.transform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        let id = self.add_script_bind_group(bind_group);
+        self.script_view_transform_buffer = Some(buffer);
+        self.script_view_transform_bind_group_id = Some(id);
+        id
+    }
+
     /// Create a vertex buffer containing a fullscreen triangle (NDC). For script demo.
+    /// Uses Sprite2dVertex layout (position, uv, color, opacity).
     pub fn create_fullscreen_triangle_vertex_buffer(&mut self) -> u64 {
-        // Fullscreen triangle: (-1,-1,0), (3,-1,0), (-1,3,0); angle=0, center=(0,0), white
+        // Fullscreen triangle: (-1,-1,0), (3,-1,0), (-1,3,0); white, opacity 1
+        // position: Vector3 { x: 448.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 0.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 }, 
+        // position: Vector3 { x: 576.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 1.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 }, 
+        // position: Vector3 { x: 576.0, y: 424.0, z: -0.7 }, uv: Vector2 { x: 1.0, y: 0.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 }, 
+ 
         let verts = [
-            Shape2dVertex {
-                position: [-1.0, -1.0, 0.0],
-                angle: 0.0,
-                center: [0.0, 0.0],
-                color: [255, 255, 255, 255],
+            Sprite2dVertex {
+                position: [448.0, 296.0, -0.7],
+                uv: [0.0, 0.0],
+                color: [255, 0, 0, 255],
+                opacity: 1.0,
             },
-            Shape2dVertex {
-                position: [3.0, -1.0, 0.0],
-                angle: 0.0,
-                center: [0.0, 0.0],
-                color: [255, 255, 255, 255],
+            Sprite2dVertex {
+                position: [576.0, 296.0, -0.7],
+                uv: [0.0, 0.0],
+                color: [0, 255, 0, 255],
+                opacity: 1.0,
             },
-            Shape2dVertex {
-                position: [-1.0, 3.0, 0.0],
-                angle: 0.0,
-                center: [0.0, 0.0],
-                color: [255, 255, 255, 255],
+            Sprite2dVertex {
+                position: [576.0, 424.0, -0.7],
+                uv: [0.0, 0.0],
+                color: [0, 0, 255, 255],
+                opacity: 1.0,
             },
         ];
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("script_fullscreen_triangle"),
-            size: (verts.len() * std::mem::size_of::<Shape2dVertex>()) as u64,
+            size: (verts.len() * std::mem::size_of::<Sprite2dVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue
+            .write_buffer(&buffer, 0, bytemuck::cast_slice(&verts));
+        self.add_script_buffer(buffer)
+    }
+    
+
+    /// Create a vertex buffer from sprite2d::Vertex slice and register it for script use. Returns handle.
+    pub fn create_vertex_buffer_from_sprite_vertices(
+        &mut self,
+        vertices: &[sprite2d::Vertex],
+    ) -> u64 {
+        if vertices.is_empty() {
+            panic!("create_vertex_buffer_from_sprite_vertices: vertices is empty");
+        }
+        let verts: Vec<Sprite2dVertex> = vertices
+            .iter()
+            .map(|v| Sprite2dVertex {
+                position: [v.position.x, v.position.y, v.position.z],
+                uv: [v.uv.x, v.uv.y],
+                color: [v.color.r, v.color.g, v.color.b, v.color.a],
+                opacity: v.opacity,
+            })
+            .collect();
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("script_sprite_vertex_buffer"),
+            size: (verts.len() * std::mem::size_of::<Sprite2dVertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2603,6 +2697,8 @@ impl Renderer {
                             opacity: v.opacity,
                         })
                         .collect();
+
+                    info!("update_view_animations: sprite_vertices: {:?}", sprite_vertices);
 
                     let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("anim_vertex_buffer"),

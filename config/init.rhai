@@ -12,6 +12,7 @@ fn init(session_in, renderer_in) {
     print(`view_render_texture(${session.active_view_id}) => ${view_handle}`);
 
     // Demo shader / pipeline / bind group / buffer APIs (for render(pass))
+    // Simple vertex-color shader (sprite vertex layout, no texture).
     let script_wgsl = `
 struct TransformUniforms {
     ortho: mat4x4<f32>,
@@ -23,25 +24,14 @@ var<uniform> uniforms: TransformUniforms;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
-    @location(1) angle: f32,
-    @location(2) center: vec2<f32>,
-    @location(3) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) color: vec4<f32>,
+    @location(3) opacity: f32,
 }
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-}
-
-fn rotation2d(angle: f32) -> mat2x2<f32> {
-    let s = sin(angle);
-    let c = cos(angle);
-    return mat2x2<f32>(c, -s, s, c);
-}
-
-fn rotate(position: vec2<f32>, around: vec2<f32>, angle: f32) -> vec2<f32> {
-    let m = rotation2d(angle);
-    return m * (position - around) + around;
 }
 
 fn linearize(srgb: vec3<f32>) -> vec3<f32> {
@@ -54,9 +44,8 @@ fn linearize(srgb: vec3<f32>) -> vec3<f32> {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    let r = rotate(in.position.xy, in.center, in.angle);
-    out.color = vec4<f32>(linearize(in.color.rgb), in.color.a);
-    out.clip_position = uniforms.ortho * uniforms.transform * vec4<f32>(r, in.position.z, 1.0);
+    out.color = vec4<f32>(linearize(in.color.rgb), in.color.a * in.opacity);
+    out.clip_position = uniforms.ortho * uniforms.transform * vec4<f32>(in.position, 1.0);
     return out;
 }
 
@@ -68,7 +57,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let script_shader = renderer.create_shader_module(script_wgsl);
     let script_pipeline = renderer.create_render_pipeline(script_shader, "vs_main", "fs_main");
     let script_bind_group = renderer.create_identity_transform_bind_group();
-    let script_vertex_buffer = renderer.create_fullscreen_triangle_vertex_buffer();
     print(`script pipeline/bind group/vertex buffer created`);
     
     print(`script initialized`);
@@ -113,8 +101,28 @@ fn shade(encoder) {
 }
 
 fn render(pass) {
-    pass.set_pipeline(script_pipeline);
-    pass.set_bind_group(0, script_bind_group);
-    pass.set_vertex_buffer(0, script_vertex_buffer);
-    pass.draw(3, 1, 0, 0);
+    let vid = session.active_view_id;
+    let view = session.view(vid);
+    if view != () {
+        let x = session.offset_x + view.offset.x;
+        let y = session.offset_y + view.offset.y;
+        let zoom = view.zoom;
+        let fw = view.frame_width.to_float();
+        let fh = view.frame_height.to_float();
+        let batch = renderer.sprite_singleton_batch(
+            view.frame_width.to_int(), view.frame_height.to_int(),
+            rect(0.0, 0.0, fw, fh),
+            rect(-fw, 0.0, 0.0, fh),
+            0.0,
+            rgb8(255, 255, 255));
+        let vertices = batch.vertices();
+        debug(`vertices: ${vertices}`);
+        let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
+        // let vertex_buffer = renderer.create_fullscreen_triangle_vertex_buffer();
+        let view_bind_group = renderer.create_view_transform_bind_group(x, y, zoom.to_float());
+        pass.set_pipeline(script_pipeline);
+        pass.set_bind_group(0, view_bind_group);
+        pass.set_vertex_buffer(0, vertex_buffer);
+        pass.draw(6, 1, 0, 0);
+    }
 }
