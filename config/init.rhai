@@ -6,6 +6,8 @@ fn init(session_in, renderer_in) {
     register_command("lt/off", "Remove active view from lookup set");
 
     // Demo render texture APIs
+    let created_compute_handle = renderer.create_compute_texture(64, 64, TEXTURE_FORMAT_RGBA8_UNORM);
+    print(`create_compute_texture(64, 64) => ${created_compute_handle}`);
     let created_handle = renderer.create_render_texture(64, 64);
     print(`create_render_texture(64, 64) => ${created_handle}`);
     let view_handle = renderer.view_render_texture(session.active_view_id);

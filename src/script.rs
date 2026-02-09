@@ -4,7 +4,7 @@
 //! one main script with `init(session, renderer)`; custom Scope + CallFnOptions (eval_ast false,
 //! rewind_scope false) so variables defined in `init()` persist.
 
-use crate::draw::{self, USER_LAYER, VIEW_LAYER};
+use crate::draw::{self, USER_LAYER};
 use crate::gfx::color::Rgba;
 use crate::gfx::math::{Point2, Vector2};
 use crate::gfx::rect::Rect;
@@ -15,8 +15,8 @@ use crate::gfx::{Repeat, Rgba8};
 use crate::session::{Effect, MessageType, Session};
 use crate::view::{View, ViewId, ViewResource};
 use crate::wgpu::{
-    self, Color, Operations, RenderPass, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderTexture, RenderTextureHandle, StoreOp,
+    self, Color, Operations, RenderPassColorAttachment, RenderPassDescriptor,
+    RenderTexture, RenderTextureHandle, StoreOp, TextureFormat,
 };
 use ::wgpu::LoadOp;
 
@@ -181,6 +181,7 @@ pub fn load_script(
     let ast = compile_file(&engine, &path)
         .map_err(|e| format!("Script compile error: {}", e))?;
     let mut scope = Scope::new();
+    register_constants(&mut scope);
     call_init(&engine, &mut scope, &ast, session_handle, renderer_handle)
         .map_err(|e| format!("Script init error: {}", e))?;
 
@@ -512,8 +513,9 @@ pub fn register_renderer_handle(
 ) {
     let script_state_create = script_state_handle.clone();
     let script_state_for_texture_bind_group = script_state_handle.clone();
-
+    let script_state_for_compute_texture = script_state_handle.clone();
     engine
+        .register_type_with_name::<TextureFormat>("TextureFormat")
         .register_type_with_name::<RenderTextureHandle>("RenderTextureHandle")
         .register_type_with_name::<ScriptLoadOp>("LoadOp")
         .register_type_with_name::<ScriptStoreOp>("StoreOp")
@@ -566,6 +568,13 @@ pub fn register_renderer_handle(
             move |r: &mut Rc<RefCell<wgpu::Renderer>>, width: i64, height: i64| {
                 let mut script_state = script_state_create.borrow_mut();
                 r.borrow_mut().create_render_texture(&mut *script_state, width as u32, height as u32)
+            },
+        )
+        .register_fn(
+            "create_compute_texture",
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, width: i64, height: i64, format: TextureFormat| {
+                let mut script_state = script_state_for_compute_texture.borrow_mut();
+                r.borrow_mut().create_compute_texture(&mut *script_state, width as u32, height as u32, format)
             },
         )
         .register_fn(
@@ -958,6 +967,10 @@ fn register_command_api(engine: &mut Engine, commands: Rc<RefCell<Vec<(String, S
     engine.register_fn("register_command", move |name: &str, help: &str| {
         commands.borrow_mut().push((name.to_string(), help.to_string()));
     });
+}
+
+fn register_constants(scope: &mut Scope) {
+    scope.push_constant("TEXTURE_FORMAT_RGBA8_UNORM", TextureFormat::Rgba8Unorm);
 }
 
 /// Call the script's `init(session, renderer)` function with options so that new variables

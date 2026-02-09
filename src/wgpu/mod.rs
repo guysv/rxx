@@ -19,6 +19,7 @@ use crate::gfx::{Matrix4, Rect, Repeat, Vector2};
 
 use bytemuck::{Pod, Zeroable};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use wgpu::TextureUsages;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -96,7 +97,7 @@ pub struct RenderTexture {
 }
 
 impl RenderTexture {
-    fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+    fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat, storage_binding: bool) -> Self {
         let size = wgpu::Extent3d {
             width,
             height,
@@ -113,7 +114,8 @@ impl RenderTexture {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
+                | wgpu::TextureUsages::COPY_DST
+                | if storage_binding { wgpu::TextureUsages::STORAGE_BINDING } else { TextureUsages::empty() },
             view_formats: &[],
         });
 
@@ -136,7 +138,7 @@ impl RenderTexture {
         format: wgpu::TextureFormat,
         data: Option<&[u8]>,
     ) -> Self {
-        let tex = Self::new(device, width, height, format);
+        let tex = Self::new(device, width, height, format, false);
         if let Some(data) = data {
             let size = wgpu::Extent3d {
                 width,
@@ -176,7 +178,7 @@ impl RenderTexture {
     }
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) {
-        *self = Self::new(device, width, height, format);
+        *self = Self::new(device, width, height, format, false);
     }
 
     /// Resize keeping current format (e.g. for paste texture).
@@ -334,7 +336,7 @@ pub(crate) struct LayerData {
 
 impl LayerData {
     fn new(device: &wgpu::Device, w: u32, h: u32, pixels: Option<&[Rgba8]>, queue: &wgpu::Queue) -> Self {
-        let texture = RenderTexture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let texture = RenderTexture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb, false);
 
         // Create a quad vertex buffer for rendering this layer
         let batch = sprite2d::Batch::singleton(
@@ -430,7 +432,7 @@ pub(crate) struct ViewData {
 
 impl ViewData {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32, pixels: Option<&[Rgba8]>) -> Self {
-        let staging_texture = RenderTexture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let staging_texture = RenderTexture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb, false);
         let layer = LayerData::new(device, w, h, pixels, queue);
 
         Self {
@@ -446,12 +448,12 @@ impl ViewData {
 
 pub type Encoder = wgpu::CommandEncoder;
 pub type Pass<'a> = wgpu::RenderPass<'a>;
-pub type PassDescriptor<'a> = wgpu::RenderPassDescriptor<'a>;
 pub type RenderPassColorAttachment<'a> = wgpu::RenderPassColorAttachment<'a>;
+pub type TextureFormat = wgpu::TextureFormat;
 
 // Re-export for script.rs so it can build render pass descriptors.
 pub use wgpu::{
-    Color, Operations, RenderPass, RenderPassDescriptor, StoreOp,
+    Color, Operations, RenderPassDescriptor, StoreOp,
 };
 
 /// The wgpu renderer.
@@ -680,6 +682,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             win_size.width as u32,
             win_size.height as u32,
             wgpu::TextureFormat::Rgba8UnormSrgb,
+            false,
         );
 
         // Create bind group layouts
@@ -1957,6 +1960,26 @@ impl Renderer {
             width,
             height,
             wgpu::TextureFormat::Rgba8UnormSrgb,
+            false,
+        );
+        let id = script_state.add_render_texture(texture);
+        RenderTextureHandle::ScriptCreated(id)
+    }
+
+    /// Create a new compute texture and return a handle. The texture is stored in script_state.
+    pub fn create_compute_texture(
+        &mut self,
+        script_state: &mut ScriptState,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> RenderTextureHandle {
+        let texture = RenderTexture::new(
+            &self.device,
+            width,
+            height,
+            format,
+            true,
         );
         let id = script_state.add_render_texture(texture);
         RenderTextureHandle::ScriptCreated(id)
