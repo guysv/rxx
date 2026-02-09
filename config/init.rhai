@@ -8,6 +8,8 @@ fn init(session_in, renderer_in) {
     // Demo render texture APIs
     let created_compute_handle = renderer.create_compute_texture(64, 64, TEXTURE_FORMAT_RGBA8_UNORM);
     print(`create_compute_texture(64, 64) => ${created_compute_handle}`);
+    let created_compute_handle_3d = renderer.create_compute_texture(64, 64, 64, TEXTURE_FORMAT_RGBA8_UNORM);
+    print(`created_compute_handle_3d(64, 64, 64) => ${created_compute_handle}`);
     let created_handle = renderer.create_render_texture(64, 64);
     print(`create_render_texture(64, 64) => ${created_handle}`);
 
@@ -132,7 +134,7 @@ fn render(pass) {
             0.0,
             rgb8(0, 0, 0, 0));
         let vertices = batch.vertices();
-        debug(`vertices: ${vertices}`);
+        // debug(`vertices: ${vertices}`);
         let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
         // let vertex_buffer = renderer.create_fullscreen_triangle_vertex_buffer();
         let view_bind_group = renderer.create_view_transform_bind_group(x, y, zoom.to_float());

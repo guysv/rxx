@@ -104,10 +104,22 @@ impl Texture {
         format: wgpu::TextureFormat,
         storage_binding: bool,
     ) -> Self {
+        Self::new_3d(device, width, height, 1, format, storage_binding)
+    }
+
+    // TODO: refactor this and new() new_3d is basically creating 2d textures now.
+    fn new_3d(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        depth: u32,
+        format: wgpu::TextureFormat,
+        storage_binding: bool,
+    ) -> Self {
         let size = wgpu::Extent3d {
             width,
             height,
-            depth_or_array_layers: 1,
+            depth_or_array_layers: depth,
         };
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -115,9 +127,17 @@ impl Texture {
             size,
             mip_level_count: 1,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
+            dimension: if depth > 1 {
+                wgpu::TextureDimension::D3
+            } else {
+                wgpu::TextureDimension::D2
+            },
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            usage: if depth > 1 {
+                    TextureUsages::empty()
+                } else {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT
+                } 
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST
@@ -2020,9 +2040,10 @@ impl Renderer {
         &mut self,
         width: u32,
         height: u32,
+        depth: u32,
         format: wgpu::TextureFormat,
     ) -> Texture {
-        Texture::new(&self.device, width, height, format, true)
+        Texture::new_3d(&self.device, width, height, depth, format, true)
     }
 
     /// Return a handle to the given view's layer texture, or None if the view has no render data.
@@ -2806,10 +2827,10 @@ impl Renderer {
                         })
                         .collect();
 
-                    info!(
-                        "update_view_animations: sprite_vertices: {:?}",
-                        sprite_vertices
-                    );
+                    // info!(
+                    //     "update_view_animations: sprite_vertices: {:?}",
+                    //     sprite_vertices
+                    // );
 
                     let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("anim_vertex_buffer"),

@@ -638,6 +638,22 @@ pub fn register_renderer_handle(
                 let texture = r.borrow_mut().create_compute_texture(
                     width as u32,
                     height as u32,
+                    1,
+                    format,
+                );
+                Rc::new(RefCell::new(texture))
+            }
+        })
+        .register_fn("create_compute_texture", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  width: i64,
+                  height: i64,
+                  depth: i64,
+                  format: wgpu_types::TextureFormat| {
+                let texture = r.borrow_mut().create_compute_texture(
+                    width as u32,
+                    height as u32,
+                    depth as u32,
                     format,
                 );
                 Rc::new(RefCell::new(texture))
