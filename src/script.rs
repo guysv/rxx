@@ -633,13 +633,11 @@ pub fn register_renderer_handle(
         .register_fn("create_compute_texture", {
             move |r: &mut Rc<RefCell<wgpu::Renderer>>,
                   width: i64,
-                  height: i64,
-                  format: wgpu_types::TextureFormat| {
+                  height: i64| {
                 let texture = r.borrow_mut().create_compute_texture(
                     width as u32,
                     height as u32,
                     1,
-                    format,
                 );
                 Rc::new(RefCell::new(texture))
             }
@@ -648,13 +646,11 @@ pub fn register_renderer_handle(
             move |r: &mut Rc<RefCell<wgpu::Renderer>>,
                   width: i64,
                   height: i64,
-                  depth: i64,
-                  format: wgpu_types::TextureFormat| {
+                  depth: i64| {
                 let texture = r.borrow_mut().create_compute_texture(
                     width as u32,
                     height as u32,
                     depth as u32,
-                    format,
                 );
                 Rc::new(RefCell::new(texture))
             }
@@ -811,6 +807,36 @@ pub fn register_renderer_handle(
                 Rc::new(RefCell::new(buffer))
             }
         })
+        .register_raw_fn(
+            "begin_compute_pass",
+            [
+                TypeId::of::<Rc<RefCell<wgpu_types::CommandEncoder>>>(),
+                TypeId::of::<ImmutableString>(),
+            ],
+            {
+                move |_ctx, args| {
+                    let encoder = args[0]
+                        .clone()
+                        .try_cast::<Rc<RefCell<wgpu_types::CommandEncoder>>>()
+                        .ok_or_else(|| {
+                            rhai::EvalAltResult::ErrorMismatchDataType(
+                                "Encoder".into(),
+                                args[0].type_name().into(),
+                                rhai::Position::NONE,
+                            )
+                        })?;
+                    let label = args[1].clone().into_immutable_string().unwrap_or_default();
+                    let descriptor = wgpu_types::ComputePassDescriptor {
+                        label: Some(label.as_str()),
+                        timestamp_writes: None,
+                    };
+                    let mut encoder_mut = encoder.borrow_mut();
+                    let pass = encoder_mut.begin_compute_pass(&descriptor);
+                    let pass_handle = Rc::new(RefCell::new(pass.forget_lifetime()));
+                    Ok(Dynamic::from(pass_handle))
+                }
+            },
+        )
         .register_raw_fn(
             "begin_render_pass",
             [

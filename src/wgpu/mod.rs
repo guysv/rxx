@@ -92,8 +92,8 @@ struct CursorUniforms {
 pub struct Texture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    view_raw: wgpu::TextureView,
     size: [u32; 2],
-    format: wgpu::TextureFormat,
 }
 
 impl Texture {
@@ -101,10 +101,9 @@ impl Texture {
         device: &wgpu::Device,
         width: u32,
         height: u32,
-        format: wgpu::TextureFormat,
         storage_binding: bool,
     ) -> Self {
-        Self::new_3d(device, width, height, 1, format, storage_binding)
+        Self::new_3d(device, width, height, 1, storage_binding)
     }
 
     // TODO: refactor this and new() new_3d is basically creating 2d textures now.
@@ -113,7 +112,6 @@ impl Texture {
         width: u32,
         height: u32,
         depth: u32,
-        format: wgpu::TextureFormat,
         storage_binding: bool,
     ) -> Self {
         let size = wgpu::Extent3d {
@@ -132,7 +130,7 @@ impl Texture {
             } else {
                 wgpu::TextureDimension::D2
             },
-            format,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: if depth > 1 {
                     TextureUsages::empty()
                 } else {
@@ -146,16 +144,21 @@ impl Texture {
                 } else {
                     TextureUsages::empty()
                 },
-            view_formats: &[],
+            view_formats: &[
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+            ],
         });
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
+        let view_srgb = texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(wgpu::TextureFormat::Rgba8UnormSrgb),
+            ..Default::default()
+        });
         Self {
             texture,
-            view,
+            view_raw: view,
+            view: view_srgb,
             size: [width, height],
-            format,
         }
     }
 
@@ -165,10 +168,9 @@ impl Texture {
         queue: &wgpu::Queue,
         width: u32,
         height: u32,
-        format: wgpu::TextureFormat,
         data: Option<&[u8]>,
     ) -> Self {
-        let tex = Self::new(device, width, height, format, false);
+        let tex = Self::new(device, width, height, false);
         if let Some(data) = data {
             let size = wgpu::Extent3d {
                 width,
@@ -212,14 +214,13 @@ impl Texture {
         device: &wgpu::Device,
         width: u32,
         height: u32,
-        format: wgpu::TextureFormat,
     ) {
-        *self = Self::new(device, width, height, format, false);
+        *self = Self::new(device, width, height, false);
     }
 
     /// Resize keeping current format (e.g. for paste texture).
     fn resize_same_format(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.resize(device, width, height, self.format);
+        self.resize(device, width, height);
     }
 
     #[allow(dead_code)]
@@ -369,7 +370,7 @@ impl LayerData {
         pixels: Option<&[Rgba8]>,
         queue: &wgpu::Queue,
     ) -> Self {
-        let texture = Texture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb, false);
+        let texture = Texture::new(device, w, h, false);
 
         // Create a quad vertex buffer for rendering this layer
         let batch = sprite2d::Batch::singleton(
@@ -474,7 +475,7 @@ impl ViewData {
         pixels: Option<&[Rgba8]>,
     ) -> Self {
         let staging_texture =
-            Texture::new(device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb, false);
+            Texture::new(device, w, h, false);
         let layer = LayerData::new(device, w, h, pixels, queue);
 
         Self {
@@ -688,14 +689,12 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let (checker_w, checker_h) = (2, 2);
         let (paste_w, paste_h) = (8, 8);
 
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let font = Texture::new_with_data(&device, &queue, font_w, font_h, format, Some(&font_img));
+        let font = Texture::new_with_data(&device, &queue, font_w, font_h, Some(&font_img));
         let cursors = Texture::new_with_data(
             &device,
             &queue,
             cursors_w,
             cursors_h,
-            format,
             Some(&cursors_img),
         );
         let checker = Texture::new_with_data(
@@ -703,17 +702,15 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             &queue,
             checker_w,
             checker_h,
-            format,
             Some(&draw::CHECKER),
         );
-        let paste = Texture::new_with_data(&device, &queue, paste_w, paste_h, format, None);
+        let paste = Texture::new_with_data(&device, &queue, paste_w, paste_h, None);
 
         // Create screen render target
         let screen_texture = Texture::new(
             &device,
             win_size.width as u32,
             win_size.height as u32,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
             false,
         );
 
@@ -2030,7 +2027,6 @@ impl Renderer {
             &self.device,
             width,
             height,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
             false,
         )
     }
@@ -2041,9 +2037,8 @@ impl Renderer {
         width: u32,
         height: u32,
         depth: u32,
-        format: wgpu::TextureFormat,
     ) -> Texture {
-        Texture::new_3d(&self.device, width, height, depth, format, true)
+        Texture::new_3d(&self.device, width, height, depth, true)
     }
 
     /// Return a handle to the given view's layer texture, or None if the view has no render data.
@@ -2466,7 +2461,7 @@ impl Renderer {
 
         if w > 0 && h > 0 {
             self.screen_texture
-                .resize(&self.device, w, h, wgpu::TextureFormat::Rgba8UnormSrgb);
+                .resize(&self.device, w, h);
         }
     }
 

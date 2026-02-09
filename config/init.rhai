@@ -6,9 +6,9 @@ fn init(session_in, renderer_in) {
     register_command("lt/off", "Remove active view from lookup set");
 
     // Demo render texture APIs
-    let created_compute_handle = renderer.create_compute_texture(64, 64, TEXTURE_FORMAT_RGBA8_UNORM);
+    let created_compute_handle = renderer.create_compute_texture(64, 64);
     print(`create_compute_texture(64, 64) => ${created_compute_handle}`);
-    let created_compute_handle_3d = renderer.create_compute_texture(64, 64, 64, TEXTURE_FORMAT_RGBA8_UNORM);
+    let created_compute_handle_3d = renderer.create_compute_texture(64, 64, 64);
     print(`created_compute_handle_3d(64, 64, 64) => ${created_compute_handle}`);
     let created_handle = renderer.create_render_texture(64, 64);
     print(`create_render_texture(64, 64) => ${created_handle}`);
@@ -116,6 +116,7 @@ fn cmd_lt_off(args) {
 
 fn shade(encoder) {
     // print(`shade called with encoder`);
+    let pass = encoder.begin_compute_pass("shade");
 }
 
 fn render(pass) {
