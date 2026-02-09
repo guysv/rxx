@@ -6,7 +6,7 @@ use crate::execution::Execution;
 use crate::font::TextBatch;
 use crate::platform::{self, LogicalSize};
 use crate::renderer;
-use crate::script::{ScriptState, ScriptStorage};
+use crate::script::ScriptState;
 use crate::session::{self, Blending, Effect, Session};
 use crate::sprite;
 use crate::util;
@@ -332,15 +332,6 @@ impl Texture {
         }
         pixels
     }
-}
-
-/// Handle to a render texture exposed to scripts. Either a view's layer texture or a script-created texture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextureHandle {
-    /// Refers to view_data[view_id].layer.texture
-    ViewLayer(ViewId),
-    /// Refers to script_render_textures[id]
-    ScriptCreated(u64),
 }
 
 /// Per-layer data for a view.
@@ -1792,11 +1783,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             let pass = pass.forget_lifetime();
             let pass_handle = Rc::new(RefCell::new(pass));
-            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
             let script_pass = crate::script::ScriptPass::new(
                 pass_handle,
-                renderer_handle.clone(),
-                script_storage_handle,
             );
             drop(this);
             drop(session);
@@ -1998,8 +1986,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Record snapshots if needed
         if !execution.is_normal() {
-            let [w, h] = this.screen_texture.size();
-            let texels = this.read_screen_pixels(w, h);
+            let texels = this.screen_texture.pixels(&this.device, &this.queue);
             execution.record(&texels).ok();
         }
 
@@ -2016,38 +2003,32 @@ impl Renderer {
     /// Create a new render texture and return a handle. The texture is stored in script storage.
     pub fn create_render_texture(
         &mut self,
-        storage: &mut ScriptStorage,
         width: u32,
         height: u32,
-    ) -> TextureHandle {
-        let texture = Texture::new(
+    ) -> Texture {
+        Texture::new(
             &self.device,
             width,
             height,
             wgpu::TextureFormat::Rgba8UnormSrgb,
             false,
-        );
-        let id = storage.add_render_texture(texture);
-        TextureHandle::ScriptCreated(id)
+        )
     }
 
     /// Create a new compute texture and return a handle. The texture is stored in script storage.
     pub fn create_compute_texture(
         &mut self,
-        storage: &mut ScriptStorage,
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
-    ) -> TextureHandle {
-        let texture = Texture::new(&self.device, width, height, format, true);
-        let id = storage.add_render_texture(texture);
-        TextureHandle::ScriptCreated(id)
+    ) -> Texture {
+        Texture::new(&self.device, width, height, format, true)
     }
 
     /// Return a handle to the given view's layer texture, or None if the view has no render data.
-    pub fn view_render_texture(&self, view_id: ViewId) -> Option<TextureHandle> {
+    pub fn view_render_texture(&self, view_id: ViewId) -> Option<Rc<RefCell<Texture>>> {
         if self.view_data.contains_key(&view_id) {
-            Some(TextureHandle::ViewLayer(view_id))
+            Some(self.view_data.get(&view_id).unwrap().layer.texture.clone())
         } else {
             None
         }
@@ -2057,94 +2038,54 @@ impl Renderer {
     /// Resolves ViewLayer from view_data and ScriptCreated from storage. Returns bind group handle (u64).
     pub fn create_texture_sampler_bind_group(
         &mut self,
-        storage: &mut ScriptStorage,
-        handle: TextureHandle,
-    ) -> Result<u64, String> {
+        texture: &Texture,
+    ) -> wgpu::BindGroup {
         let layout = &self.texture_bind_group_layout;
         let sampler = &self.sampler;
-        let bind_group = match handle {
-            TextureHandle::ViewLayer(vid) => {
-                let vd = self
-                    .view_data
-                    .get(&vid)
-                    .ok_or_else(|| "view not found".to_string())?;
-                let bind_group = {
-                    let guard = vd.layer.texture.borrow();
-                    let view = guard.view();
-                    self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("script_texture_sampler_bind_group"),
-                        layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(sampler),
-                            },
-                        ],
-                    })
-                };
-                bind_group
-            }
-            TextureHandle::ScriptCreated(id) => {
-                let tex = storage
-                    .script_render_textures
-                    .get(&id)
-                    .ok_or_else(|| "script texture not found".to_string())?;
-                let bind_group = {
-                    let guard = tex.borrow();
-                    let view = guard.view();
-                    self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("script_texture_sampler_bind_group"),
-                        layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(sampler),
-                            },
-                        ],
-                    })
-                };
-                bind_group
-            }
+        let bind_group = {
+            let view = texture.view();
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("script_texture_sampler_bind_group"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
         };
-        Ok(storage.add_script_bind_group(bind_group))
+        bind_group
+
     }
 
     /// Create a shader module from WGSL source. Returns handle (u64).
     pub fn create_shader_module(
         &mut self,
-        storage: &mut ScriptStorage,
         label: Option<&str>,
         wgsl_source: &str,
-    ) -> u64 {
+    ) -> wgpu::ShaderModule {
         let module = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: label.or(Some("script_shader")),
                 source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
             });
-        storage.add_script_shader_module(module)
+        module
     }
 
     /// Create a render pipeline using the transform bind group layout and Sprite2dVertex layout.
     /// Shader must have vs_main and fs_main with the same vertex layout as the built-in sprite shader.
     pub fn create_render_pipeline(
         &mut self,
-        storage: &mut ScriptStorage,
-        shader_handle: u64,
+        module: &wgpu::ShaderModule,
         vs_entry: &str,
         fs_entry: &str,
-    ) -> u64 {
-        let module = storage
-            .get_script_shader_module(shader_handle)
-            .expect("create_render_pipeline: invalid shader handle");
+    ) -> wgpu::RenderPipeline {
         let layout = self
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2212,21 +2153,17 @@ impl Renderer {
                 multiview: None,
                 cache: None,
             });
-        storage.add_script_pipeline(pipeline)
+        pipeline
     }
 
     /// Create a render pipeline with transform (group 0) and texture+sampler (group 1) bind group layouts.
     /// Shader must declare @group(1) @binding(0) texture_2d and @binding(1) sampler.
     pub fn create_render_pipeline_with_texture(
         &mut self,
-        storage: &mut ScriptStorage,
-        shader_handle: u64,
+        module: &wgpu::ShaderModule,
         vs_entry: &str,
         fs_entry: &str,
-    ) -> u64 {
-        let module = storage
-            .get_script_shader_module(shader_handle)
-            .expect("create_render_pipeline_with_texture: invalid shader handle");
+    ) -> wgpu::RenderPipeline {
         let layout = self
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2297,18 +2234,17 @@ impl Renderer {
                 multiview: None,
                 cache: None,
             });
-        storage.add_script_pipeline(pipeline)
+        pipeline
     }
 
     /// Create a buffer and optionally upload initial data. Usage: "vertex", "uniform", "copy_dst" (comma-separated).
     /// Returns handle (u64).
     pub fn create_buffer(
         &mut self,
-        storage: &mut ScriptStorage,
         size: u64,
         usage_str: &str,
         initial_data: Option<&[u8]>,
-    ) -> u64 {
+    ) -> wgpu::Buffer {
         let mut usage = wgpu::BufferUsages::empty();
         for part in usage_str.split(',') {
             let part = part.trim().to_lowercase();
@@ -2331,19 +2267,15 @@ impl Renderer {
         if let Some(data) = initial_data {
             self.queue.write_buffer(&buffer, 0, data);
         }
-        storage.add_script_buffer(buffer)
+        buffer
     }
 
     /// Create a bind group with the transform layout bound to the given buffer.
     /// Returns handle (u64).
     pub fn create_transform_bind_group(
         &mut self,
-        storage: &mut ScriptStorage,
-        buffer_handle: u64,
-    ) -> u64 {
-        let buffer = storage
-            .get_script_buffer(buffer_handle)
-            .expect("create_transform_bind_group: invalid buffer handle");
+        buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("script_transform_bind_group"),
             layout: &self.transform_bind_group_layout,
@@ -2352,11 +2284,11 @@ impl Renderer {
                 resource: buffer.as_entire_binding(),
             }],
         });
-        storage.add_script_bind_group(bind_group)
+        bind_group
     }
 
     /// Create a transform bind group with identity ortho and identity transform (for script demo).
-    pub fn create_identity_transform_bind_group(&mut self, storage: &mut ScriptStorage) -> u64 {
+    pub fn create_identity_transform_bind_group(&mut self) -> wgpu::BindGroup {
         let identity: M44 = Matrix4::identity().into();
         let uniforms = TransformUniforms {
             ortho: identity,
@@ -2373,17 +2305,15 @@ impl Renderer {
             .get_mapped_range_mut()
             .copy_from_slice(bytemuck::bytes_of(&uniforms));
         buffer.unmap();
-        let buffer_id = storage.add_script_buffer(buffer);
-        let buffer_ref = storage.get_script_buffer(buffer_id).unwrap();
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("script_identity_transform_bind_group"),
             layout: &self.transform_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: buffer_ref.as_entire_binding(),
+                resource: buffer.as_entire_binding(),
             }],
         });
-        storage.add_script_bind_group(bind_group)
+        bind_group
     }
 
     /// Create or update a transform bind group with ortho and view transform (same as main view pass).
@@ -2391,11 +2321,10 @@ impl Renderer {
     /// Script should pass translation = session.offset + view.offset and view.zoom so pixel-space vertices render on-screen.
     pub fn create_view_transform_bind_group(
         &mut self,
-        storage: &mut ScriptStorage,
         translation_x: f32,
         translation_y: f32,
         zoom: f32,
-    ) -> u64 {
+    ) -> wgpu::BindGroup {
         let [screen_w, screen_h] = self.screen_texture.size();
         let ortho: M44 = ortho_wgpu(screen_w, screen_h, Origin::TopLeft).into();
         let transform = Matrix4::from_translation(
@@ -2405,15 +2334,6 @@ impl Renderer {
             ortho,
             transform: transform.into(),
         };
-
-        if let (Some(ref buffer), Some(id)) = (
-            storage.script_view_transform_buffer(),
-            storage.script_view_transform_bind_group_id(),
-        ) {
-            self.queue
-                .write_buffer(buffer, 0, bytemuck::bytes_of(&uniforms));
-            return id;
-        }
 
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("script_view_transform_buffer"),
@@ -2435,14 +2355,12 @@ impl Renderer {
                 resource: buffer.as_entire_binding(),
             }],
         });
-        let id = storage.add_script_bind_group(bind_group);
-        storage.set_script_view_transform(buffer, id);
-        id
+        bind_group
     }
 
     /// Create a vertex buffer containing a fullscreen triangle (NDC). For script demo.
     /// Uses Sprite2dVertex layout (position, uv, color, opacity).
-    pub fn create_fullscreen_triangle_vertex_buffer(&mut self, storage: &mut ScriptStorage) -> u64 {
+    pub fn create_fullscreen_triangle_vertex_buffer(&mut self) -> wgpu::Buffer {
         // Fullscreen triangle: (-1,-1,0), (3,-1,0), (-1,3,0); white, opacity 1
         // position: Vector3 { x: 448.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 0.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 },
         // position: Vector3 { x: 576.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 1.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 },
@@ -2476,15 +2394,14 @@ impl Renderer {
         });
         self.queue
             .write_buffer(&buffer, 0, bytemuck::cast_slice(&verts));
-        storage.add_script_buffer(buffer)
+        buffer
     }
 
     /// Create a vertex buffer from sprite2d::Vertex slice and register it for script use. Returns handle.
     pub fn create_vertex_buffer_from_sprite_vertices(
         &mut self,
-        storage: &mut ScriptStorage,
         vertices: &[sprite2d::Vertex],
-    ) -> u64 {
+    ) -> wgpu::Buffer {
         if vertices.is_empty() {
             panic!("create_vertex_buffer_from_sprite_vertices: vertices is empty");
         }
@@ -2505,7 +2422,7 @@ impl Renderer {
         });
         self.queue
             .write_buffer(&buffer, 0, bytemuck::cast_slice(&verts));
-        storage.add_script_buffer(buffer)
+        buffer
     }
 
     pub fn handle_resized(&mut self, size: platform::LogicalSize) {
@@ -3014,79 +2931,5 @@ impl Renderer {
         buffer.unmap();
 
         Some((buffer, verts.len() as u32))
-    }
-
-    /// Read pixels from the screen texture (blocking).
-    pub fn read_screen_pixels(&self, width: u32, height: u32) -> Vec<Rgba8> {
-        self.read_texture_pixels(self.screen_texture.texture(), width, height)
-    }
-
-    /// Read pixels from a texture (blocking). Creates its own encoder and submit.
-    fn read_texture_pixels(&self, texture: &wgpu::Texture, width: u32, height: u32) -> Vec<Rgba8> {
-        let bytes_per_row = (4 * width + 255) & !255; // Align to 256 bytes
-        let buffer_size = (bytes_per_row * height) as u64;
-
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback_buffer"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("readback_encoder"),
-            });
-
-        encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::ImageCopyBuffer {
-                buffer: &buffer,
-                layout: wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        self.queue.submit(std::iter::once(encoder.finish()));
-
-        let slice = buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
-        self.device.poll(wgpu::Maintain::Wait);
-        rx.recv().unwrap().unwrap();
-
-        let data = slice.get_mapped_range();
-        let mut pixels = Vec::with_capacity((width * height) as usize);
-
-        for y in 0..height {
-            let row_start = (y * bytes_per_row) as usize;
-            for x in 0..width {
-                let offset = row_start + (x * 4) as usize;
-                pixels.push(Rgba8::new(
-                    data[offset],
-                    data[offset + 1],
-                    data[offset + 2],
-                    data[offset + 3],
-                ));
-            }
-        }
-
-        pixels
     }
 }
