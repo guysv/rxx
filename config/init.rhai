@@ -10,8 +10,6 @@ fn init(session_in, renderer_in) {
     print(`create_compute_texture(64, 64) => ${created_compute_handle}`);
     let created_handle = renderer.create_render_texture(64, 64);
     print(`create_render_texture(64, 64) => ${created_handle}`);
-    let view_handle = renderer.view_render_texture(session.active_view_id);
-    print(`view_render_texture(${session.active_view_id}) => ${view_handle}`);
 
     // Demo shader / pipeline / bind group / buffer APIs (for render(pass))
     // Simple vertex-color shader (sprite vertex layout, no texture).
@@ -75,11 +73,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let script_shader = renderer.create_shader_module(script_wgsl);
     let script_pipeline = renderer.create_render_pipeline_with_texture(script_shader, "vs_main", "fs_main");
     let script_bind_group = renderer.create_identity_transform_bind_group();
-    let view_tex_bind_group = if view_handle != () {
-        renderer.create_texture_sampler_bind_group(view_handle)
-    } else {
-        -1
-    };
     print(`script pipeline/bind group/vertex buffer created`);
     
     print(`script initialized`);
@@ -143,11 +136,11 @@ fn render(pass) {
         let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
         // let vertex_buffer = renderer.create_fullscreen_triangle_vertex_buffer();
         let view_bind_group = renderer.create_view_transform_bind_group(x, y, zoom.to_float());
+        let view_handle = renderer.view_render_texture(vid);
+        let view_tex_bind_group = renderer.create_texture_sampler_bind_group(view_handle);
         pass.set_pipeline(script_pipeline);
         pass.set_bind_group(0, view_bind_group);
-        if view_tex_bind_group >= 0 {
-            pass.set_bind_group(1, view_tex_bind_group);
-        }
+        pass.set_bind_group(1, view_tex_bind_group);
         pass.set_vertex_buffer(0, vertex_buffer);
         pass.draw(6, 1, 0, 0);
     }
