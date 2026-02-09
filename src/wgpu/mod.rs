@@ -6,7 +6,7 @@ use crate::execution::Execution;
 use crate::font::TextBatch;
 use crate::platform::{self, LogicalSize};
 use crate::renderer;
-use crate::script::ScriptState;
+use crate::script::{ScriptState, ScriptStorage};
 use crate::session::{self, Blending, Effect, Session};
 use crate::sprite;
 use crate::util;
@@ -505,20 +505,6 @@ pub struct Renderer {
 
     // Paste outputs for final pass rendering (like GL's paste_outputs)
     paste_outputs: Vec<(wgpu::Buffer, u32)>,
-
-    // Script-created GPU resources (owned here so render() can resolve without borrowing ScriptState)
-    script_shader_modules: BTreeMap<u64, wgpu::ShaderModule>,
-    next_script_shader_id: u64,
-    script_pipelines: BTreeMap<u64, wgpu::RenderPipeline>,
-    next_script_pipeline_id: u64,
-    script_bind_groups: BTreeMap<u64, wgpu::BindGroup>,
-    next_script_bind_group_id: u64,
-    script_buffers: BTreeMap<u64, wgpu::Buffer>,
-    next_script_buffer_id: u64,
-    /// Reusable buffer for script view-transform bind group (ortho + view transform).
-    script_view_transform_buffer: Option<wgpu::Buffer>,
-    /// Cached bind group id for script view transform (same layout as transform_bind_group_layout).
-    script_view_transform_bind_group_id: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -1160,16 +1146,6 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             paste_pixels: Vec::new(),
             paste_size: (0, 0),
             paste_outputs: Vec::new(),
-            script_shader_modules: BTreeMap::new(),
-            next_script_shader_id: 0,
-            script_pipelines: BTreeMap::new(),
-            next_script_pipeline_id: 0,
-            script_bind_groups: BTreeMap::new(),
-            next_script_bind_group_id: 0,
-            script_buffers: BTreeMap::new(),
-            next_script_buffer_id: 0,
-            script_view_transform_buffer: None,
-            script_view_transform_bind_group_id: None,
         })
     }
 
@@ -1737,7 +1713,9 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             let pass = pass.forget_lifetime();
             let pass_handle = Rc::new(RefCell::new(pass));
-            let script_pass = crate::script::ScriptPass::new(pass_handle, renderer_handle.clone());
+            let script_storage_handle = script_state_handle.borrow().script_storage().clone();
+            let script_pass =
+                crate::script::ScriptPass::new(pass_handle, renderer_handle.clone(), script_storage_handle);
             drop(this);
             drop(session);
             if let Err(e) = script_state_handle.borrow_mut().call_render_event(script_pass) {
@@ -1938,10 +1916,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 }
 
 impl Renderer {
-    /// Create a new render texture and return a handle. The texture is stored in script_state.
+    /// Create a new render texture and return a handle. The texture is stored in script storage.
     pub fn create_render_texture(
         &mut self,
-        script_state: &mut ScriptState,
+        storage: &mut ScriptStorage,
         width: u32,
         height: u32,
     ) -> TextureHandle {
@@ -1952,14 +1930,14 @@ impl Renderer {
             wgpu::TextureFormat::Rgba8UnormSrgb,
             false,
         );
-        let id = script_state.add_render_texture(texture);
+        let id = storage.add_render_texture(texture);
         TextureHandle::ScriptCreated(id)
     }
 
-    /// Create a new compute texture and return a handle. The texture is stored in script_state.
+    /// Create a new compute texture and return a handle. The texture is stored in script storage.
     pub fn create_compute_texture(
         &mut self,
-        script_state: &mut ScriptState,
+        storage: &mut ScriptStorage,
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
@@ -1971,7 +1949,7 @@ impl Renderer {
             format,
             true,
         );
-        let id = script_state.add_render_texture(texture);
+        let id = storage.add_render_texture(texture);
         TextureHandle::ScriptCreated(id)
     }
 
@@ -1985,10 +1963,10 @@ impl Renderer {
     }
 
     /// Create a bind group (texture + sampler) from a script texture handle for use as @group(1) uniform sampler.
-    /// Resolves ViewLayer from view_data and ScriptCreated from script_state. Returns bind group handle (u64).
+    /// Resolves ViewLayer from view_data and ScriptCreated from storage. Returns bind group handle (u64).
     pub fn create_texture_sampler_bind_group(
         &mut self,
-        script_state: &ScriptState,
+        storage: &mut ScriptStorage,
         handle: TextureHandle,
     ) -> Result<u64, String> {
         let layout = &self.texture_bind_group_layout;
@@ -2020,7 +1998,7 @@ impl Renderer {
                 bind_group
             }
             TextureHandle::ScriptCreated(id) => {
-                let tex = script_state
+                let tex = storage
                     .script_render_textures
                     .get(&id)
                     .ok_or_else(|| "script texture not found".to_string())?;
@@ -2045,65 +2023,33 @@ impl Renderer {
                 bind_group
             }
         };
-        Ok(self.add_script_bind_group(bind_group))
-    }
-
-    /// Script GPU resource storage (so render() can resolve handles without borrowing ScriptState).
-    pub fn add_script_shader_module(&mut self, module: wgpu::ShaderModule) -> u64 {
-        let id = self.next_script_shader_id;
-        self.next_script_shader_id = self.next_script_shader_id.saturating_add(1);
-        self.script_shader_modules.insert(id, module);
-        id
-    }
-    pub fn add_script_pipeline(&mut self, pipeline: wgpu::RenderPipeline) -> u64 {
-        let id = self.next_script_pipeline_id;
-        self.next_script_pipeline_id = self.next_script_pipeline_id.saturating_add(1);
-        self.script_pipelines.insert(id, pipeline);
-        id
-    }
-    pub fn add_script_bind_group(&mut self, bind_group: wgpu::BindGroup) -> u64 {
-        let id = self.next_script_bind_group_id;
-        self.next_script_bind_group_id = self.next_script_bind_group_id.saturating_add(1);
-        self.script_bind_groups.insert(id, bind_group);
-        id
-    }
-    pub fn add_script_buffer(&mut self, buffer: wgpu::Buffer) -> u64 {
-        let id = self.next_script_buffer_id;
-        self.next_script_buffer_id = self.next_script_buffer_id.saturating_add(1);
-        self.script_buffers.insert(id, buffer);
-        id
-    }
-    pub fn get_script_shader_module(&self, id: u64) -> Option<&wgpu::ShaderModule> {
-        self.script_shader_modules.get(&id)
-    }
-    pub fn get_script_pipeline(&self, id: u64) -> Option<&wgpu::RenderPipeline> {
-        self.script_pipelines.get(&id)
-    }
-    pub fn get_script_bind_group(&self, id: u64) -> Option<&wgpu::BindGroup> {
-        self.script_bind_groups.get(&id)
-    }
-    pub fn get_script_buffer(&self, id: u64) -> Option<&wgpu::Buffer> {
-        self.script_buffers.get(&id)
+        Ok(storage.add_script_bind_group(bind_group))
     }
 
     /// Create a shader module from WGSL source. Returns handle (u64).
-    pub fn create_shader_module(&mut self, label: Option<&str>, wgsl_source: &str) -> u64 {
+    pub fn create_shader_module(
+        &mut self,
+        storage: &mut ScriptStorage,
+        label: Option<&str>,
+        wgsl_source: &str,
+    ) -> u64 {
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: label.or(Some("script_shader")),
             source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
         });
-        self.add_script_shader_module(module)
+        storage.add_script_shader_module(module)
     }
 
     /// Create a render pipeline using the transform bind group layout and Sprite2dVertex layout.
     /// Shader must have vs_main and fs_main with the same vertex layout as the built-in sprite shader.
     pub fn create_render_pipeline(
         &mut self,
+        storage: &mut ScriptStorage,
         shader_handle: u64,
         vs_entry: &str,
         fs_entry: &str,
     ) -> u64 {
-        let module = self
+        let module = storage
             .get_script_shader_module(shader_handle)
             .expect("create_render_pipeline: invalid shader handle");
         let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2169,18 +2115,19 @@ impl Renderer {
             multiview: None,
             cache: None,
         });
-        self.add_script_pipeline(pipeline)
+        storage.add_script_pipeline(pipeline)
     }
 
     /// Create a render pipeline with transform (group 0) and texture+sampler (group 1) bind group layouts.
     /// Shader must declare @group(1) @binding(0) texture_2d and @binding(1) sampler.
     pub fn create_render_pipeline_with_texture(
         &mut self,
+        storage: &mut ScriptStorage,
         shader_handle: u64,
         vs_entry: &str,
         fs_entry: &str,
     ) -> u64 {
-        let module = self
+        let module = storage
             .get_script_shader_module(shader_handle)
             .expect("create_render_pipeline_with_texture: invalid shader handle");
         let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2249,13 +2196,14 @@ impl Renderer {
             multiview: None,
             cache: None,
         });
-        self.add_script_pipeline(pipeline)
+        storage.add_script_pipeline(pipeline)
     }
 
     /// Create a buffer and optionally upload initial data. Usage: "vertex", "uniform", "copy_dst" (comma-separated).
     /// Returns handle (u64).
     pub fn create_buffer(
         &mut self,
+        storage: &mut ScriptStorage,
         size: u64,
         usage_str: &str,
         initial_data: Option<&[u8]>,
@@ -2282,13 +2230,17 @@ impl Renderer {
         if let Some(data) = initial_data {
             self.queue.write_buffer(&buffer, 0, data);
         }
-        self.add_script_buffer(buffer)
+        storage.add_script_buffer(buffer)
     }
 
     /// Create a bind group with the transform layout bound to the given buffer.
     /// Returns handle (u64).
-    pub fn create_transform_bind_group(&mut self, buffer_handle: u64) -> u64 {
-        let buffer = self
+    pub fn create_transform_bind_group(
+        &mut self,
+        storage: &mut ScriptStorage,
+        buffer_handle: u64,
+    ) -> u64 {
+        let buffer = storage
             .get_script_buffer(buffer_handle)
             .expect("create_transform_bind_group: invalid buffer handle");
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2299,11 +2251,11 @@ impl Renderer {
                 resource: buffer.as_entire_binding(),
             }],
         });
-        self.add_script_bind_group(bind_group)
+        storage.add_script_bind_group(bind_group)
     }
 
     /// Create a transform bind group with identity ortho and identity transform (for script demo).
-    pub fn create_identity_transform_bind_group(&mut self) -> u64 {
+    pub fn create_identity_transform_bind_group(&mut self, storage: &mut ScriptStorage) -> u64 {
         let identity: M44 = Matrix4::identity().into();
         let uniforms = TransformUniforms {
             ortho: identity,
@@ -2320,8 +2272,8 @@ impl Renderer {
             .get_mapped_range_mut()
             .copy_from_slice(bytemuck::bytes_of(&uniforms));
         buffer.unmap();
-        let buffer_id = self.add_script_buffer(buffer);
-        let buffer_ref = self.get_script_buffer(buffer_id).unwrap();
+        let buffer_id = storage.add_script_buffer(buffer);
+        let buffer_ref = storage.get_script_buffer(buffer_id).unwrap();
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("script_identity_transform_bind_group"),
             layout: &self.transform_bind_group_layout,
@@ -2330,7 +2282,7 @@ impl Renderer {
                 resource: buffer_ref.as_entire_binding(),
             }],
         });
-        self.add_script_bind_group(bind_group)
+        storage.add_script_bind_group(bind_group)
     }
 
     /// Create or update a transform bind group with ortho and view transform (same as main view pass).
@@ -2338,6 +2290,7 @@ impl Renderer {
     /// Script should pass translation = session.offset + view.offset and view.zoom so pixel-space vertices render on-screen.
     pub fn create_view_transform_bind_group(
         &mut self,
+        storage: &mut ScriptStorage,
         translation_x: f32,
         translation_y: f32,
         zoom: f32,
@@ -2353,8 +2306,8 @@ impl Renderer {
         };
 
         if let (Some(ref buffer), Some(id)) = (
-            &self.script_view_transform_buffer,
-            self.script_view_transform_bind_group_id,
+            storage.script_view_transform_buffer(),
+            storage.script_view_transform_bind_group_id(),
         ) {
             self.queue
                 .write_buffer(buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -2381,15 +2334,14 @@ impl Renderer {
                 resource: buffer.as_entire_binding(),
             }],
         });
-        let id = self.add_script_bind_group(bind_group);
-        self.script_view_transform_buffer = Some(buffer);
-        self.script_view_transform_bind_group_id = Some(id);
+        let id = storage.add_script_bind_group(bind_group);
+        storage.set_script_view_transform(buffer, id);
         id
     }
 
     /// Create a vertex buffer containing a fullscreen triangle (NDC). For script demo.
     /// Uses Sprite2dVertex layout (position, uv, color, opacity).
-    pub fn create_fullscreen_triangle_vertex_buffer(&mut self) -> u64 {
+    pub fn create_fullscreen_triangle_vertex_buffer(&mut self, storage: &mut ScriptStorage) -> u64 {
         // Fullscreen triangle: (-1,-1,0), (3,-1,0), (-1,3,0); white, opacity 1
         // position: Vector3 { x: 448.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 0.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 }, 
         // position: Vector3 { x: 576.0, y: 296.0, z: -0.7 }, uv: Vector2 { x: 1.0, y: 1.0 }, color: Rgba8 { r: 255, g: 255, b: 255, a: 255 }, opacity: 1.0 }, 
@@ -2423,13 +2375,14 @@ impl Renderer {
         });
         self.queue
             .write_buffer(&buffer, 0, bytemuck::cast_slice(&verts));
-        self.add_script_buffer(buffer)
+        storage.add_script_buffer(buffer)
     }
     
 
     /// Create a vertex buffer from sprite2d::Vertex slice and register it for script use. Returns handle.
     pub fn create_vertex_buffer_from_sprite_vertices(
         &mut self,
+        storage: &mut ScriptStorage,
         vertices: &[sprite2d::Vertex],
     ) -> u64 {
         if vertices.is_empty() {
@@ -2452,7 +2405,7 @@ impl Renderer {
         });
         self.queue
             .write_buffer(&buffer, 0, bytemuck::cast_slice(&verts));
-        self.add_script_buffer(buffer)
+        storage.add_script_buffer(buffer)
     }
 
     pub fn handle_resized(&mut self, size: platform::LogicalSize) {
