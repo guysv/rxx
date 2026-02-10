@@ -480,6 +480,22 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_fn("view", |s: &mut Rc<RefCell<Session>>, id: i64| {
             let id = ViewId(id as u16);
             Dynamic::from(ScriptView::from(s.borrow().view(id)))
+        })
+        .register_type_with_name::<InputState>("InputState")
+        .register_fn("to_string", |state: InputState| {
+            format!("{:?}", state)
+        })
+        .register_type_with_name::<MouseButton>("MouseButton")
+        .register_fn("to_string", |button: MouseButton| {
+            format!("{:?}", button)
+        })
+        .register_type_with_name::<Point<ViewExtent, f32>>("Point")
+        .register_fn("to_string", |p: Point<ViewExtent, f32>| {
+            format!("{:?}", p)
+        })
+        .register_type_with_name::<LogicalDelta>("LogicalDelta")
+        .register_fn("to_string", |delta: LogicalDelta| {
+            format!("{:?}", delta)
         });
 }
 
