@@ -1,5 +1,10 @@
 fn init(session_in, renderer_in) {
     let session = session_in;
     let renderer = renderer_in;
+    register_command("hello", "Says hello");
     print(`dev.rxx initialized`);
+}
+
+fn cmd_hello(args) {
+    print(`hello`);
 }
