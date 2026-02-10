@@ -177,7 +177,7 @@ pub fn load_script(
     session_handle: &Rc<RefCell<Session>>,
     renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
 ) -> Result<(), String> {
-    let (path, shape_batch, sprite_batch) = {
+    let path = {
         let state = script_state_handle.borrow();
         let path = match state.script_path.as_ref() {
             Some(p) => p.clone(),
@@ -186,10 +186,13 @@ pub fn load_script(
         if !path.exists() {
             return Err(format!("Script not found: {}", path.display()));
         }
-        let batch0 = state.script_storage.borrow().user_batch.0.clone();
-        let batch1 = state.script_storage.borrow().user_batch.1.clone();
-        (path, batch0, batch1)
+        path
     };
+    let mut new_state = ScriptState::new();
+    new_state.set_path(path.clone());
+    let shape_batch = new_state.script_storage.borrow().user_batch.0.clone();
+    let sprite_batch = new_state.script_storage.borrow().user_batch.1.clone();
+
     let mut engine = Engine::new();
     register_draw_primitives(&mut engine, shape_batch, sprite_batch);
     register_session_handle(&mut engine);
@@ -208,9 +211,8 @@ pub fn load_script(
     let cmds = script_commands.borrow().clone();
     session_handle.borrow_mut().set_script_commands(cmds);
 
-    script_state_handle
-        .borrow_mut()
-        .apply_loaded_script(engine, scope, ast, &path);
+    new_state.apply_loaded_script(engine, scope, ast, &path);
+    *script_state_handle.borrow_mut() = new_state;
     Ok(())
 }
 
