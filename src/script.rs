@@ -87,72 +87,47 @@ impl std::fmt::Display for ScriptSpriteVertexList {
     }
 }
 
-/// State for the main Rhai script (event-handler style).
+/// Per-plugin state: one Rhai engine, scope, and AST per .rxx file.
+pub struct LoadedPlugin {
+    /// Path to the .rxx script file.
+    pub path: PathBuf,
+    /// Mtime of the script file after last successful load (for hot-reload).
+    pub mtime: Option<SystemTime>,
+    pub engine: Engine,
+    pub scope: Scope<'static>,
+    pub ast: Rc<RefCell<AST>>,
+}
+
+/// State for Rhai plugins (event-handler style). Each plugin has its own engine and ScriptState.
 /// Built in lib.rs and passed to renderer.frame() and draw_ctx.draw().
 pub struct ScriptState {
-    /// Path to the main Rhai script.
-    pub script_path: Option<PathBuf>,
-    /// Mtime of the script file after last successful load (for hot-reload dedup).
-    pub script_mtime: Option<SystemTime>,
-    /// Rhai engine for the main script.
-    pub script_engine: Option<Engine>,
-    /// Custom scope so variables defined in init() persist.
-    pub script_scope: Option<Scope<'static>>,
-    /// Compiled script AST.
-    pub script_ast: Option<Rc<RefCell<AST>>>,
+    /// Plugin directory (where *.rxx were discovered).
+    pub plugin_dir: Option<PathBuf>,
+    /// Loaded plugins, one per .rxx file.
+    pub plugins: Vec<LoadedPlugin>,
 }
 
-impl ScriptState {
-    pub fn new() -> Self {
-        Self {
-            script_path: None,
-            script_mtime: None,
-            script_engine: None,
-            script_scope: None,
-            script_ast: None,
-        }
-    }
-
-    pub fn set_path(&mut self, path: PathBuf) {
-        self.script_path = Some(path);
-    }
-
-    /// Populate engine, scope, ast, mtime after a successful load. Used by load_script.
-    fn apply_loaded_script(
-        &mut self,
-        engine: Engine,
-        scope: Scope<'static>,
-        ast: AST,
-        path: &PathBuf,
-    ) {
-        self.script_engine = Some(engine);
-        self.script_scope = Some(scope);
-        self.script_ast = Some(Rc::new(RefCell::new(ast)));
-        self.script_mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
-    }
+/// Discover *.rxx files in a directory. Returns paths sorted by name for deterministic load order.
+pub fn discover_rxx(plugin_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(plugin_dir)
+        .map_err(|e| format!("Plugin dir read error: {}", e))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map(|ext| ext == "rxx").unwrap_or(false))
+        .collect();
+    paths.sort_by_cached_key(|p| p.file_name().unwrap_or_default().to_owned());
+    Ok(paths)
 }
 
-/// Load or reload the main Rhai script: compile, create scope, call init(session, renderer).
-/// Takes script_state_handle so that init() can call create_render_texture (which borrows it)
-/// without RefCell double-borrow. Returns an error message for the caller to display.
-pub fn load_script(
-    script_state_handle: &Rc<RefCell<ScriptState>>,
+/// Load a single plugin from a path. Returns the loaded plugin and its registered commands.
+fn load_one_plugin(
+    path: &Path,
     session_handle: &Rc<RefCell<Session>>,
     renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
-) -> Result<(), String> {
-    let path = {
-        let state = script_state_handle.borrow();
-        let path = match state.script_path.as_ref() {
-            Some(p) => p.clone(),
-            None => return Ok(()),
-        };
-        if !path.exists() {
-            return Err(format!("Script not found: {}", path.display()));
-        }
-        path
-    };
-    let mut new_state = ScriptState::new();
-    new_state.set_path(path.clone());
+) -> Result<(LoadedPlugin, Vec<(String, String)>), String> {
+    if !path.exists() {
+        return Err(format!("Plugin not found: {}", path.display()));
+    }
     let (shape_batch, sprite_batch) = renderer_handle.borrow().user_batch();
 
     let mut engine = Engine::new();
@@ -164,53 +139,120 @@ pub fn load_script(
     let script_commands: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
     register_command_api(&mut engine, script_commands.clone());
 
-    let ast = compile_file(&engine, &path).map_err(|e| format!("Script compile error: {}", e))?;
+    let ast = compile_file(&engine, path).map_err(|e| format!("Script compile error: {}", e))?;
     let mut scope = Scope::new();
     register_constants(&mut scope);
     call_init(&engine, &mut scope, &ast, session_handle, renderer_handle)
         .map_err(|e| format!("Script init error: {}", e))?;
 
     let cmds = script_commands.borrow().clone();
-    session_handle.borrow_mut().set_script_commands(cmds);
+    let mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    let plugin = LoadedPlugin {
+        path: path.to_path_buf(),
+        mtime,
+        engine,
+        scope,
+        ast: Rc::new(RefCell::new(ast)),
+    };
+    Ok((plugin, cmds))
+}
 
-    new_state.apply_loaded_script(engine, scope, ast, &path);
-    *script_state_handle.borrow_mut() = new_state;
+impl ScriptState {
+    pub fn new() -> Self {
+        Self {
+            plugin_dir: None,
+            plugins: Vec::new(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn set_plugin_dir(&mut self, dir: PathBuf) {
+        self.plugin_dir = Some(dir);
+    }
+}
+
+/// Load or reload all plugins from the plugin directory. Discovers *.rxx, loads each,
+/// merges script commands, and replaces ScriptState. Returns an error message for the caller.
+pub fn load_plugins(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    session_handle: &Rc<RefCell<Session>>,
+    renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
+    plugin_dir: PathBuf,
+) -> Result<(), String> {
+    if !plugin_dir.is_dir() {
+        return Err(format!("Plugin dir is not a directory: {}", plugin_dir.display()));
+    }
+    let paths = discover_rxx(&plugin_dir)?;
+    let mut all_commands = Vec::new();
+    let mut plugins = Vec::with_capacity(paths.len());
+    for path in &paths {
+        match load_one_plugin(path, session_handle, renderer_handle) {
+            Ok((plugin, cmds)) => {
+                all_commands.extend(cmds);
+                plugins.push(plugin);
+            }
+            Err(e) => return Err(format!("{}: {}", path.display(), e)),
+        }
+    }
+    session_handle.borrow_mut().set_script_commands(all_commands);
+    let mut state = script_state_handle.borrow_mut();
+    state.plugin_dir = Some(plugin_dir);
+    state.plugins = plugins;
     Ok(())
 }
 
-/// Reload the main Rhai script (recompile and call init again). Errors are ignored.
-pub fn reload_script(
+/// Reload all plugins from the current plugin directory. Errors are ignored.
+pub fn reload_plugins(
     script_state_handle: &Rc<RefCell<ScriptState>>,
     session_handle: &Rc<RefCell<Session>>,
     renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
 ) {
-    let _ = load_script(script_state_handle, session_handle, renderer_handle);
+    let plugin_dir = script_state_handle.borrow().plugin_dir.clone();
+    if let Some(dir) = plugin_dir {
+        let _ = load_plugins(script_state_handle, session_handle, renderer_handle, dir);
+    }
 }
 
 impl ScriptState {
-    /// True if the script file on disk is newer than the last load (or we never stored mtime).
+    /// True if any plugin file on disk is newer than the last load, or the set of .rxx files changed.
     pub fn script_file_modified_since_load(&self) -> bool {
-        let path = match &self.script_path {
-            Some(p) => p,
+        let dir = match &self.plugin_dir {
+            Some(d) => d,
             None => return false,
         };
-        let current = match std::fs::metadata(path).ok().and_then(|m| m.modified().ok()) {
-            Some(t) => t,
-            None => return false,
+        let current_paths = match discover_rxx(dir) {
+            Ok(p) => p,
+            Err(_) => return false,
         };
-        match self.script_mtime {
-            Some(last) => current > last,
-            None => true,
+        if current_paths.len() != self.plugins.len() {
+            return true;
         }
+        for (i, path) in current_paths.iter().enumerate() {
+            if let Some(plugin) = self.plugins.get(i) {
+                if plugin.path != *path {
+                    return true;
+                }
+                let current = match std::fs::metadata(path).ok().and_then(|m| m.modified().ok()) {
+                    Some(t) => t,
+                    None => return true,
+                };
+                if plugin.mtime.map(|last| current > last).unwrap_or(true) {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        }
+        false
     }
 
-    /// Path to the main Rhai script, if one is loaded.
-    pub fn script_path(&self) -> Option<&PathBuf> {
-        self.script_path.as_ref()
+    /// Plugin directory, if one is set.
+    pub fn plugin_dir(&self) -> Option<&PathBuf> {
+        self.plugin_dir.as_ref()
     }
 
-    /// Traverse effects: call script's `view_added` / `view_removed` handlers and run script
-    /// commands (with session messages on error). Returns effects not consumed for the renderer.
+    /// Traverse effects: call each plugin's `view_added` / `view_removed` handlers and run script
+    /// commands (try each plugin until one handles it). Returns effects not consumed for the renderer.
     pub fn call_view_effects(
         &mut self,
         effects: &[Effect],
@@ -218,30 +260,34 @@ impl ScriptState {
     ) -> Vec<Effect> {
         let mut renderer_effects = Vec::new();
         let mut script_commands = Vec::new();
-        {
-            let (engine, scope, ast) = match (
-                self.script_engine.as_ref(),
-                self.script_scope.as_mut(),
-                self.script_ast.as_ref(),
-            ) {
-                (Some(e), Some(s), Some(a)) => (e, s, a),
-                _ => return effects.to_vec(),
-            };
-            for eff in effects {
-                match eff {
-                    Effect::ViewAdded(id) => {
-                        let _ = call_view_added(engine, scope, &ast.borrow(), id.raw() as i64);
-                        renderer_effects.push(eff.clone());
+        for eff in effects {
+            match eff {
+                Effect::ViewAdded(id) => {
+                    for plugin in &mut self.plugins {
+                        let _ = call_view_added(
+                            &plugin.engine,
+                            &mut plugin.scope,
+                            &plugin.ast.borrow(),
+                            id.raw() as i64,
+                        );
                     }
-                    Effect::ViewRemoved(id) => {
-                        let _ = call_view_removed(engine, scope, &ast.borrow(), id.raw() as i64);
-                        renderer_effects.push(eff.clone());
-                    }
-                    Effect::RunScriptCommand(name, args) => {
-                        script_commands.push((name.clone(), args.clone()))
-                    }
-                    other => renderer_effects.push(other.clone()),
+                    renderer_effects.push(eff.clone());
                 }
+                Effect::ViewRemoved(id) => {
+                    for plugin in &mut self.plugins {
+                        let _ = call_view_removed(
+                            &plugin.engine,
+                            &mut plugin.scope,
+                            &plugin.ast.borrow(),
+                            id.raw() as i64,
+                        );
+                    }
+                    renderer_effects.push(eff.clone());
+                }
+                Effect::RunScriptCommand(name, args) => {
+                    script_commands.push((name.clone(), args.clone()));
+                }
+                other => renderer_effects.push(other.clone()),
             }
         }
         for (name, args) in script_commands {
@@ -264,7 +310,7 @@ impl ScriptState {
         renderer_effects
     }
 
-    /// Call the script's `draw()` event handler.
+    /// Call each plugin's `draw()` event handler. User batch is cleared once before the first plugin.
     /// The script's draw primitives (e.g. `draw_line`, `draw_text`) mutate the user batches directly.
     pub fn call_draw_event(
         &mut self,
@@ -277,70 +323,64 @@ impl ScriptState {
         if let Some(ref mut b) = *user_batch.1.borrow_mut() {
             b.clear();
         }
-        let (engine, scope, ast) = match (
-            self.script_engine.as_ref(),
-            self.script_scope.as_mut(),
-            self.script_ast.as_ref(),
-        ) {
-            (Some(e), Some(s), Some(a)) => (e, s, a),
-            _ => return Ok(()),
-        };
-        call_draw(engine, scope, &ast.borrow())
+        for plugin in &mut self.plugins {
+            call_draw(&plugin.engine, &mut plugin.scope, &plugin.ast.borrow())?;
+        }
+        Ok(())
     }
 
     pub fn call_shade_event(
         &mut self,
         encoder: &Rc<RefCell<wgpu_types::CommandEncoder>>,
     ) -> Result<(), Box<rhai::EvalAltResult>> {
-        let (engine, scope, ast) = match (
-            self.script_engine.as_ref(),
-            self.script_scope.as_mut(),
-            self.script_ast.as_ref(),
-        ) {
-            (Some(e), Some(s), Some(a)) => (e, s, a),
-            _ => return Ok(()),
-        };
-        call_shade(engine, scope, &ast.borrow(), encoder)
+        for plugin in &mut self.plugins {
+            call_shade(
+                &plugin.engine,
+                &mut plugin.scope,
+                &plugin.ast.borrow(),
+                encoder,
+            )?;
+        }
+        Ok(())
     }
 
     pub fn call_render_event(
         &mut self,
         script_pass: ScriptPass,
     ) -> Result<(), Box<rhai::EvalAltResult>> {
-        let (engine, scope, ast) = match (
-            self.script_engine.as_ref(),
-            self.script_scope.as_mut(),
-            self.script_ast.as_ref(),
-        ) {
-            (Some(e), Some(s), Some(a)) => (e, s, a),
-            _ => return Ok(()),
-        };
-        call_render(engine, scope, &ast.borrow(), script_pass)
+        for plugin in &mut self.plugins {
+            call_render(
+                &plugin.engine,
+                &mut plugin.scope,
+                &plugin.ast.borrow(),
+                script_pass.clone(),
+            )?;
+        }
+        Ok(())
     }
 
-    /// Call a script command handler `cmd_<name>(args)`.
-    /// Returns Ok(true) if handler was found and called, Ok(false) if no handler exists.
+    /// Call a script command handler `cmd_<name>(args)` on each plugin in turn.
+    /// Returns Ok(true) if any plugin handled it, Ok(false) if none.
     pub fn call_script_command(
         &mut self,
         name: &str,
         args: Vec<String>,
     ) -> Result<bool, Box<rhai::EvalAltResult>> {
-        let (engine, scope, ast) = match (
-            self.script_engine.as_ref(),
-            self.script_scope.as_mut(),
-            self.script_ast.as_ref(),
-        ) {
-            (Some(e), Some(s), Some(a)) => (e, s, a),
-            _ => return Ok(false),
-        };
-
         let handler_name = format!("cmd_{}", name.replace('/', "_"));
         let rhai_args: Array = args.into_iter().map(Dynamic::from).collect();
-
-        match engine.call_fn::<()>(scope, &ast.borrow(), &handler_name, (rhai_args,)) {
-            Ok(()) => Ok(true),
-            Err(e) => Err(e),
+        for plugin in &mut self.plugins {
+            match plugin.engine.call_fn::<()>(
+                &mut plugin.scope,
+                &plugin.ast.borrow(),
+                &handler_name,
+                (rhai_args.clone(),),
+            ) {
+                Ok(()) => return Ok(true),
+                Err(ref e) if is_function_not_found(e) => continue,
+                Err(e) => return Err(e),
+            }
         }
+        Ok(false)
     }
 }
 

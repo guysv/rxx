@@ -653,8 +653,8 @@ pub struct Session {
     /// an expensive process is kicked off.
     queue: Vec<InternalCommand>,
 
-    /// When set by :script command, lib.rs applies it to ScriptState and clears this.
-    pending_script_path: Option<PathBuf>,
+    /// When set by :plugin-dir command, lib.rs applies it and reloads plugins; then clears this.
+    pending_plugin_dir: Option<PathBuf>,
 }
 
 impl Session {
@@ -746,7 +746,7 @@ impl Session {
             avg_time: time::Duration::from_secs(0),
             frame_number: 0,
             queue: Vec::new(),
-            pending_script_path: None,
+            pending_plugin_dir: None,
         }
     }
 
@@ -776,10 +776,10 @@ impl Session {
         Ok(self)
     }
 
-    /// Take the pending script path set by :script command, if any.
-    /// Lib applies it to ScriptState and shows feedback.
-    pub fn take_pending_script_path(&mut self) -> Option<PathBuf> {
-        self.pending_script_path.take()
+    /// Take the pending plugin directory set by :plugin-dir command, if any.
+    /// Lib reloads plugins from that dir and shows feedback.
+    pub fn take_pending_plugin_dir(&mut self) -> Option<PathBuf> {
+        self.pending_plugin_dir.take()
     }
 
     /// Set script commands registered by Rhai init() and rebuild the parser.
@@ -2730,8 +2730,8 @@ impl Session {
                     MessageType::Error,
                 );
             }
-            Command::SetScript(path) => {
-                self.pending_script_path = Some(PathBuf::from(path));
+            Command::SetPluginDir(path) => {
+                self.pending_plugin_dir = Some(PathBuf::from(path));
             }
             Command::Edit(ref paths) => {
                 if paths.is_empty() {

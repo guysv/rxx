@@ -83,7 +83,7 @@ pub struct Options<'a> {
     pub resizable: bool,
     pub headless: bool,
     pub source: Option<PathBuf>,
-    pub script: Option<PathBuf>,
+    pub plugin_dir: Option<PathBuf>,
     pub exec: ExecutionMode,
     pub glyphs: &'a [u8],
     pub debug: bool,
@@ -97,7 +97,7 @@ impl<'a> Default for Options<'a> {
             headless: false,
             resizable: true,
             source: None,
-            script: None,
+            plugin_dir: None,
             exec: ExecutionMode::Normal,
             glyphs: data::GLYPHS,
             debug: false,
@@ -190,14 +190,17 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
     let renderer_handle = Rc::new(RefCell::new(renderer));
 
-    drop(session); // release so load_script can borrow session_handle
+    drop(session); // release so load_plugins can borrow session_handle
 
     let script_state_handle: Rc<RefCell<ScriptState>> = Rc::new(RefCell::new(ScriptState::new()));
-    if let Some(path) = options.script.clone() {
-        script_state_handle.borrow_mut().set_path(path);
-        if let Err(e) = script::load_script(&script_state_handle, &session_handle, &renderer_handle)
-        {
-            log::error!("Error loading script: {}", e);
+    if let Some(plugin_dir) = options.plugin_dir.clone() {
+        if let Err(e) = script::load_plugins(
+            &script_state_handle,
+            &session_handle,
+            &renderer_handle,
+            plugin_dir.clone(),
+        ) {
+            log::error!("Error loading plugins: {}", e);
         }
     }
 
@@ -205,34 +208,29 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
     let script_reload_pending: Option<Arc<AtomicBool>> = script_state_handle
         .borrow()
-        .script_path()
+        .plugin_dir()
         .map(|_| Arc::new(AtomicBool::new(false)));
 
-    if let (Some(script_path), Some(pending)) = (
-        script_state_handle.borrow().script_path().cloned(),
+    if let (Some(plugin_dir), Some(pending)) = (
+        script_state_handle.borrow().plugin_dir().cloned(),
         script_reload_pending.as_ref(),
     ) {
-        let pending_clone = Arc::clone(pending);
-        let script_canonical = script_path.canonicalize().ok();
-        let watch_dir = script_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let pending_clone: Arc<AtomicBool> = Arc::clone(pending);
+        let watch_dir = plugin_dir.clone();
         thread::spawn(move || {
             use notify::{RecursiveMode, Watcher};
             let pending_cb = Arc::clone(&pending_clone);
             let mut watcher =
                 match notify::recommended_watcher(move |res: Result<notify::Event, _>| {
                     if let Ok(event) = res {
-                        let is_our_file = event
-                            .paths
-                            .iter()
-                            .any(|p| p.canonicalize().ok().as_ref() == script_canonical.as_ref());
+                        let is_rxx_change = event.paths.iter().any(|p| {
+                            p.extension().and_then(|e| e.to_str()) == Some("rxx")
+                        });
                         let is_modify = matches!(
                             event.kind,
-                            notify::EventKind::Modify(_) | notify::EventKind::Create(_)
+                            notify::EventKind::Modify(_) | notify::EventKind::Create(_) | notify::EventKind::Remove(_)
                         );
-                        if is_our_file && is_modify {
+                        if is_rxx_change && is_modify {
                             pending_cb.store(true, Ordering::Relaxed);
                             unsafe { glfw::ffi::glfwPostEmptyEvent() };
                         }
@@ -240,7 +238,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                 }) {
                     Ok(w) => w,
                     Err(e) => {
-                        log::warn!("script watcher: {}", e);
+                        log::warn!("plugin watcher: {}", e);
                         return;
                     }
                 };
@@ -248,7 +246,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
                 .watch(&watch_dir, RecursiveMode::NonRecursive)
                 .is_err()
             {
-                log::warn!("script watcher: failed to watch {}", watch_dir.display());
+                log::warn!("plugin watcher: failed to watch {}", watch_dir.display());
                 return;
             }
             let (_tx, rx) = std::sync::mpsc::channel::<()>();
@@ -282,13 +280,13 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         }
 
         if let Some(ref flag) = script_reload_pending {
-            if flag.swap(false, Ordering::Relaxed)
+            if flag.swap(false, std::sync::atomic::Ordering::Relaxed)
                 && script_state_handle
                     .borrow()
                     .script_file_modified_since_load()
             {
                 drop(session);
-                script::reload_script(&script_state_handle, &session_handle, &renderer_handle);
+                script::reload_plugins(&script_state_handle, &session_handle, &renderer_handle);
                 session = session_handle.borrow_mut();
             }
         }
@@ -415,10 +413,14 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         let effects =
             update_timer.run(|avg| session.update(&mut session_events, &mut execution, delta, avg));
 
-        if let Some(path) = session.take_pending_script_path() {
-            script_state_handle.borrow_mut().set_path(path);
-            match script::load_script(&script_state_handle, &session_handle, &renderer_handle) {
-                Ok(()) => session.message("Script loaded".to_string(), MessageType::Info),
+        if let Some(plugin_dir) = session.take_pending_plugin_dir() {
+            match script::load_plugins(
+                &script_state_handle,
+                &session_handle,
+                &renderer_handle,
+                plugin_dir.clone(),
+            ) {
+                Ok(()) => session.message("Plugins loaded".to_string(), MessageType::Info),
                 Err(e) => session.message(e, MessageType::Error),
             }
         }

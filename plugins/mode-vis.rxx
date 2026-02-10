@@ -1,0 +1,21 @@
+fn init(session_in, renderer_in) {
+    let session = session_in;
+    let renderer = renderer_in;
+    print(`mod-vis.rxx initialized`);
+}
+
+fn draw() {print(session)
+    draw_text(vec2(10.0, 10.0), "WTF", rgb8(0, 255, 0));
+}
+
+fn view_added(view_id) {
+}
+
+fn view_removed(view_id) {
+}
+
+fn shade(encoder) {
+}
+
+fn render(pass) {
+}
