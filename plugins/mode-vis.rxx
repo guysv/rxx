@@ -11,6 +11,11 @@ fn draw() {
         draw_text(vec2(10.0, 10.0), session.mode, rgb8(255, 255, 255));
     } else if session.mode.starts_with("visual") {
         draw_text(vec2(10.0, 10.0), session.mode, rgb8(0xff, 0x33, 0x66));
+    } else if session.mode == "command" {
+        // nothing
+    } else {
+        // script mode
+        draw_text(vec2(10.0, 10.0), session.mode, rgb8(0x00, 0xff, 0x00));
     }
 }
 

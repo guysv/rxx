@@ -12,7 +12,7 @@ use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
 use crate::gfx::sprite2d;
 use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
-use crate::session::{Effect, MessageType, Mode, Session, VisualState};
+use crate::session::{Effect, MessageType, Mode, ModeString, Session, VisualState};
 use crate::view::{View, ViewId, ViewResource};
 use crate::wgpu::{self, Texture};
 use ::wgpu as wgpu_types;
@@ -420,6 +420,10 @@ pub fn register_session_handle(engine: &mut Engine) {
         })
         .register_fn("switch_mode", |s: &mut Rc<RefCell<Session>>, mode: Mode| {
             s.borrow_mut().switch_mode(mode);
+        })
+        .register_fn("script_mode", |name: String| {
+            Mode::ScriptMode(ModeString::try_from_str(name.as_str())
+                .expect("Failed to convert string to ModeString"))
         })
         .register_type_with_name::<Mode>("Mode")
         .register_type_with_name::<ScriptView>("View")

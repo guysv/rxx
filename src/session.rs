@@ -24,6 +24,7 @@ use crate::gfx::rect::Rect;
 use crate::gfx::shape2d::{Fill, Rotation, Shape, Stroke};
 use crate::gfx::{Point, Rgb8, Rgba8, ZDepth};
 
+use arraystring::{ArrayString, typenum};
 use arrayvec::ArrayVec;
 
 use directories as dirs;
@@ -66,9 +67,11 @@ pub type SessionCoords = Point<Session, f32>;
 
 ///////////////////////////////////////////////////////////////////////////////
 
+pub type ModeString = ArrayString<typenum::U32>;
+
 /// An editing mode the `Session` can be in.
 /// Some of these modes are inspired by vi.
-#[derive(Eq, PartialEq, Copy, Clone, Debug, Default)]
+#[derive(Eq, PartialEq, Clone, Copy, Debug, Default)]
 pub enum Mode {
     /// Allows the user to paint pixels.
     #[default]
@@ -82,6 +85,8 @@ pub enum Mode {
     Present,
     /// Activated with the `:help` command.
     Help,
+    /// Activated by scripts
+    ScriptMode(ModeString),
 }
 
 impl fmt::Display for Mode {
@@ -94,6 +99,7 @@ impl fmt::Display for Mode {
             Self::Command => "command".fmt(f),
             Self::Present => "present".fmt(f),
             Self::Help => "help".fmt(f),
+            Self::ScriptMode(name) => name.fmt(f),
         }
     }
 }
@@ -1914,6 +1920,9 @@ impl Session {
                                 }
                             },
                             Mode::Command => {
+                                // TODO
+                            }
+                            Mode::ScriptMode(_name) => {
                                 // TODO
                             }
                             Mode::Visual(VisualState::Selecting { ref mut dragging }) => {
