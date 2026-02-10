@@ -2114,18 +2114,6 @@ impl Session {
             }
 
             match self.mode {
-                Mode::Visual(VisualState::Selecting { .. }) => {
-                    if key == platform::Key::Escape && state == InputState::Pressed {
-                        self.switch_mode(Mode::Normal);
-                        return;
-                    }
-                }
-                Mode::Visual(VisualState::Pasting) => {
-                    if key == platform::Key::Escape && state == InputState::Pressed {
-                        self.switch_mode(Mode::Visual(VisualState::default()));
-                        return;
-                    }
-                }
                 Mode::Command => {
                     if state == InputState::Pressed {
                         match key {
@@ -2164,13 +2152,13 @@ impl Session {
                     }
                     return;
                 }
-                Mode::Help => {
+                _ => {
                     if state == InputState::Pressed && key == platform::Key::Escape {
                         self.switch_mode(Mode::Normal);
                         return;
                     }
+
                 }
-                _ => {}
             }
 
             if let Some(kb) = self
