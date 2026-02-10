@@ -12,7 +12,7 @@ use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
 use crate::gfx::sprite2d;
 use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
-use crate::session::{Effect, MessageType, Session};
+use crate::session::{Effect, MessageType, Mode, Session, VisualState};
 use crate::view::{View, ViewId, ViewResource};
 use crate::wgpu::{self, Texture};
 use ::wgpu as wgpu_types;
@@ -418,6 +418,10 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_get("mode", |s: &mut Rc<RefCell<Session>>| {
             s.borrow().mode.to_string()
         })
+        .register_fn("switch_mode", |s: &mut Rc<RefCell<Session>>, mode: Mode| {
+            s.borrow_mut().switch_mode(mode);
+        })
+        .register_type_with_name::<Mode>("Mode")
         .register_type_with_name::<ScriptView>("View")
         .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
         .register_get("offset", |v: &mut ScriptView| {
@@ -1175,6 +1179,11 @@ fn register_constants(scope: &mut Scope) {
     scope.push_constant("SHADER_STAGE_VERTEX", 1_i64);
     scope.push_constant("SHADER_STAGE_FRAGMENT", 2_i64);
     scope.push_constant("SHADER_STAGE_COMPUTE", 4_i64);
+    scope.push_constant("MODE_NORMAL", Mode::Normal);
+    scope.push_constant("MODE_VISUAL", Mode::Visual(VisualState::default()));
+    scope.push_constant("MODE_COMMAND", Mode::Command);
+    scope.push_constant("MODE_PRESENT", Mode::Present);
+    scope.push_constant("MODE_HELP", Mode::Help);
 }
 
 /// Call the script's `init(session, renderer)` function with options so that new variables

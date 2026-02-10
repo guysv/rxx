@@ -7,4 +7,5 @@ fn init(session_in, renderer_in) {
 
 fn cmd_hello(args) {
     print(`hello`);
+    session.switch_mode(MODE_COMMAND);
 }
