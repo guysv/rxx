@@ -10,7 +10,7 @@ use crate::execution::{DigestMode, DigestState, Execution};
 use crate::flood::FloodFiller;
 use crate::hashmap;
 use crate::palette::*;
-use crate::platform::{self, InputState, Key, KeyboardInput, LogicalSize, ModifiersState};
+use crate::platform::{self, InputState, Key, KeyboardInput, LogicalDelta, LogicalSize, ModifiersState};
 use crate::util;
 use crate::view::path;
 use crate::view::resource::ViewResource;
@@ -168,6 +168,14 @@ impl Deref for Selection {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum ScriptEffect {
+    RunScriptCommand(String, Vec<String>),
+    MouseInput(InputState, platform::MouseButton, Point<ViewExtent, f32>),
+    MouseWheel(LogicalDelta),
+    CursorMoved(Point<ViewExtent, f32>),
+}
+
 /// Session effects. Eg. view creation/destruction.
 /// Anything the renderer might want to know.
 #[derive(Clone, Debug)]
@@ -195,7 +203,7 @@ pub enum Effect {
     /// The blend mode used for painting has changed.
     ViewBlendingChanged(Blending),
     /// Run a script command registered by Rhai init(). (name, args)
-    RunScriptCommand(String, Vec<String>),
+    ScriptEffect(ScriptEffect),
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -1849,6 +1857,8 @@ impl Session {
     }
 
     fn handle_mouse_input(&mut self, button: platform::MouseButton, state: platform::InputState) {
+        let p = self.active_view_coords(self.cursor);
+        self.effects.push(Effect::ScriptEffect(ScriptEffect::MouseInput(state, button, p)));
         if button != platform::MouseButton::Left {
             return;
         }
@@ -1891,7 +1901,7 @@ impl Session {
                     }
                     if self.is_active(id) {
                         let v = self.view(id);
-                        let p = self.active_view_coords(self.cursor);
+                        
 
                         let extent = v.extent();
 
@@ -1983,6 +1993,10 @@ impl Session {
     }
 
     fn handle_mouse_wheel(&mut self, delta: platform::LogicalDelta) {
+        self.effects.push(Effect::ScriptEffect(ScriptEffect::MouseWheel(delta)));
+        if matches!(self.mode, Mode::ScriptMode(_)) {
+            return;
+        }
         if delta.y > 0. {
             if let Some(v) = self.hover_view {
                 self.activate(v);
@@ -2001,6 +2015,9 @@ impl Session {
         let prev_cursor = self.cursor;
         let p = self.active_view_coords(cursor);
         let prev_p = self.active_view_coords(prev_cursor);
+        if p != prev_p {
+            self.effects.push(Effect::ScriptEffect(ScriptEffect::CursorMoved(p)));
+        }
         let (vw, vh) = self.active_view().size();
 
         self.cursor = cursor;
@@ -2699,7 +2716,7 @@ impl Session {
             }
             Command::ScriptCommand(name, args) => {
                 // Dispatch to script handler via effect
-                self.effects.push(Effect::RunScriptCommand(name, args));
+                self.effects.push(Effect::ScriptEffect(ScriptEffect::RunScriptCommand(name, args)));
             }
             Command::ChangeDir(dir) => {
                 let home = self.base_dirs.home_dir().to_path_buf();

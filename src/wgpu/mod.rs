@@ -2728,7 +2728,7 @@ impl Renderer {
                     shapes.into_iter().for_each(|s| self.final_batch.add(s));
                 }
                 Effect::ViewTouched(_) => {}
-                Effect::RunScriptCommand(_, _) => {
+                Effect::ScriptEffect(_) => {
                     // Handled in lib.rs before effects reach renderer
                 }
             }

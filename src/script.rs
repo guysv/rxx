@@ -9,11 +9,12 @@ use crate::gfx::color::Rgba;
 use crate::gfx::math::{Point2, Vector2};
 use crate::gfx::rect::Rect;
 use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
-use crate::gfx::sprite2d;
+use crate::gfx::{Point, sprite2d};
 use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
-use crate::session::{Effect, MessageType, Mode, ModeString, Session, VisualState};
-use crate::view::{View, ViewId, ViewResource};
+use crate::platform::{InputState, LogicalDelta, MouseButton};
+use crate::session::{Effect, MessageType, Mode, ModeString, ScriptEffect, Session, VisualState};
+use crate::view::{View, ViewExtent, ViewId, ViewResource};
 use crate::wgpu::{self, Texture};
 use ::wgpu as wgpu_types;
 
@@ -284,8 +285,43 @@ impl ScriptState {
                     }
                     renderer_effects.push(eff.clone());
                 }
-                Effect::RunScriptCommand(name, args) => {
+                Effect::ScriptEffect(ScriptEffect::RunScriptCommand(name, args)) => {
                     script_commands.push((name.clone(), args.clone()));
+                }
+                Effect::ScriptEffect(ScriptEffect::MouseInput(state, button, p)) => {
+                    for plugin in &mut self.plugins {
+                        let _ = call_mouse_input(
+                            &plugin.engine,
+                            &mut plugin.scope,
+                            &plugin.ast.borrow(),
+                            state,
+                            button,
+                            p,
+                        );
+                    }
+                    renderer_effects.push(eff.clone());
+                }
+                Effect::ScriptEffect(ScriptEffect::MouseWheel(delta)) => {
+                    for plugin in &mut self.plugins {
+                        let _ = call_mouse_wheel(
+                            &plugin.engine,
+                            &mut plugin.scope,
+                            &plugin.ast.borrow(),
+                            delta,
+                        );
+                    }
+                    renderer_effects.push(eff.clone());
+                }
+                Effect::ScriptEffect(ScriptEffect::CursorMoved(p)) => {
+                    for plugin in &mut self.plugins {
+                        let _ = call_cursor_moved(
+                            &plugin.engine,
+                            &mut plugin.scope,
+                            &plugin.ast.borrow(),
+                            p,
+                        );
+                    }
+                    renderer_effects.push(eff.clone());
                 }
                 other => renderer_effects.push(other.clone()),
             }
@@ -1281,6 +1317,47 @@ fn call_view_removed(
     match engine.call_fn::<()>(scope, ast, "view_removed", (view_id,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "view_removed") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn call_mouse_input(
+    engine: &Engine,
+    scope: &mut Scope,
+    ast: &AST,
+    state: &InputState,
+    button: &MouseButton,
+    p: &Point<ViewExtent, f32>,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    match engine.call_fn::<()>(scope, ast, "mouse_input", (state.clone(), button.clone(), p.clone())) {
+        Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "mouse_input") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn call_mouse_wheel(
+    engine: &Engine,
+    scope: &mut Scope,
+    ast: &AST,
+    delta: &LogicalDelta,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    match engine.call_fn::<()>(scope, ast, "mouse_wheel", (delta.clone(),)) {
+        Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "mouse_wheel") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn call_cursor_moved(
+    engine: &Engine,
+    scope: &mut Scope,
+    ast: &AST,
+    p: &Point<ViewExtent, f32>,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    match engine.call_fn::<()>(scope, ast, "cursor_moved", (p.clone(),)) {
+        Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "cursor_moved") => Ok(()),
         Err(e) => Err(e),
     }
 }
