@@ -460,6 +460,36 @@ pub struct ScriptColorAttachment {
     pub store_op: ScriptStoreOp,
 }
 
+/// Script-side binding type for bind group layout entries (no string parsing).
+#[derive(Clone)]
+pub enum ScriptBindingType {
+    UniformBuffer,
+    Texture2dFilterable,
+    SamplerFiltering,
+}
+
+/// Script-side bind group layout entry: binding index, visibility (ShaderStages bits), type.
+#[derive(Clone)]
+pub struct ScriptBindGroupLayoutEntry {
+    pub binding: u32,
+    pub visibility: u32,
+    pub ty: ScriptBindingType,
+}
+
+/// Script-side bind group entry for create_bind_group: binding index + resource.
+#[derive(Clone)]
+pub enum ScriptBindGroupEntry {
+    Buffer {
+        binding: u32,
+        buffer: Rc<RefCell<wgpu_types::Buffer>>,
+    },
+    Texture {
+        binding: u32,
+        texture: Rc<RefCell<Texture>>,
+    },
+    SamplerDefault { binding: u32 },
+}
+
 /// Unified pass type for script: wraps the wgpu pass and renderer so pass methods can resolve handles.
 #[derive(Clone)]
 pub struct ScriptPass {
@@ -555,6 +585,42 @@ pub fn register_renderer_handle(
                 }
             },
         )
+        .register_type_with_name::<ScriptBindingType>("BindingType")
+        .register_type_with_name::<ScriptBindGroupLayoutEntry>("BindGroupLayoutEntry")
+        .register_type_with_name::<ScriptBindGroupEntry>("BindGroupEntry")
+        .register_type_with_name::<Rc<RefCell<wgpu_types::BindGroupLayout>>>("BindGroupLayoutHandle")
+        .register_fn("binding_uniform_buffer", || ScriptBindingType::UniformBuffer)
+        .register_fn("binding_texture_2d", || ScriptBindingType::Texture2dFilterable)
+        .register_fn("binding_sampler_filtering", || ScriptBindingType::SamplerFiltering)
+        .register_fn(
+            "layout_entry",
+            |binding: i64, visibility: i64, ty: ScriptBindingType| ScriptBindGroupLayoutEntry {
+                binding: binding as u32,
+                visibility: visibility as u32,
+                ty,
+            },
+        )
+        .register_fn(
+            "bind_buffer",
+            |binding: i64, buffer: Rc<RefCell<wgpu_types::Buffer>>| {
+                ScriptBindGroupEntry::Buffer {
+                    binding: binding as u32,
+                    buffer,
+                }
+            },
+        )
+        .register_fn(
+            "bind_texture",
+            |binding: i64, texture: Rc<RefCell<Texture>>| ScriptBindGroupEntry::Texture {
+                binding: binding as u32,
+                texture,
+            },
+        )
+        .register_fn("bind_sampler_default", |binding: i64| {
+            ScriptBindGroupEntry::SamplerDefault {
+                binding: binding as u32,
+            }
+        })
         .register_fn(
             "set_pipeline",
             |pass: &mut ScriptPass, handle: Rc<RefCell<wgpu_types::RenderPipeline>>| -> Result<(), Box<rhai::EvalAltResult>> {
@@ -670,6 +736,57 @@ pub fn register_renderer_handle(
                     fs_entry.as_str(),
                 );
                 Rc::new(RefCell::new(pipeline))
+            }
+        })
+        .register_fn("create_bind_group_layout", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, entries: Array| {
+                let layout_entries: Vec<ScriptBindGroupLayoutEntry> = entries
+                    .iter()
+                    .filter_map(|d| d.clone().try_cast::<ScriptBindGroupLayoutEntry>())
+                    .collect();
+                let layout = r
+                    .borrow_mut()
+                    .create_bind_group_layout_from_entries(&layout_entries);
+                Rc::new(RefCell::new(layout))
+            }
+        })
+        .register_fn("create_render_pipeline", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  module_handle: Rc<RefCell<wgpu_types::ShaderModule>>,
+                  vs_entry: ImmutableString,
+                  fs_entry: ImmutableString,
+                  bind_group_layouts: Array| {
+                use std::ops::Deref;
+                let handles: Vec<Rc<RefCell<wgpu_types::BindGroupLayout>>> = bind_group_layouts
+                    .iter()
+                    .filter_map(|d| d.clone().try_cast::<Rc<RefCell<wgpu_types::BindGroupLayout>>>())
+                    .collect();
+                let ref_guards: Vec<std::cell::Ref<wgpu_types::BindGroupLayout>> =
+                    handles.iter().map(|h| h.borrow()).collect();
+                let layout_refs: Vec<&wgpu_types::BindGroupLayout> =
+                    ref_guards.iter().map(Deref::deref).collect();
+                let pipeline = r.borrow_mut().create_render_pipeline_with_layouts(
+                    &module_handle.borrow(),
+                    vs_entry.as_str(),
+                    fs_entry.as_str(),
+                    &layout_refs,
+                );
+                Rc::new(RefCell::new(pipeline))
+            }
+        })
+        .register_fn("create_bind_group", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  layout_handle: Rc<RefCell<wgpu_types::BindGroupLayout>>,
+                  entries: Array| {
+                let bind_entries: Vec<ScriptBindGroupEntry> = entries
+                    .iter()
+                    .filter_map(|d| d.clone().try_cast::<ScriptBindGroupEntry>())
+                    .collect();
+                let layout = layout_handle.borrow();
+                let bind_group = r
+                    .borrow_mut()
+                    .create_bind_group_from_entries(&layout, &bind_entries);
+                Rc::new(RefCell::new(bind_group))
             }
         })
         .register_fn("create_buffer", {
@@ -1055,6 +1172,9 @@ fn register_constants(scope: &mut Scope) {
         "TEXTURE_FORMAT_RGBA8_UNORM",
         wgpu_types::TextureFormat::Rgba8Unorm,
     );
+    scope.push_constant("SHADER_STAGE_VERTEX", 1_i64);
+    scope.push_constant("SHADER_STAGE_FRAGMENT", 2_i64);
+    scope.push_constant("SHADER_STAGE_COMPUTE", 4_i64);
 }
 
 /// Call the script's `init(session, renderer)` function with options so that new variables

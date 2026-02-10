@@ -6,7 +6,9 @@ use crate::execution::Execution;
 use crate::font::TextBatch;
 use crate::platform::{self, LogicalSize};
 use crate::renderer;
-use crate::script::ScriptState;
+use crate::script::{
+    ScriptBindGroupEntry, ScriptBindGroupLayoutEntry, ScriptBindingType, ScriptState,
+};
 use crate::session::{self, Blending, Effect, Session};
 use crate::sprite;
 use crate::util;
@@ -2223,6 +2225,169 @@ impl Renderer {
                 cache: None,
             });
         pipeline
+    }
+
+    /// Convert script binding type to wgpu binding type.
+    fn script_binding_type_to_wgpu(ty: &ScriptBindingType) -> wgpu::BindingType {
+        match ty {
+            ScriptBindingType::UniformBuffer => wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            ScriptBindingType::Texture2dFilterable => wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            ScriptBindingType::SamplerFiltering => {
+                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
+            }
+        }
+    }
+
+    /// Create a bind group layout from script layout entries.
+    pub fn create_bind_group_layout_from_entries(
+        &self,
+        entries: &[ScriptBindGroupLayoutEntry],
+    ) -> wgpu::BindGroupLayout {
+        let wgpu_entries: Vec<wgpu::BindGroupLayoutEntry> = entries
+            .iter()
+            .map(|e| wgpu::BindGroupLayoutEntry {
+                binding: e.binding,
+                visibility: wgpu::ShaderStages::from_bits_truncate(e.visibility),
+                ty: Self::script_binding_type_to_wgpu(&e.ty),
+                count: None,
+            })
+            .collect();
+        self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("script_bind_group_layout"),
+            entries: &wgpu_entries,
+        })
+    }
+
+    /// Create a bind group from a layout and script bind group entries.
+    pub fn create_bind_group_from_entries(
+        &self,
+        layout: &wgpu::BindGroupLayout,
+        entries: &[ScriptBindGroupEntry],
+    ) -> wgpu::BindGroup {
+        use std::cell::Ref;
+        let mut buffer_refs: Vec<(u32, Ref<wgpu::Buffer>)> = Vec::new();
+        let mut texture_refs: Vec<(u32, Ref<Texture>)> = Vec::new();
+        let mut sampler_bindings: Vec<u32> = Vec::new();
+        for e in entries {
+            match e {
+                ScriptBindGroupEntry::Buffer { binding, buffer } => {
+                    buffer_refs.push((*binding, buffer.borrow()));
+                }
+                ScriptBindGroupEntry::Texture { binding, texture } => {
+                    texture_refs.push((*binding, texture.borrow()));
+                }
+                ScriptBindGroupEntry::SamplerDefault { binding } => {
+                    sampler_bindings.push(*binding);
+                }
+            }
+        }
+        let mut wgpu_entries: Vec<wgpu::BindGroupEntry> = Vec::new();
+        for (binding, buf_ref) in &buffer_refs {
+            wgpu_entries.push(wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: buf_ref.as_entire_binding(),
+            });
+        }
+        for (binding, tex_ref) in &texture_refs {
+            wgpu_entries.push(wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: wgpu::BindingResource::TextureView(tex_ref.view()),
+            });
+        }
+        for binding in &sampler_bindings {
+            wgpu_entries.push(wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: wgpu::BindingResource::Sampler(&self.sampler),
+            });
+        }
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("script_bind_group"),
+            layout,
+            entries: &wgpu_entries,
+        })
+    }
+
+    /// Create a render pipeline with custom bind group layouts.
+    /// Same vertex/fragment setup as create_render_pipeline; layout is built from the given layouts.
+    pub fn create_render_pipeline_with_layouts(
+        &mut self,
+        module: &wgpu::ShaderModule,
+        vs_entry: &str,
+        fs_entry: &str,
+        bind_group_layouts: &[&wgpu::BindGroupLayout],
+    ) -> wgpu::RenderPipeline {
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("script_pipeline_custom_layout"),
+            bind_group_layouts,
+            push_constant_ranges: &[],
+        });
+        self.device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("script_pipeline_custom"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some(vs_entry),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Sprite2dVertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                offset: 0,
+                                shader_location: 0,
+                                format: wgpu::VertexFormat::Float32x3,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 12,
+                                shader_location: 1,
+                                format: wgpu::VertexFormat::Float32x2,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 20,
+                                shader_location: 2,
+                                format: wgpu::VertexFormat::Unorm8x4,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 24,
+                                shader_location: 3,
+                                format: wgpu::VertexFormat::Float32,
+                            },
+                        ],
+                    }],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some(fs_entry),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
     }
 
     /// Create a render pipeline with transform (group 0) and texture+sampler (group 1) bind group layouts.
