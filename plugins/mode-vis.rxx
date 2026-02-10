@@ -1,11 +1,17 @@
+// @mode-vis.rxx - current mode indicator plugin
+
 fn init(session_in, renderer_in) {
     let session = session_in;
     let renderer = renderer_in;
     print(`mod-vis.rxx initialized`);
 }
 
-fn draw() {print(session)
-    draw_text(vec2(10.0, 10.0), "WTF", rgb8(0, 255, 0));
+fn draw() {
+    if session.mode == "normal" {
+        draw_text(vec2(10.0, 10.0), session.mode, rgb8(255, 255, 255));
+    } else if session.mode.starts_with("visual") {
+        draw_text(vec2(10.0, 10.0), session.mode, rgb8(0xff, 0x33, 0x66));
+    }
 }
 
 fn view_added(view_id) {

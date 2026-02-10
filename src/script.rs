@@ -415,6 +415,9 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_get("active_view_id", |s: &mut Rc<RefCell<Session>>| {
             s.borrow().views.active_id.raw() as i64
         })
+        .register_get("mode", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow().mode.to_string()
+        })
         .register_type_with_name::<ScriptView>("View")
         .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
         .register_get("offset", |v: &mut ScriptView| {
