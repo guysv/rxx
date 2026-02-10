@@ -376,7 +376,7 @@ impl ScriptState {
                 (rhai_args.clone(),),
             ) {
                 Ok(()) => return Ok(true),
-                Err(ref e) if is_function_not_found(e) => continue,
+                Err(ref e) if is_function_not_found(e, &handler_name) => continue,
                 Err(e) => return Err(e),
             }
         }
@@ -1195,7 +1195,7 @@ pub fn call_init(
     let renderer = renderer_handle.clone();
     match engine.call_fn_with_options::<()>(options, scope, ast, "init", (session, renderer)) {
         Ok(()) => Ok(()),
-        Err(ref e) if is_function_not_found(e) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "init") => Ok(()),
         Err(e) => Err(e),
     }
 }
@@ -1211,7 +1211,7 @@ pub fn call_draw(
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "draw", ()) {
         Ok(()) => Ok(()),
-        Err(ref e) if is_function_not_found(e) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "draw") => Ok(()),
         Err(e) => Err(e),
     }
 }
@@ -1226,7 +1226,7 @@ pub fn call_shade(
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "shade", (encoder.clone(),)) {
         Ok(()) => Ok(()),
-        Err(ref e) if is_function_not_found(e) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "shade") => Ok(()),
         Err(e) => Err(e),
     }
 }
@@ -1239,6 +1239,7 @@ pub fn call_render(
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "render", (script_pass,)) {
         Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "render") => Ok(()),
         Err(e) => Err(e),
     }
 }
@@ -1252,7 +1253,7 @@ fn call_view_added(
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "view_added", (view_id,)) {
         Ok(()) => Ok(()),
-        Err(ref e) if is_function_not_found(e) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "view_added") => Ok(()),
         Err(e) => Err(e),
     }
 }
@@ -1266,12 +1267,12 @@ fn call_view_removed(
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "view_removed", (view_id,)) {
         Ok(()) => Ok(()),
-        Err(ref e) if is_function_not_found(e) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "view_removed") => Ok(()),
         Err(e) => Err(e),
     }
 }
 
-fn is_function_not_found(e: &Box<rhai::EvalAltResult>) -> bool {
+fn is_function_not_found(e: &Box<rhai::EvalAltResult>, function_name: &str) -> bool {
     use rhai::EvalAltResult;
-    matches!(&**e, EvalAltResult::ErrorFunctionNotFound(_, _))
+    matches!(&**e, EvalAltResult::ErrorFunctionNotFound(name, _) if name == function_name)
 }

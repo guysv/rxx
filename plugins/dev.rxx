@@ -1,0 +1,5 @@
+fn init(session_in, renderer_in) {
+    let session = session_in;
+    let renderer = renderer_in;
+    print(`dev.rxx initialized`);
+}
