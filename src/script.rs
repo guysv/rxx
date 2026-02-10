@@ -25,33 +25,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
 
-/// Script-owned resources: user batches, render textures, and script-created GPU resources.
-/// Held in ScriptState as Rc<RefCell<ScriptStorage>>; Renderer receives &mut ScriptStorage when creating/resolving.
-pub struct ScriptStorage {
-    /// User batches for script's draw() event (shape + sprite for text).
-    pub user_batch: (
-        Rc<RefCell<shape2d::Batch>>,
-        Rc<RefCell<Option<sprite2d::Batch>>>,
-    ),
-}
-
-impl ScriptStorage {
-    pub fn new() -> Self {
-        Self {
-            user_batch: (
-                Rc::new(RefCell::new(shape2d::Batch::new())),
-                Rc::new(RefCell::new(None)),
-            ),
-        }
-    }
-
-    pub fn ensure_user_sprite_batch(&mut self, w: u32, h: u32) {
-        if self.user_batch.1.borrow().is_none() {
-            *self.user_batch.1.borrow_mut() = Some(sprite2d::Batch::new(w, h));
-        }
-    }
-}
-
 /// Type alias for the user batches shared between script and session.
 /// (shape batch, sprite batch for text). Sprite batch is created lazily with font size.
 #[allow(dead_code)]
@@ -127,8 +100,6 @@ pub struct ScriptState {
     pub script_scope: Option<Scope<'static>>,
     /// Compiled script AST.
     pub script_ast: Option<Rc<RefCell<AST>>>,
-    /// Script-owned resources (user batches, render textures, script GPU resources).
-    pub script_storage: Rc<RefCell<ScriptStorage>>,
 }
 
 impl ScriptState {
@@ -139,15 +110,7 @@ impl ScriptState {
             script_engine: None,
             script_scope: None,
             script_ast: None,
-            script_storage: Rc::new(RefCell::new(ScriptStorage::new())),
         }
-    }
-
-    /// Ensure the user sprite batch exists (created with font texture size). Call from renderer each frame.
-    pub fn ensure_user_sprite_batch(&mut self, w: u32, h: u32) {
-        self.script_storage
-            .borrow_mut()
-            .ensure_user_sprite_batch(w, h);
     }
 
     pub fn set_path(&mut self, path: PathBuf) {
@@ -190,8 +153,7 @@ pub fn load_script(
     };
     let mut new_state = ScriptState::new();
     new_state.set_path(path.clone());
-    let shape_batch = new_state.script_storage.borrow().user_batch.0.clone();
-    let sprite_batch = new_state.script_storage.borrow().user_batch.1.clone();
+    let (shape_batch, sprite_batch) = renderer_handle.borrow().user_batch();
 
     let mut engine = Engine::new();
     register_draw_primitives(&mut engine, shape_batch, sprite_batch);
@@ -304,10 +266,15 @@ impl ScriptState {
 
     /// Call the script's `draw()` event handler.
     /// The script's draw primitives (e.g. `draw_line`, `draw_text`) mutate the user batches directly.
-    pub fn call_draw_event(&mut self) -> Result<(), Box<rhai::EvalAltResult>> {
-        let batch = self.script_storage.borrow().user_batch.clone();
-        batch.0.borrow_mut().clear();
-        if let Some(ref mut b) = *batch.1.borrow_mut() {
+    pub fn call_draw_event(
+        &mut self,
+        user_batch: &(
+            Rc<RefCell<shape2d::Batch>>,
+            Rc<RefCell<Option<sprite2d::Batch>>>,
+        ),
+    ) -> Result<(), Box<rhai::EvalAltResult>> {
+        user_batch.0.borrow_mut().clear();
+        if let Some(ref mut b) = *user_batch.1.borrow_mut() {
             b.clear();
         }
         let (engine, scope, ast) = match (
@@ -349,50 +316,6 @@ impl ScriptState {
             _ => return Ok(()),
         };
         call_render(engine, scope, &ast.borrow(), script_pass)
-    }
-
-    /// Get the user shape batch vertices for rendering.
-    pub fn user_batch_vertices(&self) -> Vec<crate::gfx::shape2d::Vertex> {
-        self.script_storage
-            .borrow()
-            .user_batch
-            .0
-            .borrow()
-            .vertices()
-    }
-
-    /// Check if the user shape batch is empty.
-    pub fn user_batch_is_empty(&self) -> bool {
-        self.script_storage
-            .borrow()
-            .user_batch
-            .0
-            .borrow()
-            .is_empty()
-    }
-
-    /// Get the user sprite batch vertices for rendering (text). Empty if batch not yet created.
-    pub fn user_sprite_batch_vertices(&self) -> Vec<crate::gfx::sprite2d::Vertex> {
-        self.script_storage
-            .borrow()
-            .user_batch
-            .1
-            .borrow()
-            .as_ref()
-            .map(|b| b.vertices())
-            .unwrap_or_default()
-    }
-
-    /// Check if the user sprite batch is empty or not created.
-    pub fn user_sprite_batch_is_empty(&self) -> bool {
-        self.script_storage
-            .borrow()
-            .user_batch
-            .1
-            .borrow()
-            .as_ref()
-            .map(|b| b.is_empty())
-            .unwrap_or(true)
     }
 
     /// Call a script command handler `cmd_<name>(args)`.
@@ -494,8 +417,7 @@ pub struct ScriptColorAttachment {
     pub store_op: ScriptStoreOp,
 }
 
-/// Unified pass type for script: wraps the wgpu pass and renderer so pass methods can resolve handles
-/// from ScriptStorage (which is already borrowed to call render()).
+/// Unified pass type for script: wraps the wgpu pass and renderer so pass methods can resolve handles.
 #[derive(Clone)]
 pub struct ScriptPass {
     pass: Rc<RefCell<wgpu_types::RenderPass<'static>>>,

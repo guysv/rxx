@@ -548,6 +548,12 @@ pub struct Renderer {
 
     // Paste outputs for final pass rendering (like GL's paste_outputs)
     paste_outputs: Vec<(wgpu::Buffer, u32)>,
+
+    /// User batches for script's draw() event (shape + sprite for text). Shared with script via Rc.
+    user_batch: (
+        Rc<RefCell<shape2d::Batch>>,
+        Rc<RefCell<Option<sprite2d::Batch>>>,
+    ),
 }
 
 #[derive(Debug)]
@@ -1200,6 +1206,10 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             paste_pixels: Vec::new(),
             paste_size: (0, 0),
             paste_outputs: Vec::new(),
+            user_batch: (
+                Rc::new(RefCell::new(shape2d::Batch::new())),
+                Rc::new(RefCell::new(None)),
+            ),
         })
     }
 
@@ -1244,13 +1254,13 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         // Prepare draw context
         drop(session);
         let [font_w, font_h] = this.font.size();
-        script_state_handle
-            .borrow_mut()
-            .ensure_user_sprite_batch(font_w, font_h);
+        this.ensure_user_sprite_batch(font_w, font_h);
+        let user_batch = (this.user_batch.0.clone(), this.user_batch.1.clone());
         this.draw_ctx.clear();
         this.draw_ctx.draw(
             session_handle,
             &mut *script_state_handle.borrow_mut(),
+            &user_batch,
             avg_frametime,
             execution,
         );
@@ -1262,15 +1272,15 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
         // Create vertex buffers for this frame
         let ui_vertices = this.create_shape_vertices(&this.draw_ctx.ui_batch.vertices());
-        let user_vertices = if script_state_handle.borrow().user_batch_is_empty() {
+        let user_vertices = if this.user_batch_is_empty() {
             None
         } else {
-            this.create_shape_vertices(&script_state_handle.borrow().user_batch_vertices())
+            this.create_shape_vertices(&this.user_batch_vertices())
         };
-        let user_sprite_tess = if script_state_handle.borrow().user_sprite_batch_is_empty() {
+        let user_sprite_tess = if this.user_sprite_batch_is_empty() {
             None
         } else {
-            this.create_sprite_vertices(&script_state_handle.borrow().user_sprite_batch_vertices())
+            this.create_sprite_vertices(&this.user_sprite_batch_vertices())
         };
         let text_vertices = this.create_sprite_vertices(&this.draw_ctx.text_batch.vertices());
         let tool_vertices = this.create_sprite_vertices(&this.draw_ctx.tool_batch.vertices());
@@ -2017,6 +2027,49 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 }
 
 impl Renderer {
+    /// User batches for script draw() (shape + sprite). Pass to script load and draw.
+    pub fn user_batch(
+        &self,
+    ) -> (
+        Rc<RefCell<shape2d::Batch>>,
+        Rc<RefCell<Option<sprite2d::Batch>>>,
+    ) {
+        (self.user_batch.0.clone(), self.user_batch.1.clone())
+    }
+
+    /// Ensure the user sprite batch exists (created with font texture size). Call each frame before draw.
+    pub fn ensure_user_sprite_batch(&mut self, w: u32, h: u32) {
+        if self.user_batch.1.borrow().is_none() {
+            *self.user_batch.1.borrow_mut() = Some(sprite2d::Batch::new(w, h));
+        }
+    }
+
+    pub fn user_batch_vertices(&self) -> Vec<shape2d::Vertex> {
+        self.user_batch.0.borrow().vertices()
+    }
+
+    pub fn user_batch_is_empty(&self) -> bool {
+        self.user_batch.0.borrow().is_empty()
+    }
+
+    pub fn user_sprite_batch_vertices(&self) -> Vec<sprite2d::Vertex> {
+        self.user_batch
+            .1
+            .borrow()
+            .as_ref()
+            .map(|b| b.vertices())
+            .unwrap_or_default()
+    }
+
+    pub fn user_sprite_batch_is_empty(&self) -> bool {
+        self.user_batch
+            .1
+            .borrow()
+            .as_ref()
+            .map(|b| b.is_empty())
+            .unwrap_or(true)
+    }
+
     /// Create a new render texture and return a handle. The texture is stored in script storage.
     pub fn create_render_texture(
         &mut self,

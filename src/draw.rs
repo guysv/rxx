@@ -128,6 +128,10 @@ impl Context {
         &mut self,
         session_handle: &Rc<RefCell<Session>>,
         script_state: &mut ScriptState,
+        user_batch: &(
+            Rc<RefCell<shape2d::Batch>>,
+            Rc<RefCell<Option<sprite2d::Batch>>>,
+        ),
         avg_frametime: &time::Duration,
         execution: &Execution,
     ) {
@@ -142,8 +146,8 @@ impl Context {
         self::draw_checker(&session, &mut self.checker_batch);
 
         drop(session);
-        // User script draw event (populates script_state's user batch directly)
-        if let Err(e) = script_state.call_draw_event() {
+        // User script draw event (populates user_batch directly)
+        if let Err(e) = script_state.call_draw_event(user_batch) {
             warn!("Script draw error: {}", e);
         }
     }
