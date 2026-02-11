@@ -488,6 +488,17 @@ impl From<Rect<f32>> for Rect<f64> {
     }
 }
 
+impl From<Rect<i32>> for Rect<f64> {
+    fn from(other: Rect<i32>) -> Self {
+        Self {
+            x1: other.x1 as f64,
+            y1: other.y1 as f64,
+            x2: other.x2 as f64,
+            y2: other.y2 as f64,
+        }
+    }
+}
+
 impl From<Rect<f64>> for Rect<f32> {
     fn from(other: Rect<f64>) -> Self {
         Self {

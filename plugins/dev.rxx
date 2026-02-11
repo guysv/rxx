@@ -7,6 +7,7 @@ fn init(session_in, renderer_in) {
     let pivot = ();
     let drag_start = ();
     let last_p = ();
+    let clipboard = renderer.create_render_texture(8, 8);
     register_command("selection/rotate", "Rotates the selection");
     print(`dev.rxx initialized`);
 }
@@ -81,10 +82,10 @@ fn draw() {
             if drag_start != () {
                 let drag_start_session = drag_start * d + offset;
                 draw_line(drag_start_session, vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
-            }
-            if last_p != () {
-                // let last_p_session = last_p.to_vec2() * d + offset;
-                draw_line(last_p.to_vec2(), vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
+                if last_p != () {
+                    // let last_p_session = last_p.to_vec2() * d + offset;
+                    draw_line(last_p.to_vec2(), vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
+                }
             }
         }
     } 
@@ -93,6 +94,9 @@ fn draw() {
 fn cmd_selection_rotate(args) {
     if session.selection != () {
         pivot = ();
+        drag_start = ();
+        last_p = ();
+        renderer.upload_selection_to_texture(session, clipboard);
         session.switch_mode(rotation_mode);
     }
 }

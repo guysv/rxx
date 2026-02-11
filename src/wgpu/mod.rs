@@ -461,7 +461,7 @@ impl LayerData {
 /// Per-view rendering data.
 pub(crate) struct ViewData {
     pub(crate) layer: LayerData,
-    staging_texture: Texture,
+    staging_texture: Rc<RefCell<Texture>>,
     anim_vertex_buffer: Option<wgpu::Buffer>,
     anim_vertex_count: u32,
     layer_vertex_buffer: Option<wgpu::Buffer>,
@@ -477,7 +477,7 @@ impl ViewData {
         pixels: Option<&[Rgba8]>,
     ) -> Self {
         let staging_texture =
-            Texture::new(device, w, h, false);
+            Rc::new(RefCell::new(Texture::new(device, w, h, false)));
         let layer = LayerData::new(device, w, h, pixels, queue);
 
         Self {
@@ -1403,7 +1403,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             let mut staging_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("staging_brush_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: view_data.staging_texture.view(),
+                    view: view_data.staging_texture.borrow().view(),
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1652,7 +1652,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                 wgpu::BindGroupEntry {
                                     binding: 0,
                                     resource: wgpu::BindingResource::TextureView(
-                                        view_data.staging_texture.view(),
+                                        view_data.staging_texture.borrow().view(),
                                     ),
                                 },
                                 wgpu::BindGroupEntry {
@@ -2103,6 +2103,64 @@ impl Renderer {
         } else {
             None
         }
+    }
+
+    pub fn view_staging_texture(&self, view_id: ViewId) -> Option<Rc<RefCell<Texture>>> {
+        if self.view_data.contains_key(&view_id) {
+            Some(self.view_data.get(&view_id).unwrap().staging_texture.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Upload the current session selection from the active view's CPU snapshot into a script texture.
+    /// Returns true if the selection was uploaded, false if there is no selection or the rect is out of bounds.
+    pub fn upload_selection_to_texture(
+        &mut self,
+        session: &Session,
+        target: &mut Texture,
+    ) -> bool {
+        let selection = match session.selection {
+            Some(s) => s,
+            None => return false,
+        };
+        let view = session.active_view();
+        let rect = selection.bounds();
+        let (_, pixels) = match view.resource.layer.get_snapshot_rect(&rect) {
+            Some(x) => x,
+            None => return false,
+        };
+        let w = rect.width() as u32;
+        let h = rect.height() as u32;
+
+        let [tw, th] = target.size();
+        if tw != w || th != h {
+            target
+                .resize_same_format(&self.device, w, h);
+        }
+
+        let body = util::align_u8(&pixels);
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: target.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            body,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * w),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        true
     }
 
     /// Create a bind group (texture + sampler) from a script texture handle for use as @group(1) uniform sampler.
@@ -2973,7 +3031,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("clear_staging_encoder"),
             });
-        view_data.staging_texture.clear(&mut encoder);
+        view_data.staging_texture.borrow_mut().clear(&mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
         Ok(())
     }

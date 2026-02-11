@@ -475,7 +475,7 @@ pub fn register_session_handle(engine: &mut Engine) {
         })
         .register_get("selection", |s: &mut Rc<RefCell<Session>>| {
             match s.borrow().selection {
-                Some(s) => Dynamic::from(s.0),
+                Some(s) => { let s: Rect<f64> = s.0.into(); Dynamic::from(s) },
                 None => Dynamic::UNIT
             }
         })
@@ -798,6 +798,24 @@ pub fn register_renderer_handle(
                     Some(h) => Dynamic::from(h),
                     None => Dynamic::UNIT,
                 }
+            }
+        })
+        .register_fn("view_staging_texture", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, view_id: i64| -> Dynamic {
+                let id = ViewId(view_id as u16);
+                match r.borrow().view_staging_texture(id) {
+                    Some(h) => Dynamic::from(h),
+                    None => Dynamic::UNIT,
+                }
+            }
+        })
+        .register_fn("upload_selection_to_texture", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  session: Rc<RefCell<Session>>,
+                  target: Rc<RefCell<Texture>>|
+                  -> bool {
+                r.borrow_mut()
+                    .upload_selection_to_texture(&session.borrow(), &mut target.borrow_mut())
             }
         })
         .register_fn("create_texture_sampler_bind_group", {
