@@ -5,14 +5,63 @@ fn init(session_in, renderer_in) {
     let rotation_angle = 0.0;
     let rotation_center = ();
     let pivot = ();
+    let drag_start = ();
+    let last_p = ();
     register_command("selection/rotate", "Rotates the selection");
     print(`dev.rxx initialized`);
 }
 
-fn mouse_input(state, button, p) {
-    if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_LEFT && session.mode == rotation_mode {
+fn mouse_input(state, button, cursor) {
+    print(`mouse_input: ${state}, ${button}, ${cursor}`);
+    let view = session.view(session.active_view_id);
+    let d = view.zoom;
+    let cursor = vec2(cursor.x + d/4, cursor.y + d/4);
+    let p = session.active_view_sub_coords(cursor, 2);
+    print(`mouse_input: ${p}`);
+    if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_RIGHT && session.mode == rotation_mode {
         print(`new pivot: ${p}`);
-        pivot = p;
+        if p == pivot {
+            pivot = ();
+        } else {
+            pivot = p;
+        }
+    }
+
+    if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_LEFT && session.mode == rotation_mode {
+        drag_start = p;
+    }
+
+    if state == INPUT_STATE_RELEASED && button == MOUSE_BUTTON_LEFT && session.mode == rotation_mode {
+        drag_start = ();
+        last_p = ();
+    }
+}
+
+fn vector_angle(pivot, from_pt, to_pt) {
+    let v1 = from_pt - pivot;
+    let v2 = to_pt - pivot;
+    let dot = v1.x * v2.x + v1.y * v2.y;
+    let det = v1.x * v2.y - v1.y * v2.x;
+    // print(`v1: ${v1}, v2: ${v2}, dot: ${dot}, det: ${det}`);
+    return atan(det, dot);
+}
+
+fn cursor_moved(p) {
+    if drag_start != () {
+        let view = session.view(session.active_view_id);
+        let zoom = view.zoom;
+        let offset = vec2(session.offset_x + view.offset.x, session.offset_y + view.offset.y);
+        let pivot_session = pivot * zoom + offset;
+        if p == pivot_session || p == drag_start || pivot_session == drag_start {
+            print(`p == pivot_session || p == drag_start || pivot_session == drag_start`);
+        } else {
+            last_p = p;
+            // let pivot_session = pivot * zoom + offset;
+            // let drag_start_session = drag_start * zoom + offset;
+
+            // let angle = vector_angle(pivot_session, drag_start_session, p.to_vec2());
+            // print(`angle: ${angle}`);
+        }
     }
 }
 
@@ -21,22 +70,22 @@ fn draw() {
         let view = session.view(session.active_view_id);
         let offset_x = session.offset_x + view.offset.x;
         let offset_y = session.offset_y + view.offset.y;
+        let offset = vec2(offset_x, offset_y);
         let d = view.zoom;
-        let cursor = session.active_view_coords(session.cursor);
-        let x1 = cursor.x * d + offset_x;
-        let y1 = cursor.y * d + offset_y;
-        draw_line(vec2(x1, y1), vec2(x1+d, y1), rgb8(0xff, 0xff, 0x00));
-        draw_line(vec2(x1, y1), vec2(x1, y1+d), rgb8(0xff, 0xff, 0x00));
-        draw_line(vec2(x1+d, y1), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
-        draw_line(vec2(x1, y1+d), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
+
         if pivot != () {
-            // print(`pivot: ${pivot}, cursor: ${cursor}`);
             let x1 = pivot.x * d + offset_x;
             let y1 = pivot.y * d + offset_y;
-            draw_line(vec2(x1, y1), vec2(x1+d, y1), rgb8(0xff, 0xff, 0x00));
-            draw_line(vec2(x1, y1), vec2(x1, y1+d), rgb8(0xff, 0xff, 0x00));
-            draw_line(vec2(x1+d, y1), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
-            draw_line(vec2(x1, y1+d), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
+            draw_line(vec2(x1-6.0, y1), vec2(x1+6.0, y1), rgb8(0xff, 0xff, 0x00));
+            draw_line(vec2(x1, y1-6.0), vec2(x1, y1+6.0), rgb8(0xff, 0xff, 0x00));
+            if drag_start != () {
+                let drag_start_session = drag_start * d + offset;
+                draw_line(drag_start_session, vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
+            }
+            if last_p != () {
+                // let last_p_session = last_p.to_vec2() * d + offset;
+                draw_line(last_p.to_vec2(), vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
+            }
         }
     } 
 }

@@ -65,6 +65,12 @@ enum InternalCommand {
 /// Encompasses anything within the window, such as the cursor position.
 pub type SessionCoords = Point<Session, f32>;
 
+impl fmt::Debug for SessionCoords {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SessionCoords({:.2}, {:.2})", self.x, self.y)
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 pub type ModeString = ArrayString<typenum::U32>;
@@ -168,18 +174,18 @@ impl Deref for Selection {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum ScriptEffect {
     RunScriptCommand(String, Vec<String>),
-    MouseInput(InputState, platform::MouseButton, Point<ViewExtent, f32>),
+    MouseInput(InputState, platform::MouseButton, Point<Session, f32>),
     MouseWheel(LogicalDelta),
-    CursorMoved(Point<ViewExtent, f32>),
+    CursorMoved(Point<Session, f32>),
     SwitchMode,
 }
 
 /// Session effects. Eg. view creation/destruction.
 /// Anything the renderer might want to know.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Effect {
     /// When the session has been resized.
     SessionResized(LogicalSize),
@@ -1349,6 +1355,11 @@ impl Session {
 
     /// Convert session coordinates to view coordinates of the given view.
     pub fn view_coords(&self, v: ViewId, p: SessionCoords) -> Point<ViewExtent, f32> {
+        self.view_sub_coords(v, p, 1)
+    }
+
+    /// Convert session coordinates to view coordinates, sub pixel precision.
+    pub fn view_sub_coords(&self, v: ViewId, p: SessionCoords, percision: u32) -> Point<ViewExtent, f32> {
         let v = self.view(v);
         let SessionCoords { point: mut p, .. } = p;
 
@@ -1362,7 +1373,11 @@ impl Session {
             p.y = v.height() as f32 - p.y;
         }
 
-        Point::new(p.x.floor(), p.y.floor())
+        let n = percision as f32;
+        Point::new(
+            (p.x * n).floor() / n,
+            (p.y * n).floor() / n,
+        )
     }
 
     /// Convert view coordinates to session coordinates.
@@ -1385,6 +1400,11 @@ impl Session {
     /// Convert session coordinates to view coordinates of the active view.
     pub fn active_view_coords(&self, p: SessionCoords) -> Point<ViewExtent, f32> {
         self.view_coords(self.views.active_id, p)
+    }
+
+    /// Convert session coordinates to view coordinates of the active view.
+    pub fn active_view_sub_coords(&self, p: SessionCoords, percision: u32) -> Point<ViewExtent, f32> {
+        self.view_sub_coords(self.views.active_id, p, percision)
     }
 
     /// Check whether a point is inside the selection, if any.
@@ -1860,7 +1880,7 @@ impl Session {
 
     fn handle_mouse_input(&mut self, button: platform::MouseButton, state: platform::InputState) {
         let p = self.active_view_coords(self.cursor);
-        self.effects.push(Effect::ScriptEffect(ScriptEffect::MouseInput(state, button, p)));
+        self.effects.push(Effect::ScriptEffect(ScriptEffect::MouseInput(state, button, self.cursor)));
         if button != platform::MouseButton::Left {
             return;
         }
@@ -2017,9 +2037,7 @@ impl Session {
         let prev_cursor = self.cursor;
         let p = self.active_view_coords(cursor);
         let prev_p = self.active_view_coords(prev_cursor);
-        if p != prev_p {
-            self.effects.push(Effect::ScriptEffect(ScriptEffect::CursorMoved(p)));
-        }
+        self.effects.push(Effect::ScriptEffect(ScriptEffect::CursorMoved(cursor)));
         let (vw, vh) = self.active_view().size();
 
         self.cursor = cursor;

@@ -132,6 +132,7 @@ fn load_one_plugin(
     let (shape_batch, sprite_batch) = renderer_handle.borrow().user_batch();
 
     let mut engine = Engine::new();
+    engine.set_max_expr_depths(10_000, 10_000);
     register_draw_primitives(&mut engine, shape_batch, sprite_batch);
     register_session_handle(&mut engine);
     register_renderer_handle(&mut engine, renderer_handle);
@@ -314,12 +315,14 @@ impl ScriptState {
                 }
                 Effect::ScriptEffect(ScriptEffect::CursorMoved(p)) => {
                     for plugin in &mut self.plugins {
-                        let _ = call_cursor_moved(
+                        if let Err(e) = call_cursor_moved(
                             &plugin.engine,
                             &mut plugin.scope,
                             &plugin.ast.borrow(),
                             p,
-                        );
+                        ) {
+                            error!("Script command 'cursor_moved' error: {}", e);
+                        }
                     }
                     renderer_effects.push(eff.clone());
                 }
@@ -481,6 +484,18 @@ pub fn register_session_handle(engine: &mut Engine) {
         })
         .register_fn("active_view_coords", |s: &mut Rc<RefCell<Session>>, p: Vector2<f64>| {
             let coords = s.borrow().active_view_coords(SessionCoords::new(p.x as f32, p.y as f32));
+            Vector2::new(coords.x as f64, coords.y as f64)
+        })
+        .register_fn("active_view_coords", |s: &mut Rc<RefCell<Session>>, p: Point<Session, f64>| {
+            let coords = s.borrow().active_view_coords(SessionCoords::new(p.x as f32, p.y as f32));
+            Vector2::new(coords.x as f64, coords.y as f64)
+        })
+        .register_fn("active_view_sub_coords", |s: &mut Rc<RefCell<Session>>, p: Vector2<f64>, percision: i64| {
+            let coords = s.borrow().active_view_sub_coords(SessionCoords::new(p.x as f32, p.y as f32), percision as u32);
+            Vector2::new(coords.x as f64, coords.y as f64)
+        })
+        .register_fn("active_view_sub_coords", |s: &mut Rc<RefCell<Session>>, p: Point<Session, f64>, percision: i64| {
+            let coords = s.borrow().active_view_sub_coords(SessionCoords::new(p.x as f32, p.y as f32), percision as u32);
             Vector2::new(coords.x as f64, coords.y as f64)
         })
         .register_type_with_name::<Mode>("Mode")
@@ -1122,7 +1137,27 @@ fn register_draw_types(engine: &mut Engine) {
         .register_get("y", |v: &mut Vector2<f64>| v.y as f64)
         .register_fn("vec2", |x: f64, y: f64| Vector2::new(x as f64, y as f64))
         .register_fn("+", |v1: Vector2<f64>, v2: Vector2<f64>| v1 + v2)
+        .register_fn("-", |v1: Vector2<f64>, v2: Vector2<f64>| v1 - v2)
+        .register_fn("*", |v1: Vector2<f64>, v2: f64| v1 * v2)
+        .register_fn("==", |v1: Vector2<f64>, v2: Vector2<f64>| v1 == v2)
         .register_fn("to_string", |v: Vector2<f64>| format!("{:?}", v));
+
+    engine
+        .register_type_with_name::<Point<Session, f64>>("SessionPoint")
+        .register_get("x", |p: &mut Point<Session, f64>| p.x as f64)
+        .register_get("y", |p: &mut Point<Session, f64>| p.y as f64)
+        .register_fn("to_string", |p: Point<Session, f64>| { let p: SessionCoords = p.into(); format!("{:?}", p) })
+        .register_fn("to_string", |p: Point<Session, f32>| format!("{:?}", p))
+        .register_fn("to_vec2", |p: &mut Point<Session, f64>| { let p: Vector2<f64> = (*p).into(); p})
+        .register_fn("==", |p1: Point<Session, f64>, p2: Point<Session, f64>| p1 == p2)
+        .register_fn("==", |p1: Point<Session, f64>, p2: Vector2<f64>| { let p1: Vector2<f64> = p1.into(); p1 == p2});
+
+    engine
+        .register_type_with_name::<Point<ViewExtent, f64>>("ViewPoint")
+        .register_get("x", |p: &mut Point<ViewExtent, f64>| p.x as f64)
+        .register_get("y", |p: &mut Point<ViewExtent, f64>| p.y as f64)
+        .register_fn("to_string", |p: Point<ViewExtent, f64>| format!("{:?}", p))
+        .register_fn("to_string", |p: Point<ViewExtent, f32>| format!("{:?}", p));
 
     engine
         .register_type_with_name::<Rgba8>("Rgba8")
@@ -1398,9 +1433,9 @@ fn call_mouse_input(
     ast: &AST,
     state: &InputState,
     button: &MouseButton,
-    p: &Point<ViewExtent, f32>,
+    p: &Point<Session, f32>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    let p: Point<ViewExtent, f64> = p.clone().into();
+    let p: Point<Session, f64> = p.clone().into();
     match engine.call_fn::<()>(scope, ast, "mouse_input", (state.clone(), button.clone(), p)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "mouse_input") => Ok(()),
@@ -1425,9 +1460,10 @@ fn call_cursor_moved(
     engine: &Engine,
     scope: &mut Scope,
     ast: &AST,
-    p: &Point<ViewExtent, f32>,
+    p: &Point<Session, f32>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "cursor_moved", (p.clone(),)) {
+    let p: Point<Session, f64> = p.clone().into();
+    match engine.call_fn::<()>(scope, ast, "cursor_moved", (p,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "cursor_moved") => Ok(()),
         Err(e) => Err(e),

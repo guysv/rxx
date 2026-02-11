@@ -120,6 +120,21 @@ impl<S> From<Point<S, f32>> for Point<S, f64> {
     }
 }
 
+impl<S> From<Point<S, f64>> for Point<S, f32> {
+    fn from(other: Point<S, f64>) -> Point<S, f32> {
+        Point::new(other.x.round() as f32, other.y.round() as f32)
+    }
+}
+
+impl<S, T> From<Point<S, T>> for Vector2<T>
+where
+    T: Copy,
+{
+    fn from(other: Point<S, T>) -> Vector2<T> {
+        Vector2::new(other.x, other.y)
+    }
+}
+
 impl<S> From<Point2<f32>> for Point<S, f32> {
     fn from(p: Point2<f32>) -> Point<S, f32> {
         Point::new(p.x, p.y)
