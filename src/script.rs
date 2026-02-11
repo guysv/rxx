@@ -38,20 +38,20 @@ pub type UserBatch = (
 #[derive(Debug, Clone)]
 struct ScriptView {
     id: ViewId,
-    offset: Vector2<f32>,
-    frame_width: f32,
-    frame_height: f32,
-    zoom: f32,
+    offset: Vector2<f64>,
+    frame_width: f64,
+    frame_height: f64,
+    zoom: f64,
 }
 
 impl From<&View<ViewResource>> for ScriptView {
     fn from(view: &View<ViewResource>) -> Self {
         ScriptView {
             id: view.id,
-            offset: view.offset,
-            frame_width: view.fw as f32,
-            frame_height: view.fh as f32,
-            zoom: view.zoom,
+            offset: view.offset.into(),
+            frame_width: view.fw as f64,
+            frame_height: view.fh as f64,
+            zoom: view.zoom as f64,
         }
     }
 }
@@ -477,11 +477,11 @@ pub fn register_session_handle(engine: &mut Engine) {
             }
         })
         .register_get("cursor", |s: &mut Rc<RefCell<Session>>| {
-            Vector2::new(s.borrow().cursor.x as f32, s.borrow().cursor.y as f32)
+            Vector2::new(s.borrow().cursor.x as f64, s.borrow().cursor.y as f64)
         })
-        .register_fn("active_view_coords", |s: &mut Rc<RefCell<Session>>, p: Vector2<f32>| {
-            let coords = s.borrow().active_view_coords(SessionCoords::new(p.x, p.y));
-            Vector2::new(coords.x as f32, coords.y as f32)
+        .register_fn("active_view_coords", |s: &mut Rc<RefCell<Session>>, p: Vector2<f64>| {
+            let coords = s.borrow().active_view_coords(SessionCoords::new(p.x as f32, p.y as f32));
+            Vector2::new(coords.x as f64, coords.y as f64)
         })
         .register_type_with_name::<Mode>("Mode")
         .register_fn("to_string", |mode: Mode| mode.to_string())
@@ -489,7 +489,7 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_type_with_name::<ScriptView>("View")
         .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
         .register_get("offset", |v: &mut ScriptView| {
-            Vector2::new(v.offset.x as f32, v.offset.y as f32)
+            Vector2::new(v.offset.x as f64, v.offset.y as f64)
         })
         .register_get("frame_width", |v: &mut ScriptView| v.frame_width)
         .register_get("frame_height", |v: &mut ScriptView| v.frame_height)
@@ -515,12 +515,12 @@ pub fn register_session_handle(engine: &mut Engine) {
             format!("{:?}", button)
         })
         .register_fn("==", |a: MouseButton, b: MouseButton| a == b)
-        .register_type_with_name::<Point<ViewExtent, f32>>("Point")
-        .register_fn("to_string", |p: Point<ViewExtent, f32>| {
+        .register_type_with_name::<Point<ViewExtent, f64>>("Point")
+        .register_fn("to_string", |p: Point<ViewExtent, f64>| {
             format!("{:?}", p)
         })
-        .register_get("x", |p: &mut Point<ViewExtent, f32>| p.point.x as f64)
-        .register_get("y", |p: &mut Point<ViewExtent, f32>| p.point.y as f64)
+        .register_get("x", |p: &mut Point<ViewExtent, f64>| p.point.x as f64)
+        .register_get("y", |p: &mut Point<ViewExtent, f64>| p.point.y as f64)
         .register_type_with_name::<LogicalDelta>("LogicalDelta")
         .register_fn("to_string", |delta: LogicalDelta| {
             format!("{:?}", delta)
@@ -936,15 +936,15 @@ pub fn register_renderer_handle(
             |_r: &mut Rc<RefCell<wgpu::Renderer>>,
              w: i64,
              h: i64,
-             src: Rect<f32>,
-             dst: Rect<f32>,
+             src: Rect<f64>,
+             dst: Rect<f64>,
              zdepth: f64,
              color: Rgba8| {
                 let batch = sprite2d::Batch::singleton(
                     w as u32,
                     h as u32,
-                    src,
-                    dst,
+                    src.into(),
+                    dst.into(),
                     crate::gfx::ZDepth(zdepth as f32),
                     Rgba::from(color),
                     1.0,
@@ -1102,13 +1102,13 @@ pub fn register_renderer_handle(
         );
 }
 
-/// Register Vector2<f32> and Rgba8 for script use. vec2(x,y), rgb8(r,g,b), rgb8(r,g,b,a).
+/// Register Vector2<f64> and Rgba8 for script use. vec2(x,y), rgb8(r,g,b), rgb8(r,g,b,a).
 fn register_draw_types(engine: &mut Engine) {
     engine
-        .register_type_with_name::<Point2<f32>>("Point2_f32")
-        .register_get("x", |p: &mut Point2<f32>| p.x as f64)
-        .register_get("y", |p: &mut Point2<f32>| p.y as f64)
-        .register_fn("to_string", |p: Point2<f32>| format!("{:?}", p));
+        .register_type_with_name::<Point2<f64>>("Point2_f64")
+        .register_get("x", |p: &mut Point2<f64>| p.x as f64)
+        .register_get("y", |p: &mut Point2<f64>| p.y as f64)
+        .register_fn("to_string", |p: Point2<f64>| format!("{:?}", p));
     
     engine
         .register_type_with_name::<Point2<i32>>("Point2_i32")
@@ -1117,12 +1117,12 @@ fn register_draw_types(engine: &mut Engine) {
         .register_fn("to_string", |p: Point2<i32>| format!("{:?}", p));
 
     engine
-        .register_type_with_name::<Vector2<f32>>("Vector2")
-        .register_get("x", |v: &mut Vector2<f32>| v.x as f64)
-        .register_get("y", |v: &mut Vector2<f32>| v.y as f64)
-        .register_fn("vec2", |x: f64, y: f64| Vector2::new(x as f32, y as f32))
-        .register_fn("+", |v1: Vector2<f32>, v2: Vector2<f32>| v1 + v2)
-        .register_fn("to_string", |v: Vector2<f32>| format!("{:?}", v));
+        .register_type_with_name::<Vector2<f64>>("Vector2")
+        .register_get("x", |v: &mut Vector2<f64>| v.x as f64)
+        .register_get("y", |v: &mut Vector2<f64>| v.y as f64)
+        .register_fn("vec2", |x: f64, y: f64| Vector2::new(x as f64, y as f64))
+        .register_fn("+", |v1: Vector2<f64>, v2: Vector2<f64>| v1 + v2)
+        .register_fn("to_string", |v: Vector2<f64>| format!("{:?}", v));
 
     engine
         .register_type_with_name::<Rgba8>("Rgba8")
@@ -1148,12 +1148,12 @@ fn register_draw_types(engine: &mut Engine) {
         });
 
     engine
-        .register_type_with_name::<Rect<f32>>("Rect_f32")
-        .register_fn("to_string", |r: Rect<f32>| format!("{:?}", r))
-        .register_get("x1", |r: &mut Rect<f32>| r.x1 as f64)
-        .register_get("y1", |r: &mut Rect<f32>| r.y1 as f64)
-        .register_get("x2", |r: &mut Rect<f32>| r.x2 as f64)
-        .register_get("y2", |r: &mut Rect<f32>| r.y2 as f64)
+        .register_type_with_name::<Rect<f64>>("Rect_f64")
+        .register_fn("to_string", |r: Rect<f64>| format!("{:?}", r))
+        .register_get("x1", |r: &mut Rect<f64>| r.x1 as f64)
+        .register_get("y1", |r: &mut Rect<f64>| r.y1 as f64)
+        .register_get("x2", |r: &mut Rect<f64>| r.x2 as f64)
+        .register_get("y2", |r: &mut Rect<f64>| r.y2 as f64)
         .register_type_with_name::<Rect<i32>>("Rect_i32")
         .register_fn("to_string", |r: Rect<i32>| format!("{:?}", r))
         .register_get("x1", |r: &mut Rect<i32>| r.x1 as f64)
@@ -1162,10 +1162,10 @@ fn register_draw_types(engine: &mut Engine) {
         .register_get("y2", |r: &mut Rect<i32>| r.y2 as f64)
         .register_fn("center", |r: &mut Rect<i32>| r.center())
         .register_fn("rect", |x1: f64, y1: f64, x2: f64, y2: f64| {
-            Rect::new(x1 as f32, y1 as f32, x2 as f32, y2 as f32)
+            Rect::new(x1 as f64, y1 as f64, x2 as f64, y2 as f64)
         })
-        .register_fn("+", |r: Rect<f32>, v: Vector2<f32>| r + v)
-        .register_fn("*", |r: Rect<f32>, v: f32| r * v);
+        .register_fn("+", |r: Rect<f64>, v: Vector2<f64>| r + v)
+        .register_fn("*", |r: Rect<f64>, v: f64| r * v);
 
     engine
         .register_type_with_name::<ZDepth>("ZDepth")
@@ -1188,9 +1188,9 @@ pub fn register_draw_primitives(
     register_draw_types(engine);
 
     let shape_batch_line = shape_batch.clone();
-    engine.register_fn("draw_line", move |p1: Vector2<f32>, p2: Vector2<f32>| {
+    engine.register_fn("draw_line", move |p1: Vector2<f64>, p2: Vector2<f64>| {
         let shape = Shape::Line(
-            Line::new(Point2::new(p1.x, p1.y), Point2::new(p2.x, p2.y)),
+            Line::new(Point2::new(p1.x as f32, p1.y as f32), Point2::new(p2.x as f32, p2.y as f32)),
             USER_LAYER,
             Rotation::ZERO,
             Stroke::new(1.0, Rgba::WHITE),
@@ -1199,10 +1199,10 @@ pub fn register_draw_primitives(
     });
     engine.register_fn(
         "draw_line",
-        move |p1: Vector2<f32>, p2: Vector2<f32>, color: Rgba8| {
+        move |p1: Vector2<f64>, p2: Vector2<f64>, color: Rgba8| {
             let color: Rgba = color.into();
             let shape = Shape::Line(
-                Line::new(Point2::new(p1.x, p1.y), Point2::new(p2.x, p2.y)),
+                Line::new(Point2::new(p1.x as f32, p1.y as f32), Point2::new(p2.x as f32, p2.y as f32)),
                 USER_LAYER,
                 Rotation::ZERO,
                 Stroke::new(1.0, color),
@@ -1216,10 +1216,10 @@ pub fn register_draw_primitives(
     let gh = draw::GLYPH_HEIGHT;
 
     let sprite_batch_text = sprite_batch.clone();
-    engine.register_fn("draw_text", move |pos: Vector2<f32>, text: &str| {
+    engine.register_fn("draw_text", move |pos: Vector2<f64>, text: &str| {
         if let Some(ref mut batch) = *sprite_batch_text.borrow_mut() {
-            let mut sx = pos.x;
-            let sy = pos.y;
+            let mut sx = pos.x as f32;
+            let sy = pos.y as f32;
             for c in text.bytes() {
                 let i = c as usize - FONT_OFFSET;
                 let tx = (i % 16) as f32 * gw;
@@ -1238,11 +1238,11 @@ pub fn register_draw_primitives(
     });
     engine.register_fn(
         "draw_text",
-        move |pos: Vector2<f32>, text: &str, color: Rgba8| {
+        move |pos: Vector2<f64>, text: &str, color: Rgba8| {
             let color: Rgba = color.into();
             if let Some(ref mut batch) = *sprite_batch.borrow_mut() {
-                let mut sx = pos.x;
-                let sy = pos.y;
+                let mut sx = pos.x as f32;
+                let sy = pos.y as f32;
                 for c in text.bytes() {
                     let i = c as usize - FONT_OFFSET;
                     let tx = (i % 16) as f32 * gw;
@@ -1400,7 +1400,8 @@ fn call_mouse_input(
     button: &MouseButton,
     p: &Point<ViewExtent, f32>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "mouse_input", (state.clone(), button.clone(), p.clone())) {
+    let p: Point<ViewExtent, f64> = p.clone().into();
+    match engine.call_fn::<()>(scope, ast, "mouse_input", (state.clone(), button.clone(), p)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "mouse_input") => Ok(()),
         Err(e) => Err(e),

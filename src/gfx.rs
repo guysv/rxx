@@ -114,6 +114,12 @@ impl<S> From<Point<S, f32>> for Point<S, u32> {
     }
 }
 
+impl<S> From<Point<S, f32>> for Point<S, f64> {
+    fn from(other: Point<S, f32>) -> Point<S, f64> {
+        Point::new(other.x as f64, other.y as f64)
+    }
+}
+
 impl<S> From<Point2<f32>> for Point<S, f32> {
     fn from(p: Point2<f32>) -> Point<S, f32> {
         Point::new(p.x, p.y)

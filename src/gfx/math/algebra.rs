@@ -169,6 +169,12 @@ impl<S> From<Point2<S>> for Vector2<S> {
     }
 }
 
+impl From<Vector2<f32>> for Vector2<f64> {
+    fn from(v: Vector2<f32>) -> Self {
+        Self::new(v.x as f64, v.y as f64)
+    }
+}
+
 /// 3D vector.
 #[repr(C)]
 #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
