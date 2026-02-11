@@ -7,15 +7,15 @@ fn init(session_in, renderer_in) {
 }
 
 fn draw() {
-    if session.mode == "normal" {
-        draw_text(vec2(10.0, 10.0), session.mode, rgb8(255, 255, 255));
-    } else if session.mode.starts_with("visual") {
-        draw_text(vec2(10.0, 10.0), session.mode, rgb8(0xff, 0x33, 0x66));
-    } else if session.mode == "command" {
+    if session.mode.to_string() == "normal" {
+        draw_text(vec2(10.0, 10.0), session.mode.to_string(), rgb8(255, 255, 255));
+    } else if session.mode.to_string().starts_with("visual") {
+        draw_text(vec2(10.0, 10.0), session.mode.to_string(), rgb8(0xff, 0x33, 0x66));
+    } else if session.mode.to_string() == "command" {
         // nothing
     } else {
         // script mode
-        draw_text(vec2(10.0, 10.0), session.mode, rgb8(0x00, 0xff, 0x00));
+        draw_text(vec2(10.0, 10.0), session.mode.to_string(), rgb8(0x00, 0xff, 0x00));
     }
 }
 

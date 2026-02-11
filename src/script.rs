@@ -323,6 +323,15 @@ impl ScriptState {
                     }
                     renderer_effects.push(eff.clone());
                 }
+                Effect::ScriptEffect(ScriptEffect::SwitchMode) => {
+                    for plugin in &mut self.plugins {
+                        let _ = call_switch_mode(
+                            &plugin.engine,
+                            &mut plugin.scope,
+                            &plugin.ast.borrow(),
+                        );
+                    }
+                }
                 other => renderer_effects.push(other.clone()),
             }
         }
@@ -452,7 +461,7 @@ pub fn register_session_handle(engine: &mut Engine) {
             s.borrow().views.active_id.raw() as i64
         })
         .register_get("mode", |s: &mut Rc<RefCell<Session>>| {
-            s.borrow().mode.to_string()
+            s.borrow().mode
         })
         .register_fn("switch_mode", |s: &mut Rc<RefCell<Session>>, mode: Mode| {
             s.borrow_mut().switch_mode(mode);
@@ -461,7 +470,15 @@ pub fn register_session_handle(engine: &mut Engine) {
             Mode::ScriptMode(ModeString::try_from_str(name.as_str())
                 .expect("Failed to convert string to ModeString"))
         })
+        .register_get("selection", |s: &mut Rc<RefCell<Session>>| {
+            match s.borrow().selection {
+                Some(s) => Dynamic::from(s.0),
+                None => Dynamic::UNIT
+            }
+        })
         .register_type_with_name::<Mode>("Mode")
+        .register_fn("to_string", |mode: Mode| mode.to_string())
+        .register_fn("==", |a: Mode, b: Mode| a == b)
         .register_type_with_name::<ScriptView>("View")
         .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
         .register_get("offset", |v: &mut ScriptView| {
@@ -469,7 +486,7 @@ pub fn register_session_handle(engine: &mut Engine) {
         })
         .register_get("frame_width", |v: &mut ScriptView| v.frame_width)
         .register_get("frame_height", |v: &mut ScriptView| v.frame_height)
-        .register_get("zoom", |v: &mut ScriptView| v.zoom)
+        .register_get("zoom", |v: &mut ScriptView| v.zoom as f64)
         .register_fn("views", |s: &mut Rc<RefCell<Session>>| {
             s.borrow()
                 .views
@@ -485,14 +502,18 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_fn("to_string", |state: InputState| {
             format!("{:?}", state)
         })
+        .register_fn("==", |a: InputState, b: InputState| a == b)
         .register_type_with_name::<MouseButton>("MouseButton")
         .register_fn("to_string", |button: MouseButton| {
             format!("{:?}", button)
         })
+        .register_fn("==", |a: MouseButton, b: MouseButton| a == b)
         .register_type_with_name::<Point<ViewExtent, f32>>("Point")
         .register_fn("to_string", |p: Point<ViewExtent, f32>| {
             format!("{:?}", p)
         })
+        .register_get("x", |p: &mut Point<ViewExtent, f32>| p.point.x as f64)
+        .register_get("y", |p: &mut Point<ViewExtent, f32>| p.point.y as f64)
         .register_type_with_name::<LogicalDelta>("LogicalDelta")
         .register_fn("to_string", |delta: LogicalDelta| {
             format!("{:?}", delta)
@@ -1077,6 +1098,18 @@ pub fn register_renderer_handle(
 /// Register Vector2<f32> and Rgba8 for script use. vec2(x,y), rgb8(r,g,b), rgb8(r,g,b,a).
 fn register_draw_types(engine: &mut Engine) {
     engine
+        .register_type_with_name::<Point2<f32>>("Point2_f32")
+        .register_get("x", |p: &mut Point2<f32>| p.x as f64)
+        .register_get("y", |p: &mut Point2<f32>| p.y as f64)
+        .register_fn("to_string", |p: Point2<f32>| format!("{:?}", p));
+    
+    engine
+        .register_type_with_name::<Point2<i32>>("Point2_i32")
+        .register_get("x", |p: &mut Point2<i32>| p.x as f64)
+        .register_get("y", |p: &mut Point2<i32>| p.y as f64)
+        .register_fn("to_string", |p: Point2<i32>| format!("{:?}", p));
+
+    engine
         .register_type_with_name::<Vector2<f32>>("Vector2")
         .register_get("x", |v: &mut Vector2<f32>| v.x as f64)
         .register_get("y", |v: &mut Vector2<f32>| v.y as f64)
@@ -1107,11 +1140,19 @@ fn register_draw_types(engine: &mut Engine) {
         });
 
     engine
-        .register_type_with_name::<Rect<f32>>("Rect")
+        .register_type_with_name::<Rect<f32>>("Rect_f32")
+        .register_fn("to_string", |r: Rect<f32>| format!("{:?}", r))
         .register_get("x1", |r: &mut Rect<f32>| r.x1 as f64)
         .register_get("y1", |r: &mut Rect<f32>| r.y1 as f64)
         .register_get("x2", |r: &mut Rect<f32>| r.x2 as f64)
         .register_get("y2", |r: &mut Rect<f32>| r.y2 as f64)
+        .register_type_with_name::<Rect<i32>>("Rect_i32")
+        .register_fn("to_string", |r: Rect<i32>| format!("{:?}", r))
+        .register_get("x1", |r: &mut Rect<i32>| r.x1 as f64)
+        .register_get("y1", |r: &mut Rect<i32>| r.y1 as f64)
+        .register_get("x2", |r: &mut Rect<i32>| r.x2 as f64)
+        .register_get("y2", |r: &mut Rect<i32>| r.y2 as f64)
+        .register_fn("center", |r: &mut Rect<i32>| r.center())
         .register_fn("rect", |x1: f64, y1: f64, x2: f64, y2: f64| {
             Rect::new(x1 as f32, y1 as f32, x2 as f32, y2 as f32)
         })
@@ -1240,6 +1281,12 @@ fn register_constants(scope: &mut Scope) {
     scope.push_constant("MODE_COMMAND", Mode::Command);
     scope.push_constant("MODE_PRESENT", Mode::Present);
     scope.push_constant("MODE_HELP", Mode::Help);
+    scope.push_constant("MOUSE_BUTTON_LEFT", MouseButton::Left);
+    scope.push_constant("MOUSE_BUTTON_RIGHT", MouseButton::Right);
+    scope.push_constant("MOUSE_BUTTON_MIDDLE", MouseButton::Middle);
+    scope.push_constant("INPUT_STATE_PRESSED", InputState::Pressed);
+    scope.push_constant("INPUT_STATE_RELEASED", InputState::Released);
+    scope.push_constant("INPUT_STATE_REPEATED", InputState::Repeated);
 }
 
 /// Call the script's `init(session, renderer)` function with options so that new variables
@@ -1374,6 +1421,18 @@ fn call_cursor_moved(
     match engine.call_fn::<()>(scope, ast, "cursor_moved", (p.clone(),)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "cursor_moved") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn call_switch_mode(
+    engine: &Engine,
+    scope: &mut Scope,
+    ast: &AST,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    match engine.call_fn::<()>(scope, ast, "switch_mode", ()) {
+        Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "switch_mode") => Ok(()),
         Err(e) => Err(e),
     }
 }

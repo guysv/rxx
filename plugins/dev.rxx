@@ -1,22 +1,38 @@
 fn init(session_in, renderer_in) {
     let session = session_in;
     let renderer = renderer_in;
-    register_command("hello", "Says hello");
+    let rotation_mode = script_mode("visual (rotation)");
+    let rotation_angle = 0.0;
+    let rotation_center = ();
+    let pivot = ();
+    register_command("selection/rotate", "Rotates the selection");
     print(`dev.rxx initialized`);
 }
 
 fn mouse_input(state, button, p) {
-    print(`mouse_input: ${state} ${button} ${p}`);
+    if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_LEFT && session.mode == rotation_mode {
+        print(`new pivot: ${p}`);
+        pivot = p;
+    }
 }
 
-fn mouse_wheel(delta) {
-    print(`mouse_wheel: ${delta}`);
+fn draw() {
+    if session.mode == rotation_mode && pivot != () {
+        let view = session.view(session.active_view_id);
+        let offset_x = session.offset_x + view.offset.x;
+        let offset_y = session.offset_y + view.offset.y;
+        let d = view.zoom;
+        let x1 = pivot.x * d + offset_x;
+        let y1 = pivot.y * d + offset_y;
+        draw_line(vec2(x1, y1), vec2(x1+d, y1), rgb8(0xff, 0xff, 0x00));
+        draw_line(vec2(x1, y1), vec2(x1, y1+d), rgb8(0xff, 0xff, 0x00));
+        draw_line(vec2(x1+d, y1), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
+        draw_line(vec2(x1, y1+d), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
+    }
 }
 
-fn cursor_moved(p) {
-    print(`cursor_moved: ${p}`);
-}
-
-fn cmd_hello(args) {
-    session.switch_mode(script_mode("hello"));
+fn cmd_selection_rotate(args) {
+    if session.selection != () {
+        session.switch_mode(rotation_mode);
+    }
 }

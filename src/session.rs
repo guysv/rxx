@@ -124,7 +124,7 @@ impl Default for VisualState {
 
 /// A pixel selection within a view.
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
-pub struct Selection(Rect<i32>);
+pub struct Selection(pub Rect<i32>);
 
 impl Selection {
     /// Create a new selection from a rectangle.
@@ -174,6 +174,7 @@ pub enum ScriptEffect {
     MouseInput(InputState, platform::MouseButton, Point<ViewExtent, f32>),
     MouseWheel(LogicalDelta),
     CursorMoved(Point<ViewExtent, f32>),
+    SwitchMode,
 }
 
 /// Session effects. Eg. view creation/destruction.
@@ -1231,6 +1232,7 @@ impl Session {
         self.release_inputs();
         self.prev_mode = Some(self.mode);
         self.mode = new;
+        self.effects.push(Effect::ScriptEffect(ScriptEffect::SwitchMode));
     }
 
     /// Release all keys and mouse buttons.
