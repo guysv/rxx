@@ -17,22 +17,33 @@ fn mouse_input(state, button, p) {
 }
 
 fn draw() {
-    if session.mode == rotation_mode && pivot != () {
+    if session.mode == rotation_mode {    
         let view = session.view(session.active_view_id);
         let offset_x = session.offset_x + view.offset.x;
         let offset_y = session.offset_y + view.offset.y;
         let d = view.zoom;
-        let x1 = pivot.x * d + offset_x;
-        let y1 = pivot.y * d + offset_y;
+        let cursor = session.active_view_coords(session.cursor);
+        let x1 = cursor.x * d + offset_x;
+        let y1 = cursor.y * d + offset_y;
         draw_line(vec2(x1, y1), vec2(x1+d, y1), rgb8(0xff, 0xff, 0x00));
         draw_line(vec2(x1, y1), vec2(x1, y1+d), rgb8(0xff, 0xff, 0x00));
         draw_line(vec2(x1+d, y1), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
         draw_line(vec2(x1, y1+d), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
-    }
+        if pivot != () {
+            // print(`pivot: ${pivot}, cursor: ${cursor}`);
+            let x1 = pivot.x * d + offset_x;
+            let y1 = pivot.y * d + offset_y;
+            draw_line(vec2(x1, y1), vec2(x1+d, y1), rgb8(0xff, 0xff, 0x00));
+            draw_line(vec2(x1, y1), vec2(x1, y1+d), rgb8(0xff, 0xff, 0x00));
+            draw_line(vec2(x1+d, y1), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
+            draw_line(vec2(x1, y1+d), vec2(x1+d, y1+d), rgb8(0xff, 0xff, 0x00));
+        }
+    } 
 }
 
 fn cmd_selection_rotate(args) {
     if session.selection != () {
+        pivot = ();
         session.switch_mode(rotation_mode);
     }
 }

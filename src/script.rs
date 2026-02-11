@@ -13,7 +13,7 @@ use crate::gfx::{Point, sprite2d};
 use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
 use crate::platform::{InputState, LogicalDelta, MouseButton};
-use crate::session::{Effect, MessageType, Mode, ModeString, ScriptEffect, Session, VisualState};
+use crate::session::{Effect, MessageType, Mode, ModeString, ScriptEffect, Session, SessionCoords, VisualState};
 use crate::view::{View, ViewExtent, ViewId, ViewResource};
 use crate::wgpu::{self, Texture};
 use ::wgpu as wgpu_types;
@@ -475,6 +475,13 @@ pub fn register_session_handle(engine: &mut Engine) {
                 Some(s) => Dynamic::from(s.0),
                 None => Dynamic::UNIT
             }
+        })
+        .register_get("cursor", |s: &mut Rc<RefCell<Session>>| {
+            Vector2::new(s.borrow().cursor.x as f32, s.borrow().cursor.y as f32)
+        })
+        .register_fn("active_view_coords", |s: &mut Rc<RefCell<Session>>, p: Vector2<f32>| {
+            let coords = s.borrow().active_view_coords(SessionCoords::new(p.x, p.y));
+            Vector2::new(coords.x as f32, coords.y as f32)
         })
         .register_type_with_name::<Mode>("Mode")
         .register_fn("to_string", |mode: Mode| mode.to_string())
@@ -1114,7 +1121,8 @@ fn register_draw_types(engine: &mut Engine) {
         .register_get("x", |v: &mut Vector2<f32>| v.x as f64)
         .register_get("y", |v: &mut Vector2<f32>| v.y as f64)
         .register_fn("vec2", |x: f64, y: f64| Vector2::new(x as f32, y as f32))
-        .register_fn("+", |v1: Vector2<f32>, v2: Vector2<f32>| v1 + v2);
+        .register_fn("+", |v1: Vector2<f32>, v2: Vector2<f32>| v1 + v2)
+        .register_fn("to_string", |v: Vector2<f32>| format!("{:?}", v));
 
     engine
         .register_type_with_name::<Rgba8>("Rgba8")
