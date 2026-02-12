@@ -8,12 +8,12 @@ use crate::draw::{self, USER_LAYER};
 use crate::gfx::color::Rgba;
 use crate::gfx::math::{Point2, Vector2};
 use crate::gfx::rect::Rect;
-use crate::gfx::shape2d::{self, Line, Rotation, Shape, Stroke};
+use crate::gfx::shape2d::{self, Fill, Line, Rotation, Shape, Stroke};
 use crate::gfx::{Point, sprite2d};
 use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
 use crate::platform::{InputState, LogicalDelta, MouseButton};
-use crate::session::{Effect, MessageType, Mode, ModeString, ScriptEffect, Session, SessionCoords, VisualState};
+use crate::session::{Blending, Effect, MessageType, Mode, ModeString, ScriptEffect, Session, SessionCoords, VisualState};
 use crate::view::{View, ViewExtent, ViewId, ViewResource};
 use crate::wgpu::{self, Texture};
 use ::wgpu as wgpu_types;
@@ -106,6 +106,8 @@ pub struct ScriptState {
     pub plugin_dir: Option<PathBuf>,
     /// Loaded plugins, one per .rxx file.
     pub plugins: Vec<LoadedPlugin>,
+    /// Effects queued by plugins.
+    pub effects: Rc<RefCell<Vec<Effect>>>,
 }
 
 /// Discover *.rxx files in a directory. Returns paths sorted by name for deterministic load order.
@@ -125,6 +127,7 @@ fn load_one_plugin(
     path: &Path,
     session_handle: &Rc<RefCell<Session>>,
     renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
+    script_state_handle: &Rc<RefCell<ScriptState>>,
 ) -> Result<(LoadedPlugin, Vec<(String, String)>), String> {
     if !path.exists() {
         return Err(format!("Plugin not found: {}", path.display()));
@@ -134,8 +137,8 @@ fn load_one_plugin(
     let mut engine = Engine::new();
     engine.set_max_expr_depths(10_000, 10_000);
     register_draw_primitives(&mut engine, shape_batch, sprite_batch);
-    register_session_handle(&mut engine);
-    register_renderer_handle(&mut engine, renderer_handle);
+    register_session_handle(&mut engine, script_state_handle.borrow_mut().effects.clone());
+    register_renderer_handle(&mut engine);
     register_wgpu_types(&mut engine);
 
     let script_commands: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
@@ -164,6 +167,7 @@ impl ScriptState {
         Self {
             plugin_dir: None,
             plugins: Vec::new(),
+            effects: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -188,7 +192,7 @@ pub fn load_plugins(
     let mut all_commands = Vec::new();
     let mut plugins = Vec::with_capacity(paths.len());
     for path in &paths {
-        match load_one_plugin(path, session_handle, renderer_handle) {
+        match load_one_plugin(path, session_handle, renderer_handle, script_state_handle) {
             Ok((plugin, cmds)) => {
                 all_commands.extend(cmds);
                 plugins.push(plugin);
@@ -355,6 +359,9 @@ impl ScriptState {
                 }
             }
         }
+        let mut script_state_effects = self.effects.borrow_mut();
+        renderer_effects.append(&mut script_state_effects);
+        script_state_effects.clear();
         renderer_effects
     }
 
@@ -445,7 +452,7 @@ pub fn compile_file(engine: &Engine, path: &Path) -> Result<AST, Box<rhai::EvalA
 
 /// Register session handle type so scripts can use it in init(session, renderer).
 /// Exposes width, height, offset_x, offset_y from the session.
-pub fn register_session_handle(engine: &mut Engine) {
+pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<RefCell<Vec<Effect>>>) {
     engine
         .register_type_with_name::<Rc<RefCell<Session>>>("Session")
         .register_get("width", |s: &mut Rc<RefCell<Session>>| {
@@ -539,7 +546,29 @@ pub fn register_session_handle(engine: &mut Engine) {
         .register_type_with_name::<LogicalDelta>("LogicalDelta")
         .register_fn("to_string", |delta: LogicalDelta| {
             format!("{:?}", delta)
-        });
+        })
+        .register_fn("queue_effect", {
+            let script_effects_queue = script_effects_queue.clone();
+            move |effect: Effect| {
+                script_effects_queue.borrow_mut().push(effect);
+            }
+        })
+        .register_fn("queue_active_view_rect_clear", {
+            let script_effects_queue = script_effects_queue.clone();
+            move |rect: Rect<f64>| {
+                let mut effects_queue = script_effects_queue.borrow_mut();
+                effects_queue.push(Effect::ViewBlendingChanged(Blending::Constant));
+                effects_queue.push(Effect::ViewPaintFinal(vec![Shape::Rectangle(
+                    rect.into(),
+                    ZDepth::default(),
+                    Rotation::ZERO,
+                    Stroke::NONE,
+                    Fill::Solid(Rgba8::TRANSPARENT.into()),
+                )]));
+            }
+        })
+        .register_type_with_name::<Effect>("Effect")
+        .register_fn("effect_view_paint_final", |shapes: &[Shape]| Effect::ViewPaintFinal(shapes.to_vec()));
 }
 
 /// Load op for script render pass color attachments.
@@ -664,7 +693,6 @@ impl ScriptPass {
 /// Script-created textures are stored in script_state_handle.
 pub fn register_renderer_handle(
     engine: &mut Engine,
-    _renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
 ) {
     engine
         .register_type_with_name::<wgpu_types::TextureFormat>("TextureFormat")
@@ -1229,6 +1257,10 @@ fn register_draw_types(engine: &mut Engine) {
         .register_get("x", |r: &mut Repeat| r.x as f64)
         .register_get("y", |r: &mut Repeat| r.y as f64)
         .register_fn("repeat", |x: f64, y: f64| Repeat::new(x as f32, y as f32));
+
+    engine
+        .register_type_with_name::<Shape>("Shape")
+        .register_fn("shape_rectangle", |rect: Rect<f64>, depth: ZDepth, rotation: Rotation, stroke: Stroke, fill: Fill| Shape::Rectangle(rect.into(), depth, rotation, stroke, fill));
 }
 
 /// Register draw primitives on the engine. Call this once when loading a script.
@@ -1348,6 +1380,8 @@ fn register_constants(scope: &mut Scope) {
     scope.push_constant("INPUT_STATE_PRESSED", InputState::Pressed);
     scope.push_constant("INPUT_STATE_RELEASED", InputState::Released);
     scope.push_constant("INPUT_STATE_REPEATED", InputState::Repeated);
+    scope.push_constant("EFFECT_VIEW_BLENDING_CHANGED_CONSTANT", Effect::ViewBlendingChanged(Blending::Constant));
+    scope.push_constant("EFFECT_VIEW_BLENDING_CHANGED_ALPHA", Effect::ViewBlendingChanged(Blending::Alpha));
 }
 
 /// Call the script's `init(session, renderer)` function with options so that new variables

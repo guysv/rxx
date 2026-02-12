@@ -320,7 +320,7 @@ impl LayerResource {
 
             buffer.extend_from_slice(row);
         }
-        assert!(buffer.len() == w * h);
+        assert!(buffer.len() == w * h, "buffer.len(): {} != w: {} * h: {} = {}", buffer.len(), w, h, w * h);
 
         Some((snapshot, buffer))
     }

@@ -97,6 +97,7 @@ fn cmd_selection_rotate(args) {
         drag_start = ();
         last_p = ();
         renderer.upload_selection_to_texture(session, clipboard);
+        queue_active_view_rect_clear(session.selection);
         session.switch_mode(rotation_mode);
     }
 }
