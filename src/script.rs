@@ -516,6 +516,7 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         .register_type_with_name::<Mode>("Mode")
         .register_fn("to_string", |mode: Mode| mode.to_string())
         .register_fn("==", |a: Mode, b: Mode| a == b)
+        .register_fn("!=", |a: Mode, b: Mode| a != b)
         .register_type_with_name::<ScriptView>("View")
         .register_get("id", |v: &mut ScriptView| v.id.raw() as i64)
         .register_get("offset", |v: &mut ScriptView| {
@@ -984,6 +985,13 @@ pub fn register_renderer_handle(
             move |r: &mut Rc<RefCell<wgpu::Renderer>>| {
                 let bind_group = r.borrow_mut()
                     .create_identity_transform_bind_group();
+                Rc::new(RefCell::new(bind_group))
+            }
+        })
+        .register_fn("create_ortho_transform_bind_group", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, width: f64, height: f64| {
+                let bind_group = r.borrow_mut()
+                    .create_ortho_transform_bind_group(width as u32, height as u32);
                 Rc::new(RefCell::new(bind_group))
             }
         })

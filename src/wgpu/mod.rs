@@ -2608,6 +2608,36 @@ impl Renderer {
         bind_group
     }
 
+    /// Create a transform bind group with ortho for the given dimensions and identity transform.
+    /// Use when rendering to a view-sized target (e.g. staging texture): pixel coords (0,0)-(w,h) map to the full target.
+    pub fn create_ortho_transform_bind_group(&mut self, width: u32, height: u32) -> wgpu::BindGroup {
+        let ortho: M44 = ortho_wgpu(width, height, Origin::TopLeft).into();
+        let identity: M44 = Matrix4::identity().into();
+        let uniforms = TransformUniforms {
+            ortho,
+            transform: identity,
+        };
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("script_ortho_transform_buffer"),
+            size: std::mem::size_of::<TransformUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::bytes_of(&uniforms));
+        buffer.unmap();
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("script_ortho_transform_bind_group"),
+            layout: &self.transform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        })
+    }
+
     /// Create or update a transform bind group with ortho and view transform (same as main view pass).
     /// Uses a single cached buffer/bind group; subsequent calls update the buffer and return the same handle.
     /// Script should pass translation = session.offset + view.offset and view.zoom so pixel-space vertices render on-screen.

@@ -1,5 +1,5 @@
 fn init(session_in, renderer_in) {
-    print(read_file("cleanedge.wgsl"));
+    let wgsl = read_file("cleanedge.wgsl");
     let session = session_in;
     let renderer = renderer_in;
     let rotation_mode = script_mode("visual (rotation)");
@@ -10,11 +10,16 @@ fn init(session_in, renderer_in) {
     let last_p = ();
     let clipboard = renderer.create_render_texture(8, 8);
     let in_progress = false;
+    let shader = renderer.create_shader_module(wgsl);
+    let pipeline = renderer.create_render_pipeline_with_texture(shader, "vs_main", "fs_main");
     register_command("selection/rotate", "Rotates the selection");
     print(`dev.rxx initialized`);
 }
 
 fn mouse_input(state, button, cursor) {
+    if session.mode != rotation_mode {
+        return;
+    }
     print(`mouse_input: ${state}, ${button}, ${cursor}`);
     let view = session.view(session.active_view_id);
     let d = view.zoom;
@@ -91,6 +96,32 @@ fn draw() {
             }
         }
     } 
+}
+
+fn shade(encoder) {
+    if in_progress {
+        let staging_texture = renderer.view_staging_texture(session.active_view_id);
+
+        let view = session.view(session.active_view_id);
+        let batch = renderer.sprite_singleton_batch(
+            8, 8,
+            rect(0.0, 0.0, 8.0, 8.0),
+            session.selection,
+            0.0,
+            rgb8(0, 0, 0, 0));
+        let vertices = batch.vertices();
+        let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
+
+        let transform_bind_group = renderer.create_ortho_transform_bind_group(view.frame_width, view.frame_height);
+        let clipboard_bind_group = renderer.create_texture_sampler_bind_group(clipboard);
+
+        let pass = encoder.begin_render_pass("cleanedge", [color_attachment(staging_texture, load_load(), store_store())]);
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, transform_bind_group);
+        pass.set_bind_group(1, clipboard_bind_group);
+        pass.set_vertex_buffer(0, vertex_buffer);
+        pass.draw(6, 1, 0, 0);
+    }
 }
 
 fn switch_mode() {
