@@ -8,6 +8,7 @@ fn init(session_in, renderer_in) {
     let drag_start = ();
     let last_p = ();
     let clipboard = renderer.create_render_texture(8, 8);
+    let in_progress = false;
     register_command("selection/rotate", "Rotates the selection");
     print(`dev.rxx initialized`);
 }
@@ -91,11 +92,19 @@ fn draw() {
     } 
 }
 
+fn switch_mode() {
+    if in_progress && session.prev_mode == rotation_mode {
+        in_progress = false;
+        queue_effect(effect_view_damaged(session.active_view_id));
+    }
+}
+
 fn cmd_selection_rotate(args) {
     if session.selection != () {
         pivot = ();
         drag_start = ();
         last_p = ();
+        in_progress = true;
         renderer.upload_selection_to_texture(session, clipboard);
         queue_active_view_rect_clear(session.selection);
         session.switch_mode(rotation_mode);

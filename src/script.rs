@@ -473,6 +473,12 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         .register_get("mode", |s: &mut Rc<RefCell<Session>>| {
             s.borrow().mode
         })
+        .register_get("prev_mode", |s: &mut Rc<RefCell<Session>>| {
+            match s.borrow().prev_mode {
+                Some(m) => Dynamic::from(m),
+                None => Dynamic::UNIT
+            }
+        })
         .register_fn("switch_mode", |s: &mut Rc<RefCell<Session>>, mode: Mode| {
             s.borrow_mut().switch_mode(mode);
         })
@@ -568,7 +574,8 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
             }
         })
         .register_type_with_name::<Effect>("Effect")
-        .register_fn("effect_view_paint_final", |shapes: &[Shape]| Effect::ViewPaintFinal(shapes.to_vec()));
+        .register_fn("effect_view_paint_final", |shapes: &[Shape]| Effect::ViewPaintFinal(shapes.to_vec()))
+        .register_fn("effect_view_damaged", |id: i64| Effect::ViewDamaged(ViewId(id as u16), None));
 }
 
 /// Load op for script render pass color attachments.
