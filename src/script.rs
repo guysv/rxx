@@ -482,7 +482,7 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         })
         .register_get("selection", |s: &mut Rc<RefCell<Session>>| {
             match s.borrow().selection {
-                Some(s) => { let s: Rect<f64> = s.0.into(); Dynamic::from(s) },
+                Some(s) => { let s: Rect<f64> = s.abs().bounds().into(); Dynamic::from(s) },
                 None => Dynamic::UNIT
             }
         })

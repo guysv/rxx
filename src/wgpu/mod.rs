@@ -2125,7 +2125,7 @@ impl Renderer {
             None => return false,
         };
         let view = session.active_view();
-        let rect = selection.bounds();
+        let rect = selection.abs().bounds();
         let (_, pixels) = match view.resource.layer.get_snapshot_rect(&rect) {
             Some(x) => x,
             None => return false,
