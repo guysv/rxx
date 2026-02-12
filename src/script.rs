@@ -6,7 +6,7 @@
 
 use crate::draw::{self, USER_LAYER};
 use crate::gfx::color::Rgba;
-use crate::gfx::math::{Point2, Vector2};
+use crate::gfx::math::{Matrix4, Point2, Vector2, Vector3};
 use crate::gfx::rect::Rect;
 use crate::gfx::shape2d::{self, Fill, Line, Rotation, Shape, Stroke};
 use crate::gfx::{Point, sprite2d};
@@ -490,7 +490,7 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         })
         .register_get("selection", |s: &mut Rc<RefCell<Session>>| {
             match s.borrow().selection {
-                Some(s) => { let s: Rect<f64> = s.abs().bounds().into(); Dynamic::from(s) },
+                Some(s) => { Dynamic::from(s.abs().bounds()) },
                 None => Dynamic::UNIT
             }
         })
@@ -564,7 +564,7 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         })
         .register_fn("queue_active_view_rect_clear", {
             let script_effects_queue = script_effects_queue.clone();
-            move |rect: Rect<f64>| {
+            move |rect: Rect<i32>| {
                 let mut effects_queue = script_effects_queue.borrow_mut();
                 effects_queue.push(Effect::ViewBlendingChanged(Blending::Constant));
                 effects_queue.push(Effect::ViewPaintFinal(vec![Shape::Rectangle(
@@ -995,6 +995,20 @@ pub fn register_renderer_handle(
                 Rc::new(RefCell::new(bind_group))
             }
         })
+        .register_fn("create_ortho_custom_transform_bind_group", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  width: f64,
+                  height: f64,
+                  transform: Matrix4<f32>| {
+                let bind_group = r.borrow_mut()
+                    .create_ortho_custom_transform_bind_group(
+                        width as u32,
+                        height as u32,
+                        transform,
+                    );
+                Rc::new(RefCell::new(bind_group))
+            }
+        })
         .register_fn("create_view_transform_bind_group", {
             move |r: &mut Rc<RefCell<wgpu::Renderer>>,
                   translation_x: f64,
@@ -1017,7 +1031,8 @@ pub fn register_renderer_handle(
              src: Rect<f64>,
              dst: Rect<f64>,
              zdepth: f64,
-             color: Rgba8| {
+             color: Rgba8,
+             alpha: f64| {
                 let batch = sprite2d::Batch::singleton(
                     w as u32,
                     h as u32,
@@ -1025,7 +1040,7 @@ pub fn register_renderer_handle(
                     dst.into(),
                     crate::gfx::ZDepth(zdepth as f32),
                     Rgba::from(color),
-                    1.0,
+                    alpha as f32,
                     Repeat::default(),
                 );
                 ScriptSpriteBatch { batch }
@@ -1206,6 +1221,18 @@ fn register_draw_types(engine: &mut Engine) {
         .register_fn("to_string", |v: Vector2<f64>| format!("{:?}", v));
 
     engine
+        .register_type_with_name::<Matrix4<f32>>("Mat4")
+        .register_fn("mat4_identity", || Matrix4::<f32>::identity())
+        .register_fn("mat4_translation", |x: f64, y: f64| {
+            Matrix4::<f32>::from_translation(Vector3::new(x as f32, y as f32, 0.0))
+        })
+        .register_fn("mat4_rotation_z", |angle: f64| {
+            Matrix4::<f32>::from_rotation_z(angle as f32)
+        })
+        .register_fn("*", |a: Matrix4<f32>, b: Matrix4<f32>| a * b)
+        .register_fn("to_string", |m: Matrix4<f32>| format!("{:?}", m));
+
+    engine
         .register_type_with_name::<Point<Session, f64>>("SessionPoint")
         .register_get("x", |p: &mut Point<Session, f64>| p.x as f64)
         .register_get("y", |p: &mut Point<Session, f64>| p.y as f64)
@@ -1252,13 +1279,16 @@ fn register_draw_types(engine: &mut Engine) {
         .register_get("y1", |r: &mut Rect<f64>| r.y1 as f64)
         .register_get("x2", |r: &mut Rect<f64>| r.x2 as f64)
         .register_get("y2", |r: &mut Rect<f64>| r.y2 as f64)
+        .register_get("width", |r: &mut Rect<f64>| r.width())
+        .register_get("height", |r: &mut Rect<f64>| r.height())
         .register_type_with_name::<Rect<i32>>("Rect_i32")
         .register_fn("to_string", |r: Rect<i32>| format!("{:?}", r))
         .register_get("x1", |r: &mut Rect<i32>| r.x1 as f64)
         .register_get("y1", |r: &mut Rect<i32>| r.y1 as f64)
         .register_get("x2", |r: &mut Rect<i32>| r.x2 as f64)
         .register_get("y2", |r: &mut Rect<i32>| r.y2 as f64)
-        .register_fn("center", |r: &mut Rect<i32>| r.center())
+        .register_fn("center", |r: &mut Rect<i32>| { let p = r.center(); Vector2::new(p.x as f64, p.y as f64)})
+        .register_fn("to_rect_f64", |r: &mut Rect<i32>| {let r: Rect<f64> = r.clone().into(); r})
         .register_fn("rect", |x1: f64, y1: f64, x2: f64, y2: f64| {
             Rect::new(x1 as f64, y1 as f64, x2 as f64, y2 as f64)
         })

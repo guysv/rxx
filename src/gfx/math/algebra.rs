@@ -489,6 +489,19 @@ impl Matrix4<f32> {
         }
         .into()
     }
+
+    /// Create a rotation matrix around the Z axis.
+    #[inline]
+    #[rustfmt::skip]
+    pub fn from_rotation_z(angle: f32) -> Matrix4<f32> {
+        let (s, c) = angle.sin_cos();
+        Matrix4::new(
+            c,    s,    0.0, 0.0,
+           -s,    c,    0.0, 0.0,
+            0.0,  0.0,  1.0, 0.0,
+            0.0,  0.0,  0.0, 1.0,
+        )
+    }
 }
 
 impl<S> std::ops::Mul<Matrix4<S>> for Matrix4<S>

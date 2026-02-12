@@ -64,11 +64,9 @@ fn cursor_moved(p) {
             print(`p == pivot_session || p == drag_start || pivot_session == drag_start`);
         } else {
             last_p = p;
-            // let pivot_session = pivot * zoom + offset;
-            // let drag_start_session = drag_start * zoom + offset;
-
-            // let angle = vector_angle(pivot_session, drag_start_session, p.to_vec2());
-            // print(`angle: ${angle}`);
+            let drag_start_session = drag_start * zoom + offset;
+            let angle = vector_angle(pivot_session, drag_start_session, p.to_vec2());
+            rotation_angle = angle;
         }
     }
 }
@@ -86,14 +84,14 @@ fn draw() {
             let y1 = pivot.y * d + offset_y;
             draw_line(vec2(x1-6.0, y1), vec2(x1+6.0, y1), rgb8(0xff, 0xff, 0x00));
             draw_line(vec2(x1, y1-6.0), vec2(x1, y1+6.0), rgb8(0xff, 0xff, 0x00));
-            if drag_start != () {
-                let drag_start_session = drag_start * d + offset;
-                draw_line(drag_start_session, vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
-                if last_p != () {
-                    // let last_p_session = last_p.to_vec2() * d + offset;
-                    draw_line(last_p.to_vec2(), vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
-                }
-            }
+            // if drag_start != () {
+            //     let drag_start_session = drag_start * d + offset;
+            //     draw_line(drag_start_session, vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
+            //     if last_p != () {
+            //         // let last_p_session = last_p.to_vec2() * d + offset;
+            //         draw_line(last_p.to_vec2(), vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
+            //     }
+            // }
         }
     } 
 }
@@ -106,13 +104,18 @@ fn shade(encoder) {
         let batch = renderer.sprite_singleton_batch(
             8, 8,
             rect(0.0, 0.0, 8.0, 8.0),
-            session.selection,
+            session.selection.to_rect_f64(),
             0.0,
-            rgb8(0, 0, 0, 0));
+            rgb8(0, 0, 0, 0),
+            0.9);
         let vertices = batch.vertices();
         let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
 
-        let transform_bind_group = renderer.create_ortho_transform_bind_group(view.frame_width, view.frame_height);
+        let t1 = mat4_translation(-pivot.x, -pivot.y);
+        let r = mat4_rotation_z(rotation_angle);
+        let t2 = mat4_translation(pivot.x, pivot.y);
+        let transform = t2 * r * t1;
+        let transform_bind_group = renderer.create_ortho_custom_transform_bind_group(view.frame_width, view.frame_height, transform);
         let clipboard_bind_group = renderer.create_texture_sampler_bind_group(clipboard);
 
         let pass = encoder.begin_render_pass("cleanedge", [color_attachment(staging_texture, load_load(), store_store())]);
@@ -133,12 +136,15 @@ fn switch_mode() {
 
 fn cmd_selection_rotate(args) {
     if session.selection != () {
-        pivot = ();
         drag_start = ();
         last_p = ();
         in_progress = true;
+        rotation_angle = 0.0;
+        let selection = session.selection;
+        pivot = selection.center();
+        
         renderer.upload_selection_to_texture(session, clipboard);
-        queue_active_view_rect_clear(session.selection);
+        queue_active_view_rect_clear(selection);
         session.switch_mode(rotation_mode);
     }
 }
