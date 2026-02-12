@@ -1,4 +1,5 @@
 fn init(session_in, renderer_in) {
+    print(read_file("cleanedge.wgsl"));
     let session = session_in;
     let renderer = renderer_in;
     let rotation_mode = script_mode("visual (rotation)");

@@ -140,6 +140,8 @@ fn load_one_plugin(
     register_session_handle(&mut engine, script_state_handle.borrow_mut().effects.clone());
     register_renderer_handle(&mut engine);
     register_wgpu_types(&mut engine);
+    let plugin_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    register_system_api(&mut engine, plugin_dir);
 
     let script_commands: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
     register_command_api(&mut engine, script_commands.clone());
@@ -1365,6 +1367,19 @@ fn register_command_api(engine: &mut Engine, commands: Rc<RefCell<Vec<(String, S
         commands
             .borrow_mut()
             .push((name.to_string(), help.to_string()));
+    });
+}
+
+fn register_system_api(engine: &mut Engine, plugin_dir: PathBuf) {
+    engine.register_fn("read_file", move |path: &str| {
+        let p = Path::new(path);
+        let path = if p.is_relative() {
+            plugin_dir.join(p)
+        } else {
+            p.to_path_buf()
+        };
+        let contents = std::fs::read_to_string(&path).unwrap();
+        contents
     });
 }
 
