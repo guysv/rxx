@@ -1,30 +1,27 @@
 // @mode-vis.rxx - current mode indicator plugin
 
 fn init() {
-    print(`mod-vis.rxx initialized`);
+    // plugin constants
+    const WIDGET_POS = vec2(10.0, 46.0);
+    const NORMAL_COLOR = rgb8(255, 255, 255);
+    const VISUAL_COLOR = rgb8(0xff, 0x33, 0x66);
+    const SCRIPT_COLOR = rgb8(0xff, 0x33, 0x66);
+    // prints to stdout
+    print(`mode-vis.rxx initialized`);
 }
 
 fn draw() {
+    let widget_string = `-- ${session.mode.to_string().to_upper()} --`
+
+    // draw current mode indicator
     if session.mode.to_string() == "normal" {
-        draw_text(vec2(10.0, 10.0), session.mode.to_string(), rgb8(255, 255, 255));
+        draw_text(WIDGET_POS, widget_string, NORMAL_COLOR);
     } else if session.mode.to_string().starts_with("visual") {
-        draw_text(vec2(10.0, 10.0), session.mode.to_string(), rgb8(0xff, 0x33, 0x66));
+        draw_text(WIDGET_POS, widget_string, VISUAL_COLOR);
     } else if session.mode.to_string() == "command" {
-        // nothing
+        // nothing - command mode is skipped
     } else {
         // script mode
-        draw_text(vec2(10.0, 10.0), session.mode.to_string(), rgb8(0x00, 0xff, 0x00));
+        draw_text(WIDGET_POS, widget_string, SCRIPT_COLOR);
     }
-}
-
-fn view_added(view_id) {
-}
-
-fn view_removed(view_id) {
-}
-
-fn shade(encoder) {
-}
-
-fn render(pass) {
 }
