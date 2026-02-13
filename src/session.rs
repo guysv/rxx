@@ -674,8 +674,10 @@ pub struct Session {
     /// an expensive process is kicked off.
     queue: Vec<InternalCommand>,
 
-    /// When set by :plugin-dir command, lib.rs applies it and reloads plugins; then clears this.
-    pending_plugin_dir: Option<PathBuf>,
+    /// The current plugin directory. Defaults to the user data dir; overridden by -p or :plugin-dir.
+    pending_plugin_dir: PathBuf,
+    /// Whether the plugin directory was changed and needs reloading.
+    pending_plugin_dir_dirty: bool,
 }
 
 impl Session {
@@ -728,6 +730,7 @@ impl Session {
         cwd: P,
         proj_dirs: dirs::ProjectDirs,
         base_dirs: dirs::BaseDirs,
+        initial_plugin_dir: PathBuf,
     ) -> Self {
         let history_path = proj_dirs.data_dir().join("history");
         let cwd = cwd.as_ref().to_path_buf();
@@ -767,7 +770,8 @@ impl Session {
             avg_time: time::Duration::from_secs(0),
             frame_number: 0,
             queue: Vec::new(),
-            pending_plugin_dir: None,
+            pending_plugin_dir: initial_plugin_dir,
+            pending_plugin_dir_dirty: false,
         }
     }
 
@@ -797,10 +801,20 @@ impl Session {
         Ok(self)
     }
 
-    /// Take the pending plugin directory set by :plugin-dir command, if any.
-    /// Lib reloads plugins from that dir and shows feedback.
+    /// Take the pending plugin directory if it was changed by :plugin-dir.
+    /// Lib reloads plugins from that dir and shows feedback; clears the dirty flag.
     pub fn take_pending_plugin_dir(&mut self) -> Option<PathBuf> {
-        self.pending_plugin_dir.take()
+        if self.pending_plugin_dir_dirty {
+            self.pending_plugin_dir_dirty = false;
+            Some(self.pending_plugin_dir.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Returns the current plugin directory.
+    pub fn plugin_dir(&self) -> &Path {
+        self.pending_plugin_dir.as_path()
     }
 
     /// Set script commands registered by Rhai init() and rebuild the parser.
@@ -2765,7 +2779,18 @@ impl Session {
                 );
             }
             Command::SetPluginDir(path) => {
-                self.pending_plugin_dir = Some(PathBuf::from(path));
+                self.pending_plugin_dir = PathBuf::from(path);
+                self.pending_plugin_dir_dirty = true;
+            }
+            Command::OpenPluginDir => {
+                let dir = &self.pending_plugin_dir;
+                std::fs::create_dir_all(dir).ok();
+                if let Err(e) = open::that(dir) {
+                    self.message(
+                        format!("Error opening plugin directory: {}", e),
+                        MessageType::Error,
+                    );
+                }
             }
             Command::Edit(ref paths) => {
                 if paths.is_empty() {

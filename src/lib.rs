@@ -135,7 +135,12 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
     let base_dirs = dirs::BaseDirs::new()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "home directory not found"))?;
     let cwd = std::env::current_dir()?;
-    let session = Session::new(win_w, win_h, cwd, proj_dirs, base_dirs)
+    let initial_plugin_dir = options
+        .plugin_dir
+        .clone()
+        .unwrap_or_else(|| proj_dirs.data_local_dir().join("plugins"));
+    std::fs::create_dir_all(&initial_plugin_dir).ok();
+    let session = Session::new(win_w, win_h, cwd, proj_dirs, base_dirs, initial_plugin_dir.clone())
         .with_blank(
             FileStatus::NoFile,
             Session::DEFAULT_VIEW_W,
@@ -193,15 +198,13 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
     drop(session); // release so load_plugins can borrow session_handle
 
     let script_state_handle: Rc<RefCell<ScriptState>> = Rc::new(RefCell::new(ScriptState::new()));
-    if let Some(plugin_dir) = options.plugin_dir.clone() {
-        if let Err(e) = script::load_plugins(
-            &script_state_handle,
-            &session_handle,
-            &renderer_handle,
-            plugin_dir.clone(),
-        ) {
-            log::error!("Error loading plugins: {}", e);
-        }
+    if let Err(e) = script::load_plugins(
+        &script_state_handle,
+        &session_handle,
+        &renderer_handle,
+        initial_plugin_dir.clone(),
+    ) {
+        log::error!("Error loading plugins: {}", e);
     }
 
     let wait_events = execution.is_normal() || execution.is_recording();

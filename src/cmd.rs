@@ -59,6 +59,7 @@ pub enum Command {
     ForceQuitAll,
     Source(Option<String>),
     SetPluginDir(String),
+    OpenPluginDir,
 
     // Frames
     FrameAdd,
@@ -203,6 +204,7 @@ impl fmt::Display for Command {
             Self::Slice(None) => write!(f, "Reset view slices"),
             Self::Source(_) => write!(f, "Source an rx script (eg. a palette)"),
             Self::SetPluginDir(_) => write!(f, "Set plugin directory (loads *.rxx)"),
+            Self::OpenPluginDir => write!(f, "Open plugin directory in file explorer"),
             Self::SwapColors => write!(f, "Swap foreground & background colors"),
             Self::Toggle(s) => write!(f, "Toggle {setting} on/off", setting = s),
             Self::Undo => write!(f, "Undo view edit"),
@@ -288,6 +290,7 @@ impl From<Command> for String {
             Command::Slice(None) => format!("slice"),
             Command::Source(Some(path)) => format!("source {}", path),
             Command::SetPluginDir(path) => format!("plugin-dir {}", path),
+            Command::OpenPluginDir => format!("plugin-dir/open"),
             Command::SwapColors => format!("swap"),
             Command::Toggle(s) => format!("toggle {}", s),
             Command::Undo => format!("undo"),
@@ -861,6 +864,9 @@ impl Default for Commands {
             )
             .command("plugin-dir", "Set plugin directory (loads *.rxx Rhai scripts)", |p| {
                 p.then(path()).map(|(_, path)| Command::SetPluginDir(path))
+            })
+            .command("plugin-dir/open", "Open plugin directory in file explorer", |p| {
+                p.value(Command::OpenPluginDir)
             })
             .command("cd", "Change current directory", |p| {
                 p.then(optional(path())).map(|(_, p)| Command::ChangeDir(p))
