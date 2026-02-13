@@ -1,8 +1,8 @@
 //! Rhai script loading and event-handler lifecycle.
 //!
 //! Follows the [event-handler pattern](https://rhai.rs/book/patterns/events-1.html):
-//! one main script with `init(session, renderer)`; custom Scope + CallFnOptions (eval_ast false,
-//! rewind_scope false) so variables defined in `init()` persist.
+//! one main script with `init()`; `session` and `renderer` are in scope as globals; custom Scope +
+//! CallFnOptions (eval_ast false, rewind_scope false) so variables defined in `init()` persist.
 
 use crate::draw::{self, USER_LAYER};
 use crate::gfx::color::Rgba;
@@ -149,7 +149,9 @@ fn load_one_plugin(
     let ast = compile_file(&engine, path).map_err(|e| format!("Script compile error: {}", e))?;
     let mut scope = Scope::new();
     register_constants(&mut scope);
-    call_init(&engine, &mut scope, &ast, session_handle, renderer_handle)
+    scope.push("session", Dynamic::from(session_handle.clone()));
+    scope.push("renderer", Dynamic::from(renderer_handle.clone()));
+    call_init(&engine, &mut scope, &ast)
         .map_err(|e| format!("Script init error: {}", e))?;
 
     let cmds = script_commands.borrow().clone();
@@ -452,7 +454,7 @@ pub fn compile_file(engine: &Engine, path: &Path) -> Result<AST, Box<rhai::EvalA
     engine.compile_file(path.into())
 }
 
-/// Register session handle type so scripts can use it in init(session, renderer).
+/// Register session handle type so scripts can use the global `session`.
 /// Exposes width, height, offset_x, offset_y from the session.
 pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<RefCell<Vec<Effect>>>) {
     engine
@@ -698,7 +700,7 @@ impl ScriptPass {
     }
 }
 
-/// Register renderer handle type so scripts can use it in init(session, renderer).
+/// Register renderer handle type so scripts can use the global `renderer`.
 /// Exposes create_render_texture, view_render_texture, begin_render_pass.
 /// Script-created textures are stored in script_state_handle.
 pub fn register_renderer_handle(
@@ -1444,23 +1446,20 @@ fn register_constants(scope: &mut Scope) {
     scope.push_constant("EFFECT_VIEW_BLENDING_CHANGED_ALPHA", Effect::ViewBlendingChanged(Blending::Alpha));
 }
 
-/// Call the script's `init(session, renderer)` function with options so that new variables
+/// Call the script's `init()` function with options so that new variables
 /// introduced in the scope are retained (rewind_scope false) and the AST
 /// is not re-evaluated (eval_ast false).
+/// `session` and `renderer` are already in scope (registered before this call).
 ///
 /// If the script does not define `init`, this is a no-op (no error).
 pub fn call_init(
     engine: &Engine,
     scope: &mut Scope,
     ast: &AST,
-    session_handle: &Rc<RefCell<Session>>,
-    renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     let options = CallFnOptions::new().eval_ast(false).rewind_scope(false);
 
-    let session = session_handle.clone();
-    let renderer = renderer_handle.clone();
-    match engine.call_fn_with_options::<()>(options, scope, ast, "init", (session, renderer)) {
+    match engine.call_fn_with_options::<()>(options, scope, ast, "init", ()) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "init") => Ok(()),
         Err(e) => Err(e),

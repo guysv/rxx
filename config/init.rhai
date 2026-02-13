@@ -1,6 +1,4 @@
-fn init(session_in, renderer_in) {
-    let session = session_in;
-    let renderer = renderer_in;
+fn init() {
     let lookup_views = #{};
     register_command("lt/on", "Add active view to lookup set");
     register_command("lt/off", "Remove active view from lookup set");

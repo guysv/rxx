@@ -1,8 +1,6 @@
 // @mode-vis.rxx - current mode indicator plugin
 
-fn init(session_in, renderer_in) {
-    let session = session_in;
-    let renderer = renderer_in;
+fn init() {
     print(`mod-vis.rxx initialized`);
 }
 
