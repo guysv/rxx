@@ -1,8 +1,9 @@
 //! Rhai script loading and event-handler lifecycle.
 //!
 //! Follows the [event-handler pattern](https://rhai.rs/book/patterns/events-1.html):
-//! one main script with `init()`; `session` and `renderer` are in scope as globals; custom Scope +
+//! one main script with `init()` and optional `unload()`; `session` and `renderer` are in scope as globals; custom Scope +
 //! CallFnOptions (eval_ast false, rewind_scope false) so variables defined in `init()` persist.
+//! `unload()` is called on each plugin just before unloading/reloading.
 
 use crate::draw::{self, USER_LAYER};
 use crate::gfx::color::Rgba;
@@ -183,6 +184,7 @@ impl ScriptState {
 
 /// Load or reload all plugins from the plugin directory. Discovers *.rxx, loads each,
 /// merges script commands, and replaces ScriptState. Returns an error message for the caller.
+/// Calls `unload()` on each existing plugin just before replacing them.
 pub fn load_plugins(
     script_state_handle: &Rc<RefCell<ScriptState>>,
     session_handle: &Rc<RefCell<Session>>,
@@ -191,6 +193,17 @@ pub fn load_plugins(
 ) -> Result<(), String> {
     if !plugin_dir.is_dir() {
         return Err(format!("Plugin dir is not a directory: {}", plugin_dir.display()));
+    }
+    // Call unload() on each plugin before replacing them.
+    {
+        let mut state = script_state_handle.borrow_mut();
+        for plugin in &mut state.plugins {
+            let _ = call_unload(
+                &plugin.engine,
+                &mut plugin.scope,
+                &plugin.ast.borrow(),
+            );
+        }
     }
     let paths = discover_rxx(&plugin_dir)?;
     let mut all_commands = Vec::new();
@@ -1444,6 +1457,22 @@ fn register_constants(scope: &mut Scope) {
     scope.push_constant("INPUT_STATE_REPEATED", InputState::Repeated);
     scope.push_constant("EFFECT_VIEW_BLENDING_CHANGED_CONSTANT", Effect::ViewBlendingChanged(Blending::Constant));
     scope.push_constant("EFFECT_VIEW_BLENDING_CHANGED_ALPHA", Effect::ViewBlendingChanged(Blending::Alpha));
+}
+
+/// Call the script's `unload()` function. Invoked on each plugin just before
+/// unloading/reloading so scripts can clean up (e.g. release resources).
+///
+/// If the script does not define `unload`, this is a no-op (no error).
+pub fn call_unload(
+    engine: &Engine,
+    scope: &mut Scope,
+    ast: &AST,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    match engine.call_fn::<()>(scope, ast, "unload", ()) {
+        Ok(()) => Ok(()),
+        Err(ref e) if is_function_not_found(e, "unload") => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Call the script's `init()` function with options so that new variables

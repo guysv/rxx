@@ -9,10 +9,20 @@ fn init() {
     let last_p = ();
     let clipboard = renderer.create_render_texture(8, 8);
     let in_progress = false;
+    let active_view_id = ();
     let shader = renderer.create_shader_module(wgsl);
     let pipeline = renderer.create_render_pipeline_with_texture(shader, "vs_main", "fs_main");
     register_command("selection/rotate", "Rotates the selection");
     print(`dev.rxx initialized`);
+}
+
+fn unload() {
+    if in_progress {
+        queue_effect(effect_view_damaged(active_view_id));
+        if session.mode == rotation_mode {
+            session.switch_mode(MODE_NORMAL);
+        }
+    }
 }
 
 fn mouse_input(state, button, cursor) {
@@ -131,7 +141,7 @@ fn shade(encoder) {
 fn switch_mode() {
     if in_progress && session.prev_mode == rotation_mode {
         in_progress = false;
-        queue_effect(effect_view_damaged(session.active_view_id));
+        queue_effect(effect_view_damaged(active_view_id));
     }
 }
 
@@ -144,7 +154,7 @@ fn cmd_selection_rotate(args) {
         accumulated_angle = 0.0;
         let selection = session.selection;
         pivot = selection.center();
-        
+        active_view_id = session.active_view_id;
         renderer.upload_selection_to_texture(session, clipboard);
         queue_active_view_rect_clear(selection);
         session.switch_mode(rotation_mode);
