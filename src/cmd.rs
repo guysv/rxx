@@ -3,7 +3,7 @@ use crate::brush::BrushMode;
 use crate::history::History;
 use crate::parser::*;
 use crate::platform;
-use crate::session::{Direction, Input, Mode, PanState, Tool, VisualState};
+use crate::session::{Direction, Input, Mode, ModeString, PanState, Tool, VisualState};
 
 use memoir::traits::Parse;
 use memoir::*;
@@ -978,6 +978,23 @@ impl Default for Commands {
                 p.then(KeyMapping::parser(&[Mode::Help]))
                     .map(|(_, km)| Command::Map(Box::new(km)))
             })
+            .command("map/script", "Map keys to a command in a script mode", |p| {
+                p.then(Parser::new(
+                    |input: &str| {
+                        let input = input.trim_start();
+                        let (name_str, rest) = quoted().parse(input)
+                            .map_err(|(e, _)| (e, input))?;
+                        let name = ModeString::try_from_str(&name_str)
+                            .map_err(|e| (format!("{}", e).into(), rest))?;
+                        let rest = rest.trim_start();
+                        let (km, rest) =
+                            KeyMapping::parser(&[Mode::ScriptMode(name)]).parse(rest)?;
+                        Ok((km, rest))
+                    },
+                    "<script-mode> <key> <cmd>",
+                ))
+                .map(|(_, km)| Command::Map(Box::new(km)))
+            })
             .command("map/clear!", "Clear all key mappings", |p| {
                 p.value(Command::MapClear)
             })
@@ -1525,6 +1542,23 @@ mod test {
 
         let (_, rest) = p.parse("map <ctrl> :tool sampler {:tool/prev}").unwrap();
         assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn test_map_script_parser() {
+        let p = Commands::default().line_parser();
+        let (cmd, rest) = p.parse(r#":map/script "visual (rotation)" <tab> :v/prev"#).unwrap();
+        assert_eq!(rest, "");
+        match &cmd {
+            Command::Map(km) => {
+                assert_eq!(km.input, Input::Key(platform::Key::Tab));
+                assert!(matches!(
+                    km.modes.as_slice(),
+                    [Mode::ScriptMode(name)] if name.as_str() == "visual (rotation)"
+                ));
+            }
+            _ => panic!("expected Command::Map, got {:?}", cmd),
+        }
     }
 
     #[test]
