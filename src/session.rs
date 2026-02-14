@@ -1992,7 +1992,7 @@ impl Session {
                             }
                             Mode::Present | Mode::Help => {}
                         }
-                    } else {
+                    } else if !matches!(self.mode, Mode::ScriptMode(_)) {
                         self.activate(id);
                         self.center_selection(self.cursor);
                     }
