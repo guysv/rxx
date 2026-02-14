@@ -2,6 +2,7 @@ fn init() {
     let wgsl = read_file("cleanedge.wgsl");
     let rotation_mode = script_mode("visual (rotation)");
     let rotation_angle = 0.0;
+    let accumulated_angle = 0.0;
     let rotation_center = ();
     let pivot = ();
     let drag_start = ();
@@ -38,6 +39,7 @@ fn mouse_input(state, button, cursor) {
     }
 
     if state == INPUT_STATE_RELEASED && button == MOUSE_BUTTON_LEFT && session.mode == rotation_mode {
+        accumulated_angle = rotation_angle;
         drag_start = ();
         last_p = ();
     }
@@ -64,7 +66,7 @@ fn cursor_moved(p) {
             last_p = p;
             let drag_start_session = drag_start * zoom + offset;
             let angle = vector_angle(pivot_session, drag_start_session, p.to_vec2());
-            rotation_angle = angle;
+            rotation_angle = accumulated_angle + angle;
         }
     }
 }
@@ -82,14 +84,14 @@ fn draw() {
             let y1 = pivot.y * d + offset_y;
             draw_line(vec2(x1-6.0, y1), vec2(x1+6.0, y1), rgb8(0xff, 0xff, 0x00));
             draw_line(vec2(x1, y1-6.0), vec2(x1, y1+6.0), rgb8(0xff, 0xff, 0x00));
-            // if drag_start != () {
-            //     let drag_start_session = drag_start * d + offset;
-            //     draw_line(drag_start_session, vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
-            //     if last_p != () {
-            //         // let last_p_session = last_p.to_vec2() * d + offset;
-            //         draw_line(last_p.to_vec2(), vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
-            //     }
-            // }
+            if drag_start != () {
+                let drag_start_session = drag_start * d + offset;
+                draw_line(drag_start_session, vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
+                if last_p != () {
+                    // let last_p_session = last_p.to_vec2() * d + offset;
+                    draw_line(last_p.to_vec2(), vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
+                }
+            }
         }
     } 
 }
@@ -111,6 +113,7 @@ fn shade(encoder) {
 
         let t1 = mat4_translation(-pivot.x, -pivot.y);
         let r = mat4_rotation_z(rotation_angle);
+        print(`rotation_angle: ${rotation_angle}`);
         let t2 = mat4_translation(pivot.x, pivot.y);
         let transform = t2 * r * t1;
         let transform_bind_group = renderer.create_ortho_custom_transform_bind_group(view.frame_width, view.frame_height, transform);
@@ -138,6 +141,7 @@ fn cmd_selection_rotate(args) {
         last_p = ();
         in_progress = true;
         rotation_angle = 0.0;
+        accumulated_angle = 0.0;
         let selection = session.selection;
         pivot = selection.center();
         
