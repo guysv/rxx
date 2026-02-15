@@ -1347,6 +1347,9 @@ fn register_draw_types(engine: &mut Engine) {
         .register_fn("mat4_rotation_z", |angle: f64| {
             Matrix4::<f32>::from_rotation_z(angle as f32)
         })
+        .register_fn("mat4_scale", |sx: f64, sy: f64| {
+            Matrix4::<f32>::from_nonuniform_scale(sx as f32, sy as f32, 1.0)
+        })
         .register_fn("*", |a: Matrix4<f32>, b: Matrix4<f32>| a * b)
         .register_fn("to_string", |m: Matrix4<f32>| format!("{:?}", m));
 

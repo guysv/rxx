@@ -1,12 +1,17 @@
 fn init() {
     let wgsl = read_file("cleanedge.wgsl");
     let rotation_mode = script_mode("visual (rotation)");
+    let scale_mode = script_mode("visual (scale)");
     let rotation_angle = 0.0;
     let accumulated_angle = 0.0;
     let rotation_center = ();
     let pivot = ();
     let drag_start = ();
     let last_p = ();
+    let scale_x = 1.0;
+    let scale_y = 1.0;
+    let accumulated_scale_x = 1.0;
+    let accumulated_scale_y = 1.0;
     let clipboard = renderer.create_render_texture(8, 8);
     let in_progress = false;
     let pasted_once = false;
@@ -15,6 +20,7 @@ fn init() {
     let pipeline = renderer.create_render_pipeline_with_texture(shader, "vs_main", "fs_main");
     let apply_queue = script_queue;
     register_command("selection/rotate", "Rotates the selection");
+    register_command("selection/scale", "Scales the selection");
     print(`dev.rxx initialized`);
 }
 
@@ -35,36 +41,51 @@ fn unload() {
         if session.mode == rotation_mode {
             session.switch_mode(MODE_NORMAL);
         }
+        if session.mode == scale_mode {
+            session.switch_mode(MODE_NORMAL);
+        }
     }
 }
 
 fn mouse_input(state, button, cursor) {
-    if session.mode != rotation_mode {
+    if session.mode != rotation_mode && session.mode != scale_mode {
         return;
     }
-    print(`mouse_input: ${state}, ${button}, ${cursor}`);
     let view = session.view(session.active_view_id);
     let d = view.zoom;
     let cursor = vec2(cursor.x + d/4, cursor.y + d/4);
     let p = session.active_view_sub_coords(cursor, 2);
-    print(`mouse_input: ${p}`);
-    if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_RIGHT && session.mode == rotation_mode {
-        print(`new pivot: ${p}`);
-        if p == pivot {
-            pivot = ();
-        } else {
-            pivot = p;
+    if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_RIGHT {
+        if session.mode == rotation_mode || session.mode == scale_mode {
+            if p == pivot {
+                pivot = ();
+            } else {
+                pivot = p;
+            }
         }
     }
 
-    if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_LEFT && session.mode == rotation_mode {
-        drag_start = p;
+    if session.mode == rotation_mode {
+        if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_LEFT {
+            drag_start = p;
+        }
+        if state == INPUT_STATE_RELEASED && button == MOUSE_BUTTON_LEFT {
+            accumulated_angle = rotation_angle;
+            drag_start = ();
+            last_p = ();
+        }
     }
 
-    if state == INPUT_STATE_RELEASED && button == MOUSE_BUTTON_LEFT && session.mode == rotation_mode {
-        accumulated_angle = rotation_angle;
-        drag_start = ();
-        last_p = ();
+    if session.mode == scale_mode {
+        if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_LEFT {
+            drag_start = p;
+        }
+        if state == INPUT_STATE_RELEASED && button == MOUSE_BUTTON_LEFT {
+            accumulated_scale_x = scale_x;
+            accumulated_scale_y = scale_y;
+            drag_start = ();
+            last_p = ();
+        }
     }
 }
 
@@ -73,29 +94,47 @@ fn vector_angle(pivot, from_pt, to_pt) {
     let v2 = to_pt - pivot;
     let dot = v1.x * v2.x + v1.y * v2.y;
     let det = v1.x * v2.y - v1.y * v2.x;
-    // print(`v1: ${v1}, v2: ${v2}, dot: ${dot}, det: ${det}`);
     return atan(det, dot);
 }
 
+fn vector_distance(a, b) {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    return (dx * dx + dy * dy).sqrt();
+}
+
 fn cursor_moved(p) {
-    if drag_start != () {
-        let view = session.view(session.active_view_id);
-        let zoom = view.zoom;
-        let offset = vec2(session.offset_x + view.offset.x, session.offset_y + view.offset.y);
-        let pivot_session = pivot * zoom + offset;
+    if drag_start == () {
+        return;
+    }
+    let view = session.view(session.active_view_id);
+    let zoom = view.zoom;
+    let offset = vec2(session.offset_x + view.offset.x, session.offset_y + view.offset.y);
+    let pivot_session = pivot * zoom + offset;
+    if session.mode == rotation_mode {
         if p == pivot_session || p == drag_start || pivot_session == drag_start {
-            print(`p == pivot_session || p == drag_start || pivot_session == drag_start`);
-        } else {
-            last_p = p;
-            let drag_start_session = drag_start * zoom + offset;
-            let angle = vector_angle(pivot_session, drag_start_session, p.to_vec2());
-            rotation_angle = accumulated_angle + angle;
+            return;
+        }
+        last_p = p;
+        let drag_start_session = drag_start * zoom + offset;
+        let angle = vector_angle(pivot_session, drag_start_session, p.to_vec2());
+        rotation_angle = accumulated_angle + angle;
+    }
+    if session.mode == scale_mode {
+        last_p = p;
+        let drag_start_session = drag_start * zoom + offset;
+        let dist_start = vector_distance(pivot_session, drag_start_session);
+        let dist_now = vector_distance(pivot_session, p.to_vec2());
+        if dist_start > 0.001 {
+            let scale = dist_now / dist_start;
+            scale_x = accumulated_scale_x * scale;
+            scale_y = accumulated_scale_y * scale;
         }
     }
 }
 
 fn draw() {
-    if session.mode == rotation_mode {    
+    if session.mode == rotation_mode || session.mode == scale_mode {
         let view = session.view(session.active_view_id);
         let offset_x = session.offset_x + view.offset.x;
         let offset_y = session.offset_y + view.offset.y;
@@ -111,12 +150,11 @@ fn draw() {
                 let drag_start_session = drag_start * d + offset;
                 draw_line(drag_start_session, vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
                 if last_p != () {
-                    // let last_p_session = last_p.to_vec2() * d + offset;
                     draw_line(last_p.to_vec2(), vec2(x1, y1), rgb8(0xff, 0xff, 0x00));
                 }
             }
         }
-    } 
+    }
 }
 
 fn shade(encoder) {
@@ -143,10 +181,14 @@ fn shade(encoder) {
         let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
 
         let t1 = mat4_translation(-pivot.x, -pivot.y);
-        let r = mat4_rotation_z(rotation_angle);
-        print(`rotation_angle: ${rotation_angle}`);
         let t2 = mat4_translation(pivot.x, pivot.y);
-        let transform = t2 * r * t1;
+        let transform = if session.mode == rotation_mode {
+            let r = mat4_rotation_z(rotation_angle);
+            t2 * r * t1
+        } else {
+            let s = mat4_scale(scale_x, scale_y);
+            t2 * s * t1
+        };
         let transform_bind_group = renderer.create_ortho_custom_transform_bind_group(view.frame_width, view.frame_height, transform);
         let clipboard_bind_group = renderer.create_texture_sampler_bind_group(clipboard);
 
@@ -161,6 +203,12 @@ fn shade(encoder) {
 
 fn switch_mode() {
     if in_progress && session.prev_mode == rotation_mode {
+        in_progress = false;
+        if !pasted_once {
+            queue_effect(effect_view_damaged(active_view_id));
+        }
+    }
+    if in_progress && session.prev_mode == scale_mode {
         in_progress = false;
         if !pasted_once {
             queue_effect(effect_view_damaged(active_view_id));
@@ -182,6 +230,27 @@ fn cmd_selection_rotate(args) {
         renderer.upload_selection_to_texture(session, clipboard);
         queue_active_view_rect_clear(selection);
         session.switch_mode(rotation_mode);
+        return true;
+    }
+    return false;
+}
+
+fn cmd_selection_scale(args) {
+    if session.selection != () {
+        drag_start = ();
+        last_p = ();
+        in_progress = true;
+        pasted_once = false;
+        scale_x = 1.0;
+        scale_y = 1.0;
+        accumulated_scale_x = 1.0;
+        accumulated_scale_y = 1.0;
+        let selection = session.selection;
+        pivot = selection.center();
+        active_view_id = session.active_view_id;
+        renderer.upload_selection_to_texture(session, clipboard);
+        queue_active_view_rect_clear(selection);
+        session.switch_mode(scale_mode);
         return true;
     }
     return false;
