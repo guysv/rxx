@@ -14,6 +14,7 @@ use crate::gfx::{Point, sprite2d};
 use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
 use crate::platform::{InputState, LogicalDelta, MouseButton};
+use crate::cmd::Command;
 use crate::session::{Blending, Effect, MessageType, Mode, ModeString, ScriptEffect, Session, SessionCoords, VisualState};
 use crate::view::{View, ViewExtent, ViewId, ViewResource};
 use crate::wgpu::{self, Texture};
@@ -34,6 +35,49 @@ pub type UserBatch = (
     Rc<RefCell<shape2d::Batch>>,
     Rc<RefCell<Option<sprite2d::Batch>>>,
 );
+
+/// Dispatch a command with script-first semantics.
+///
+/// Must be called when `session_handle` is **not** borrowed, so that script
+/// handlers can access the session. If a script handles the command
+/// (`call_script_command` returns `Ok(true)`), the built-in is skipped.
+/// Otherwise, the session is borrowed and the built-in runs.
+pub fn dispatch_command(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    session_handle: &Rc<RefCell<Session>>,
+    cmd: Command,
+) {
+    // Try script handlers first (session is NOT borrowed here).
+    if let Some((name, args)) = cmd.to_invocation() {
+        match script_state_handle.borrow_mut().call_script_command(&name, args) {
+            Ok(true) => return, // Script handled it.
+            Ok(false) => {}     // Fall through to built-in.
+            Err(e) => {
+                session_handle.borrow_mut().message(
+                    format!("Script command '{}' error: {}", name, e),
+                    MessageType::Error,
+                );
+                // Fall through to built-in on error.
+            }
+        }
+    }
+
+    // For ScriptCommand (unknown to parser) that no script handled: error.
+    if let Command::ScriptCommand(ref name, _) = cmd {
+        session_handle.borrow_mut().message(
+            format!(
+                "Unknown command: '{}' (no script handler cmd_{})",
+                name,
+                name.replace('/', "_")
+            ),
+            MessageType::Error,
+        );
+        return;
+    }
+
+    // Script didn't handle it — run the built-in.
+    session_handle.borrow_mut().command(cmd);
+}
 
 /// Read-only view handle exposed to Rhai scripts.
 #[derive(Debug, Clone)]
@@ -274,15 +318,13 @@ impl ScriptState {
         self.plugin_dir.as_ref()
     }
 
-    /// Traverse effects: call each plugin's `view_added` / `view_removed` handlers and run script
-    /// commands (try each plugin until one handles it). Returns effects not consumed for the renderer.
+    /// Traverse effects: call each plugin's event handlers (`view_added`, `view_removed`,
+    /// `mouse_input`, etc.). Returns effects not consumed for the renderer.
     pub fn call_view_effects(
         &mut self,
         effects: &[Effect],
-        session_handle: &Rc<RefCell<Session>>,
     ) -> Vec<Effect> {
         let mut renderer_effects = Vec::new();
-        let mut script_commands = Vec::new();
         for eff in effects {
             match eff {
                 Effect::ViewAdded(id) => {
@@ -306,9 +348,6 @@ impl ScriptState {
                         );
                     }
                     renderer_effects.push(eff.clone());
-                }
-                Effect::ScriptEffect(ScriptEffect::RunScriptCommand(name, args)) => {
-                    script_commands.push((name.clone(), args.clone()));
                 }
                 Effect::ScriptEffect(ScriptEffect::MouseInput(state, button, p)) => {
                     for plugin in &mut self.plugins {
@@ -357,23 +396,6 @@ impl ScriptState {
                     }
                 }
                 other => renderer_effects.push(other.clone()),
-            }
-        }
-        for (name, args) in script_commands {
-            match self.call_script_command(&name, args) {
-                Ok(true) => {}
-                Ok(false) => {
-                    session_handle.borrow_mut().message(
-                        format!("Script command '{}' has no handler cmd_{}", name, name),
-                        MessageType::Error,
-                    );
-                }
-                Err(e) => {
-                    session_handle.borrow_mut().message(
-                        format!("Script command '{}' error: {}", name, e),
-                        MessageType::Error,
-                    );
-                }
             }
         }
         let mut script_state_effects = self.effects.borrow_mut();
@@ -432,7 +454,13 @@ impl ScriptState {
     }
 
     /// Call a script command handler `cmd_<name>(args)` on each plugin in turn.
-    /// Returns Ok(true) if any plugin handled it, Ok(false) if none.
+    ///
+    /// A handler can:
+    /// - Return `true`  → command is handled, skip built-in.
+    /// - Return `false` → command is not handled, try next plugin / built-in.
+    /// - Return nothing  → treated as `false` (not handled).
+    ///
+    /// Returns `Ok(true)` if any plugin handled it, `Ok(false)` if none did.
     pub fn call_script_command(
         &mut self,
         name: &str,
@@ -441,13 +469,20 @@ impl ScriptState {
         let handler_name = format!("cmd_{}", name.replace('/', "_"));
         let rhai_args: Array = args.into_iter().map(Dynamic::from).collect();
         for plugin in &mut self.plugins {
-            match plugin.engine.call_fn::<()>(
+            match plugin.engine.call_fn::<Dynamic>(
                 &mut plugin.scope,
                 &plugin.ast.borrow(),
                 &handler_name,
                 (rhai_args.clone(),),
             ) {
-                Ok(()) => return Ok(true),
+                Ok(val) => {
+                    // true  → handled; false / () / anything else → not handled.
+                    if val.as_bool().unwrap_or(false) {
+                        return Ok(true);
+                    }
+                    // This plugin explicitly declined; try the next one.
+                    continue;
+                }
                 Err(ref e) if is_function_not_found(e, &handler_name) => continue,
                 Err(e) => return Err(e),
             }
@@ -498,6 +533,9 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         })
         .register_fn("switch_mode", |s: &mut Rc<RefCell<Session>>, mode: Mode| {
             s.borrow_mut().switch_mode(mode);
+        })
+        .register_fn("run_builtin", |s: &mut Rc<RefCell<Session>>, invocation: &str| {
+            s.borrow_mut().run_builtin(invocation);
         })
         .register_fn("script_mode", |name: String| {
             Mode::ScriptMode(ModeString::try_from_str(name.as_str())
@@ -1413,8 +1451,12 @@ pub fn register_wgpu_types(engine: &mut Engine) {
     engine.register_type_with_name::<Rc<RefCell<wgpu_types::CommandEncoder>>>("CommandEncoder");
 }
 
-/// Register the `register_command(name, help)` function for scripts to register custom commands.
-/// Commands are collected in the provided `Rc<RefCell<Vec<(String, String)>>>`.
+/// Register the `register_command(name, help)` function for scripts.
+///
+/// This is used **only** for help-view content and command-line auto-completion.
+/// It does *not* affect command dispatch: scripts handle commands by defining
+/// `cmd_<name>(args)` functions, which are tried before built-in implementations
+/// regardless of whether the command was registered here.
 fn register_command_api(engine: &mut Engine, commands: Rc<RefCell<Vec<(String, String)>>>) {
     engine.register_fn("register_command", move |name: &str, help: &str| {
         commands

@@ -428,10 +428,26 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             }
         }
 
+        // Drain commands queued by user-facing entry points (key bindings,
+        // cmdline, mouse actions) and dispatch them with script-first
+        // semantics. We must drop the session borrow first so that script
+        // handlers can access the session.
+        let pending_cmds: Vec<_> = session.pending_commands.drain(..).collect();
         drop(session);
+
+        for cmd in pending_cmds {
+            script::dispatch_command(&script_state_handle, &session_handle, cmd);
+        }
+
+        // Commands dispatched above may have generated new effects (e.g.
+        // undo/redo setting view state to Damaged). Collect them and merge
+        // with the effects from update().
+        let mut all_effects = effects;
+        all_effects.extend(session_handle.borrow_mut().collect_effects());
+
         let renderer_effects = script_state_handle
             .borrow_mut()
-            .call_view_effects(&effects, &session_handle);
+            .call_view_effects(&all_effects);
 
         render_timer.run(|avg| {
             Renderer::frame(

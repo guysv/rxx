@@ -147,6 +147,152 @@ impl Command {
                 | Self::SelectionOffset(_, _)
         )
     }
+
+    /// Return the canonical `(name, args)` invocation for this command, using
+    /// the same names as the command-line parser (i.e. what the user types after `:`).
+    /// Returns `None` for `Noop`.
+    pub fn to_invocation(&self) -> Option<(String, Vec<String>)> {
+        let (name, args) = match self {
+            Self::Noop => return None,
+
+            // Brush
+            Self::Brush => ("brush", vec![]),
+            Self::BrushSet(m) => ("brush/set", vec![format!("{}", m)]),
+            Self::BrushToggle(m) => ("brush/toggle", vec![format!("{}", m)]),
+            Self::BrushSize(Op::Incr) => ("brush/size", vec!["+".into()]),
+            Self::BrushSize(Op::Decr) => ("brush/size", vec!["-".into()]),
+            Self::BrushSize(Op::Set(s)) => ("brush/size", vec![format!("{}", s)]),
+            Self::BrushUnset(m) => ("brush/unset", vec![format!("{}", m)]),
+
+            // Files
+            Self::Edit(paths) => ("e", paths.clone()),
+            Self::EditFrames(paths) => ("e/frames", paths.clone()),
+            Self::Export(None, path) => ("export", vec![path.clone()]),
+            Self::Export(Some(s), path) => ("export", vec![format!("@{}x", s), path.clone()]),
+            Self::Write(None) => ("w", vec![]),
+            Self::Write(Some(path)) => ("w", vec![path.clone()]),
+            Self::WriteFrames(None) => ("w/frames", vec![]),
+            Self::WriteFrames(Some(dir)) => ("w/frames", vec![dir.clone()]),
+            Self::WriteQuit => ("wq", vec![]),
+            Self::Quit => ("q", vec![]),
+            Self::QuitAll => ("qa", vec![]),
+            Self::ForceQuit => ("q!", vec![]),
+            Self::ForceQuitAll => ("qa!", vec![]),
+            Self::Source(None) => ("source", vec![]),
+            Self::Source(Some(path)) => ("source", vec![path.clone()]),
+            Self::SetPluginDir(path) => ("plugin-dir", vec![path.clone()]),
+            Self::OpenPluginDir => ("plugin-dir/open", vec![]),
+            Self::ChangeDir(None) => ("cd", vec![]),
+            Self::ChangeDir(Some(dir)) => ("cd", vec![dir.clone()]),
+
+            // Navigation
+            Self::Pan(x, y) => ("pan", vec![format!("{}", x), format!("{}", y)]),
+            Self::Zoom(Op::Incr) => ("zoom", vec!["+".into()]),
+            Self::Zoom(Op::Decr) => ("zoom", vec!["-".into()]),
+            Self::Zoom(Op::Set(z)) => ("zoom", vec![format!("{}", z)]),
+
+            // Mode / Tool
+            Self::Mode(m) => ("mode", vec![format!("{}", m)]),
+            Self::Tool(Tool::Brush) => ("brush", vec![]),
+            Self::Tool(Tool::FloodFill) => ("flood", vec![]),
+            Self::Tool(Tool::Sampler) => ("sampler", vec![]),
+            Self::Tool(Tool::Pan(_)) => ("tool", vec!["pan".into()]),
+            Self::ToolPrev => ("tool/prev", vec![]),
+
+            // Frames
+            Self::FrameAdd => ("f/add", vec![]),
+            Self::FrameClone(i) => ("f/clone", vec![format!("{}", i)]),
+            Self::FrameRemove => ("f/remove", vec![]),
+            Self::FramePrev => ("f/prev", vec![]),
+            Self::FrameNext => ("f/next", vec![]),
+            Self::FrameResize(w, h) => ("f/resize", vec![format!("{}", w), format!("{}", h)]),
+
+            // Palette
+            Self::PaletteAdd(c) => ("p/add", vec![format!("{}", c)]),
+            Self::PaletteClear => ("p/clear", vec![]),
+            Self::PaletteGradient(cs, ce, n) => (
+                "p/gradient",
+                vec![format!("{}", cs), format!("{}", ce), format!("{}", n)],
+            ),
+            Self::PaletteSample => ("p/sample", vec![]),
+            Self::PaletteSort => ("p/sort", vec![]),
+            Self::PaletteWrite(path) => ("p/write", vec![path.clone()]),
+
+            // Selection
+            Self::SelectionMove(x, y) => {
+                ("selection/move", vec![format!("{}", x), format!("{}", y)])
+            }
+            Self::SelectionResize(x, y) => {
+                ("selection/resize", vec![format!("{}", x), format!("{}", y)])
+            }
+            Self::SelectionOffset(x, y) => {
+                ("selection/offset", vec![format!("{}", x), format!("{}", y)])
+            }
+            Self::SelectionExpand => ("selection/expand", vec![]),
+            Self::SelectionPaste => ("selection/paste", vec![]),
+            Self::SelectionYank => ("selection/yank", vec![]),
+            Self::SelectionCut => ("selection/cut", vec![]),
+            Self::SelectionFill(None) => ("selection/fill", vec![]),
+            Self::SelectionFill(Some(c)) => ("selection/fill", vec![format!("{}", c)]),
+            Self::SelectionErase => ("selection/erase", vec![]),
+            Self::SelectionJump(Direction::Forward) => ("selection/jump", vec!["+".into()]),
+            Self::SelectionJump(Direction::Backward) => ("selection/jump", vec!["-".into()]),
+            Self::SelectionFlip(Axis::Horizontal) => ("selection/flip", vec!["x".into()]),
+            Self::SelectionFlip(Axis::Vertical) => ("selection/flip", vec!["y".into()]),
+
+            // Paint
+            Self::PaintColor(rgba, x, y) => (
+                "paint/color",
+                vec![format!("{}", rgba), format!("{}", x), format!("{}", y)],
+            ),
+            Self::PaintForeground(x, y) => {
+                ("paint/fg", vec![format!("{}", x), format!("{}", y)])
+            }
+            Self::PaintBackground(x, y) => {
+                ("paint/bg", vec![format!("{}", x), format!("{}", y)])
+            }
+            Self::PaintPalette(i, x, y) => {
+                ("paint/p", vec![format!("{}", i), format!("{}", x), format!("{}", y)])
+            }
+            Self::PaintLine(rgba, x1, y1, x2, y2) => (
+                "paint/line",
+                vec![
+                    format!("{}", rgba),
+                    format!("{}", x1),
+                    format!("{}", y1),
+                    format!("{}", x2),
+                    format!("{}", y2),
+                ],
+            ),
+
+            // Settings
+            Self::Set(s, v) => ("set", vec![format!("{}", s), "=".into(), format!("{}", v)]),
+            Self::Toggle(s) => ("toggle", vec![s.clone()]),
+            Self::Reset => ("reset!", vec![]),
+            Self::Map(_) | Self::MapClear => ("map/clear!", vec![]),
+            Self::Echo(v) => ("echo", vec![format!("{}", v)]),
+
+            Self::Fill(None) => ("v/fill", vec![]),
+            Self::Fill(Some(c)) => ("v/fill", vec![format!("{}", c)]),
+            Self::Slice(None) => ("slice", vec![]),
+            Self::Slice(Some(n)) => ("slice", vec![format!("{}", n)]),
+            Self::SwapColors => ("swap", vec![]),
+            Self::Undo => ("undo", vec![]),
+            Self::Redo => ("redo", vec![]),
+
+            // View
+            Self::ViewCenter => ("v/center", vec![]),
+            Self::ViewNext => ("v/next", vec![]),
+            Self::ViewPrev => ("v/prev", vec![]),
+
+            // Crop is currently dead code
+            Self::Crop(_) => return None,
+
+            // Script command: already has (name, args)
+            Self::ScriptCommand(name, args) => (name.as_str(), args.clone()),
+        };
+        Some((name.to_string(), args))
+    }
 }
 
 impl fmt::Display for Command {

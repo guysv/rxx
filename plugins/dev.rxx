@@ -16,6 +16,11 @@ fn init() {
     print(`dev.rxx initialized`);
 }
 
+fn cmd_selection_paste(args) {
+    print(`cmd_selection_paste: ${args}`);
+    return false;
+}
+
 fn unload() {
     if in_progress {
         queue_effect(effect_view_damaged(active_view_id));

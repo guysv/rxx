@@ -176,7 +176,6 @@ impl Deref for Selection {
 
 #[derive(Clone)]
 pub enum ScriptEffect {
-    RunScriptCommand(String, Vec<String>),
     MouseInput(InputState, platform::MouseButton, Point<Session, f32>),
     MouseWheel(LogicalDelta),
     CursorMoved(Point<Session, f32>),
@@ -759,6 +758,11 @@ pub struct Session {
     pending_plugin_dir: PathBuf,
     /// Whether the plugin directory was changed and needs reloading.
     pending_plugin_dir_dirty: bool,
+
+    /// Commands queued by user-facing entry points (key bindings, cmdline,
+    /// mouse actions). Drained after `update()` and dispatched through
+    /// script-first logic outside the session borrow.
+    pub pending_commands: Vec<Command>,
 }
 
 impl Session {
@@ -853,6 +857,7 @@ impl Session {
             queue: Vec::new(),
             pending_plugin_dir: initial_plugin_dir,
             pending_plugin_dir_dirty: false,
+            pending_commands: Vec::new(),
         }
     }
 
@@ -1093,20 +1098,6 @@ impl Session {
 
         if self.views.is_empty() {
             self.quit(ExitReason::Normal);
-        } else {
-            for v in self.views.iter_mut() {
-                if !v.ops.is_empty() {
-                    self.effects
-                        .push(Effect::ViewOps(v.id, v.ops.drain(..).collect()));
-                }
-                match v.state {
-                    ViewState::Dirty(_) => {}
-                    ViewState::Damaged(extent) => {
-                        self.effects.push(Effect::ViewDamaged(v.id, extent));
-                    }
-                    ViewState::Okay => {}
-                }
-            }
         }
 
         match exec {
@@ -1129,7 +1120,27 @@ impl Session {
         // Make sure we don't have rounding errors
         debug_assert_eq!(self.offset, self.offset.map(|a| a.floor()));
 
-        // Return and drain accumulated effects
+        // Collect view ops/damage and drain all accumulated effects.
+        self.collect_effects()
+    }
+
+    /// Collect view ops and damage state into effects, then drain and return
+    /// all accumulated effects. Called at the end of `update()` and again
+    /// after deferred command dispatch in the main loop.
+    pub fn collect_effects(&mut self) -> Vec<Effect> {
+        for v in self.views.iter_mut() {
+            if !v.ops.is_empty() {
+                self.effects
+                    .push(Effect::ViewOps(v.id, v.ops.drain(..).collect()));
+            }
+            match v.state {
+                ViewState::Dirty(_) => {}
+                ViewState::Damaged(extent) => {
+                    self.effects.push(Effect::ViewDamaged(v.id, extent));
+                }
+                ViewState::Okay => {}
+            }
+        }
         self.effects.drain(..).collect()
     }
 
@@ -2069,7 +2080,7 @@ impl Session {
                             Mode::Visual(VisualState::Pasting) => {
                                 // Re-center the selection in-case we've switched layer.
                                 self.center_selection(self.cursor);
-                                self.command(Command::SelectionPaste);
+                                self.push_command(Command::SelectionPaste);
                             }
                             Mode::Present | Mode::Help => {}
                         }
@@ -2216,7 +2227,7 @@ impl Session {
             self.key_bindings
                 .find(Input::Character(c), mods, InputState::Pressed, self.mode)
         {
-            self.command(kb.command);
+            self.push_command(kb.command);
         }
     }
 
@@ -2301,7 +2312,7 @@ impl Session {
                 // on key repeats. For regular key bindings, we run the command
                 // depending on if it's supposed to repeat.
                 if (repeat && kb.command.repeats() && !kb.is_toggle) || !repeat {
-                    self.command(kb.command);
+                    self.push_command(kb.command);
                 }
                 return;
             }
@@ -2506,10 +2517,12 @@ impl Session {
     /// Commands
     ///////////////////////////////////////////////////////////////////////////
 
-    /// Process a command.
-    fn command(&mut self, cmd: Command) {
+    /// Process a built-in command directly. Internal/recursive calls (e.g.
+    /// `SelectionFlip` calling `SelectionErase`) use this. External entry
+    /// points (key bindings, cmdline) go through `push_command` so that
+    /// script-first dispatch can happen outside the session borrow.
+    pub(crate) fn command(&mut self, cmd: Command) {
         debug!("command: {:?}", cmd);
-
         match cmd {
             Command::Mode(m) => {
                 self.toggle_mode(m);
@@ -2829,9 +2842,18 @@ impl Session {
             Command::Noop => {
                 // Nothing happening!
             }
-            Command::ScriptCommand(name, args) => {
-                // Dispatch to script handler via effect
-                self.effects.push(Effect::ScriptEffect(ScriptEffect::RunScriptCommand(name, args)));
+            Command::ScriptCommand(ref name, _) => {
+                // This branch is reached only when `command()` already tried
+                // script dispatch and no handler was found. Should not normally
+                // happen (handled above), but kept for safety.
+                self.message(
+                    format!(
+                        "Unknown command: '{}' (no script handler cmd_{})",
+                        name,
+                        name.replace('/', "_")
+                    ),
+                    MessageType::Error,
+                );
             }
             Command::ChangeDir(dir) => {
                 let home = self.base_dirs.home_dir().to_path_buf();
@@ -3173,6 +3195,24 @@ impl Session {
         };
     }
 
+    /// Parse an invocation string (e.g. `"selection/paste"`) and run only the
+    /// built-in (Rust) implementation, skipping script-first dispatch.
+    /// This is exposed to scripts so they can delegate to the default behavior.
+    pub fn run_builtin(&mut self, invocation: &str) {
+        let input = format!(":{}", invocation.trim());
+        match self.cmdline.parse(&input) {
+            Ok(cmd) => self.command(cmd),
+            Err(e) => self.message(format!("Error: {}", e), MessageType::Error),
+        }
+    }
+
+    /// Queue a command for script-first dispatch. The command will be
+    /// dispatched after `update()` returns, outside the session borrow,
+    /// so that script handlers can access the session.
+    fn push_command(&mut self, cmd: Command) {
+        self.pending_commands.push(cmd);
+    }
+
     fn cmdline_hide(&mut self) {
         self.switch_mode(self.prev_mode.unwrap_or(Mode::Normal));
     }
@@ -3199,7 +3239,7 @@ impl Session {
         match self.cmdline.parse(&input) {
             Err(e) => self.message(format!("Error: {}", e), MessageType::Error),
             Ok(cmd) => {
-                self.command(cmd);
+                self.push_command(cmd);
                 self.cmdline.history.add(input);
             }
         }
