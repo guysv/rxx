@@ -405,7 +405,7 @@ impl fmt::Display for Input {
 /// Priority tier of a key binding. Higher tier wins when multiple bindings match.
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum BindingTier {
-    /// From `:map` — applies to Normal + Visual.
+    /// From `:map` — applies to Normal, Visual, and script modes.
     General,
     /// From `:map/normal`, `:map/visual`, `:map/help` — applies to a fixed set of built-in modes.
     ModeSpecific(Vec<Mode>),
@@ -454,7 +454,9 @@ impl KeyBinding {
     /// Check whether this binding applies to the given mode.
     pub fn mode_matches(&self, mode: Mode) -> bool {
         match &self.tier {
-            BindingTier::General => matches!(mode, Mode::Normal | Mode::Visual(_)),
+            BindingTier::General => {
+                matches!(mode, Mode::Normal | Mode::Visual(_) | Mode::ScriptMode(_))
+            }
             BindingTier::ModeSpecific(modes) => modes.contains(&mode),
             BindingTier::Script(name) => match mode {
                 Mode::ScriptMode(ref current) => current.as_str().starts_with(name.as_str()),

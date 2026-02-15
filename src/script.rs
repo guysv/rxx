@@ -185,6 +185,7 @@ fn load_one_plugin(
     register_session_handle(&mut engine, script_state_handle.borrow_mut().effects.clone());
     register_renderer_handle(&mut engine);
     register_wgpu_types(&mut engine);
+    register_script_queue(&mut engine);
     let plugin_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
     register_system_api(&mut engine, plugin_dir);
 
@@ -196,6 +197,7 @@ fn load_one_plugin(
     register_constants(&mut scope);
     scope.push("session", Dynamic::from(session_handle.clone()));
     scope.push("renderer", Dynamic::from(renderer_handle.clone()));
+    scope.push("script_queue", Dynamic::from(ScriptQueue::new()));
     call_init(&engine, &mut scope, &ast)
         .map_err(|e| format!("Script init error: {}", e))?;
 
@@ -534,6 +536,9 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         .register_fn("switch_mode", |s: &mut Rc<RefCell<Session>>, mode: Mode| {
             s.borrow_mut().switch_mode(mode);
         })
+        .register_fn("touch_active_view", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow_mut().active_view_mut().touch();
+        })
         .register_fn("run_builtin", |s: &mut Rc<RefCell<Session>>, invocation: &str| {
             s.borrow_mut().run_builtin(invocation);
         })
@@ -632,6 +637,66 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         .register_type_with_name::<Effect>("Effect")
         .register_fn("effect_view_paint_final", |shapes: &[Shape]| Effect::ViewPaintFinal(shapes.to_vec()))
         .register_fn("effect_view_damaged", |id: i64| Effect::ViewDamaged(ViewId(id as u16), None));
+}
+
+/// Queue for passing messages from command handlers to `shade(encoder)`.
+/// Scripts push from `cmd_*(args)` and drain in `shade()`.
+#[derive(Clone, Debug)]
+pub struct ScriptQueue {
+    inner: Rc<RefCell<Vec<Dynamic>>>,
+}
+
+impl ScriptQueue {
+    pub fn new() -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(Vec::new())),
+        }
+    }
+
+    pub fn push(&mut self, msg: Dynamic) {
+        self.inner.borrow_mut().push(msg);
+    }
+
+    /// Remove and return the next message, or `()` if empty.
+    pub fn pop(&mut self) -> Dynamic {
+        let mut v = self.inner.borrow_mut();
+        if v.is_empty() {
+            Dynamic::UNIT
+        } else {
+            v.remove(0)
+        }
+    }
+
+    pub fn len(&mut self) -> i64 {
+        self.inner.borrow().len() as i64
+    }
+
+    pub fn is_empty(&mut self) -> bool {
+        self.inner.borrow().is_empty()
+    }
+
+    /// Remove and return all messages as an array, clearing the queue.
+    pub fn take_all(&mut self) -> Array {
+        let mut v = self.inner.borrow_mut();
+        v.drain(..).collect()
+    }
+}
+
+impl Default for ScriptQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Register the shade queue type so scripts can use `script_queue.push(msg)` and drain in `shade()`.
+pub fn register_script_queue(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<ScriptQueue>("ShadeQueue")
+        .register_fn("push", ScriptQueue::push)
+        .register_fn("pop", ScriptQueue::pop)
+        .register_fn("len", ScriptQueue::len)
+        .register_fn("is_empty", ScriptQueue::is_empty)
+        .register_fn("take_all", ScriptQueue::take_all);
 }
 
 /// Load op for script render pass color attachments.
