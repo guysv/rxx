@@ -802,7 +802,7 @@ pub fn draw_help(session: &Session, text: &mut TextBatch, shape: &mut shape2d::B
         .key_bindings
         .iter()
         .filter_map(|kb| kb.display.as_ref().map(|d| (d, kb)))
-        .partition(|(_, kb)| kb.modes.contains(&Mode::Normal));
+        .partition(|(_, kb)| kb.mode_matches(Mode::Normal));
 
     let mut line = (0..(session.height as usize - self::LINE_HEIGHT as usize * 4))
         .rev()
