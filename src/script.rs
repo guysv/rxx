@@ -24,9 +24,18 @@ use rhai::{Array, CallFnOptions, Dynamic, Engine, ImmutableString, Scope, AST};
 
 use std::any::TypeId;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
+
+/// Script file basename (file stem) for use as plugin key, e.g. "rotate-scale" from "rotate-scale.rxx".
+fn plugin_basename(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string()
+}
 
 /// Type alias for the user batches shared between script and session.
 /// (shape batch, sprite batch for text). Sprite batch is created lazily with font size.
@@ -200,8 +209,8 @@ pub struct LoadedPlugin {
 pub struct ScriptState {
     /// Plugin directory (where *.rxx were discovered).
     pub plugin_dir: Option<PathBuf>,
-    /// Loaded plugins, one per .rxx file.
-    pub plugins: Vec<LoadedPlugin>,
+    /// Loaded plugins keyed by script file basename (file stem), e.g. "rotate-scale".
+    pub plugins: HashMap<String, LoadedPlugin>,
     /// Effects queued by plugins.
     pub effects: Rc<RefCell<Vec<Effect>>>,
 }
@@ -268,7 +277,7 @@ impl ScriptState {
     pub fn new() -> Self {
         Self {
             plugin_dir: None,
-            plugins: Vec::new(),
+            plugins: HashMap::new(),
             effects: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -294,7 +303,7 @@ pub fn load_plugins(
     // Call unload() on each plugin before replacing them.
     {
         let mut state = script_state_handle.borrow_mut();
-        for plugin in &mut state.plugins {
+        for plugin in state.plugins.values_mut() {
             let _ = call_unload(
                 &plugin.engine,
                 &mut plugin.scope,
@@ -304,12 +313,12 @@ pub fn load_plugins(
     }
     let paths = discover_rxx(&plugin_dir)?;
     let mut all_commands = Vec::new();
-    let mut plugins = Vec::with_capacity(paths.len());
+    let mut plugins = HashMap::with_capacity(paths.len());
     for path in &paths {
         match load_one_plugin(path, session_handle, renderer_handle, script_state_handle) {
             Ok((plugin, cmds)) => {
                 all_commands.extend(cmds);
-                plugins.push(plugin);
+                plugins.insert(plugin_basename(path), plugin);
             }
             Err(e) => return Err(format!("{}: {}", path.display(), e)),
         }
@@ -347,8 +356,9 @@ impl ScriptState {
         if current_paths.len() != self.plugins.len() {
             return true;
         }
-        for (i, path) in current_paths.iter().enumerate() {
-            if let Some(plugin) = self.plugins.get(i) {
+        for path in &current_paths {
+            let key = plugin_basename(path);
+            if let Some(plugin) = self.plugins.get(&key) {
                 if plugin.path != *path {
                     return true;
                 }
@@ -381,71 +391,95 @@ impl ScriptState {
         for eff in effects {
             match eff {
                 Effect::ViewAdded(id) => {
-                    for plugin in &mut self.plugins {
-                        let _ = call_view_added(
-                            &plugin.engine,
-                            &mut plugin.scope,
-                            &plugin.ast.borrow(),
-                            id.raw() as i64,
-                        );
+                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+                    keys.sort();
+                    for k in &keys {
+                        if let Some(plugin) = self.plugins.get_mut(k) {
+                            let _ = call_view_added(
+                                &plugin.engine,
+                                &mut plugin.scope,
+                                &plugin.ast.borrow(),
+                                id.raw() as i64,
+                            );
+                        }
                     }
                     renderer_effects.push(eff.clone());
                 }
                 Effect::ViewRemoved(id) => {
-                    for plugin in &mut self.plugins {
-                        let _ = call_view_removed(
-                            &plugin.engine,
-                            &mut plugin.scope,
-                            &plugin.ast.borrow(),
-                            id.raw() as i64,
-                        );
+                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+                    keys.sort();
+                    for k in &keys {
+                        if let Some(plugin) = self.plugins.get_mut(k) {
+                            let _ = call_view_removed(
+                                &plugin.engine,
+                                &mut plugin.scope,
+                                &plugin.ast.borrow(),
+                                id.raw() as i64,
+                            );
+                        }
                     }
                     renderer_effects.push(eff.clone());
                 }
                 Effect::ScriptEffect(ScriptEffect::MouseInput(state, button, p)) => {
-                    for plugin in &mut self.plugins {
-                        let _ = call_mouse_input(
-                            &plugin.engine,
-                            &mut plugin.scope,
-                            &plugin.ast.borrow(),
-                            state,
-                            button,
-                            p,
-                        );
+                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+                    keys.sort();
+                    for k in &keys {
+                        if let Some(plugin) = self.plugins.get_mut(k) {
+                            let _ = call_mouse_input(
+                                &plugin.engine,
+                                &mut plugin.scope,
+                                &plugin.ast.borrow(),
+                                state,
+                                button,
+                                p,
+                            );
+                        }
                     }
                     renderer_effects.push(eff.clone());
                 }
                 Effect::ScriptEffect(ScriptEffect::MouseWheel(delta)) => {
-                    for plugin in &mut self.plugins {
-                        let _ = call_mouse_wheel(
-                            &plugin.engine,
-                            &mut plugin.scope,
-                            &plugin.ast.borrow(),
-                            delta,
-                        );
+                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+                    keys.sort();
+                    for k in &keys {
+                        if let Some(plugin) = self.plugins.get_mut(k) {
+                            let _ = call_mouse_wheel(
+                                &plugin.engine,
+                                &mut plugin.scope,
+                                &plugin.ast.borrow(),
+                                delta,
+                            );
+                        }
                     }
                     renderer_effects.push(eff.clone());
                 }
                 Effect::ScriptEffect(ScriptEffect::CursorMoved(p)) => {
-                    for plugin in &mut self.plugins {
-                        if let Err(e) = call_cursor_moved(
-                            &plugin.engine,
-                            &mut plugin.scope,
-                            &plugin.ast.borrow(),
-                            p,
-                        ) {
-                            error!("Script command 'cursor_moved' error: {}", e);
+                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+                    keys.sort();
+                    for k in &keys {
+                        if let Some(plugin) = self.plugins.get_mut(k) {
+                            if let Err(e) = call_cursor_moved(
+                                &plugin.engine,
+                                &mut plugin.scope,
+                                &plugin.ast.borrow(),
+                                p,
+                            ) {
+                                error!("Script command 'cursor_moved' error: {}", e);
+                            }
                         }
                     }
                     renderer_effects.push(eff.clone());
                 }
                 Effect::ScriptEffect(ScriptEffect::SwitchMode) => {
-                    for plugin in &mut self.plugins {
-                        let _ = call_switch_mode(
-                            &plugin.engine,
-                            &mut plugin.scope,
-                            &plugin.ast.borrow(),
-                        );
+                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+                    keys.sort();
+                    for k in &keys {
+                        if let Some(plugin) = self.plugins.get_mut(k) {
+                            let _ = call_switch_mode(
+                                &plugin.engine,
+                                &mut plugin.scope,
+                                &plugin.ast.borrow(),
+                            );
+                        }
                     }
                 }
                 other => renderer_effects.push(other.clone()),
@@ -470,8 +504,12 @@ impl ScriptState {
         if let Some(ref mut b) = *user_batch.1.borrow_mut() {
             b.clear();
         }
-        for plugin in &mut self.plugins {
-            call_draw(&plugin.engine, &mut plugin.scope, &plugin.ast.borrow())?;
+        let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+        keys.sort();
+        for k in &keys {
+            if let Some(plugin) = self.plugins.get_mut(k) {
+                call_draw(&plugin.engine, &mut plugin.scope, &plugin.ast.borrow())?;
+            }
         }
         Ok(())
     }
@@ -480,13 +518,17 @@ impl ScriptState {
         &mut self,
         encoder: &Rc<RefCell<wgpu_types::CommandEncoder>>,
     ) -> Result<(), Box<rhai::EvalAltResult>> {
-        for plugin in &mut self.plugins {
-            call_shade(
-                &plugin.engine,
-                &mut plugin.scope,
-                &plugin.ast.borrow(),
-                encoder,
-            )?;
+        let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+        keys.sort();
+        for k in &keys {
+            if let Some(plugin) = self.plugins.get_mut(k) {
+                call_shade(
+                    &plugin.engine,
+                    &mut plugin.scope,
+                    &plugin.ast.borrow(),
+                    encoder,
+                )?;
+            }
         }
         Ok(())
     }
@@ -495,13 +537,17 @@ impl ScriptState {
         &mut self,
         script_pass: ScriptRenderPass,
     ) -> Result<(), Box<rhai::EvalAltResult>> {
-        for plugin in &mut self.plugins {
-            call_render(
-                &plugin.engine,
-                &mut plugin.scope,
-                &plugin.ast.borrow(),
-                script_pass.clone(),
-            )?;
+        let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+        keys.sort();
+        for k in &keys {
+            if let Some(plugin) = self.plugins.get_mut(k) {
+                call_render(
+                    &plugin.engine,
+                    &mut plugin.scope,
+                    &plugin.ast.borrow(),
+                    script_pass.clone(),
+                )?;
+            }
         }
         Ok(())
     }
@@ -521,7 +567,13 @@ impl ScriptState {
     ) -> Result<bool, Box<rhai::EvalAltResult>> {
         let handler_name = format!("cmd_{}", name.replace('/', "_"));
         let rhai_args: Array = args.into_iter().map(Dynamic::from).collect();
-        for plugin in &mut self.plugins {
+        let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
+        keys.sort();
+        for k in &keys {
+            let plugin = match self.plugins.get_mut(k) {
+                Some(p) => p,
+                None => continue,
+            };
             match plugin.engine.call_fn::<Dynamic>(
                 &mut plugin.scope,
                 &plugin.ast.borrow(),
