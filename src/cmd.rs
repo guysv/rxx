@@ -536,11 +536,27 @@ impl Value {
         panic!("expected {:?} to be a `bool`", self);
     }
 
+    /// Non-panicking: returns `Some(b)` for `Bool(b)`, `None` otherwise.
+    pub fn try_is_set(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
     pub fn to_f64(&self) -> f64 {
         if let Value::F64(n) = self {
             return *n;
         }
         panic!("expected {:?} to be a `float`", self);
+    }
+
+    /// Non-panicking: returns `Some(n)` for `F64(n)`, `None` otherwise.
+    pub fn try_to_f64(&self) -> Option<f64> {
+        match self {
+            Value::F64(n) => Some(*n),
+            _ => None,
+        }
     }
 
     pub fn to_u64(&self) -> u64 {
@@ -550,11 +566,27 @@ impl Value {
         panic!("expected {:?} to be a `uint`", self);
     }
 
+    /// Non-panicking: returns `Some(n)` for `U32(n)`, `None` otherwise.
+    pub fn try_to_u64(&self) -> Option<u64> {
+        match self {
+            Value::U32(n) => Some(*n as u64),
+            _ => None,
+        }
+    }
+
     pub fn to_rgba8(&self) -> Rgba8 {
         if let Value::Rgba8(rgba8) = self {
             return *rgba8;
         }
         panic!("expected {:?} to be a `Rgba8`", self);
+    }
+
+    /// Non-panicking: returns `Some(c)` for `Rgba8(c)`, `None` otherwise.
+    pub fn try_to_rgba8(&self) -> Option<Rgba8> {
+        match self {
+            Value::Rgba8(rgba8) => Some(*rgba8),
+            _ => None,
+        }
     }
 
     pub fn description(&self) -> &'static str {

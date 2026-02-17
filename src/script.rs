@@ -14,7 +14,7 @@ use crate::gfx::{Point, sprite2d};
 use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
 use crate::platform::{InputState, LogicalDelta, MouseButton};
-use crate::cmd::Command;
+use crate::cmd::{Command, Value};
 use crate::session::{Blending, Effect, MessageType, Mode, ModeString, ScriptEffect, Session, SessionCoords, VisualState};
 use crate::view::{View, ViewExtent, ViewId, ViewResource};
 use crate::wgpu::{self, Texture};
@@ -97,6 +97,57 @@ impl From<&View<ViewResource>> for ScriptView {
             frame_width: view.fw as f64,
             frame_height: view.fh as f64,
             zoom: view.zoom as f64,
+        }
+    }
+}
+
+/// Read-only setting value exposed to Rhai scripts. Returned by `session.get_setting(name)`.
+#[derive(Clone, Debug)]
+pub struct ScriptSettingValue(pub(crate) Option<Value>);
+
+impl ScriptSettingValue {
+    pub fn is_present(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Returns `Some(b)` if the setting is present and a bool, `None` if missing or type mismatch.
+    pub fn as_bool(&self) -> Option<bool> {
+        self.0.as_ref().and_then(Value::try_is_set)
+    }
+
+    /// Returns `Some(n)` if the setting is present and a float, `None` if missing or type mismatch.
+    pub fn as_f64(&self) -> Option<f64> {
+        self.0.as_ref().and_then(Value::try_to_f64)
+    }
+
+    /// Returns `Some(n)` if the setting is present and an integer, `None` if missing or type mismatch.
+    pub fn as_int(&self) -> Option<i64> {
+        self.0.as_ref().and_then(Value::try_to_u64).map(|u| u as i64)
+    }
+
+    /// Returns `Some(s)` if the setting is present and a string/ident, `None` if missing or type mismatch.
+    pub fn as_string(&self) -> Option<String> {
+        match &self.0 {
+            Some(Value::Str(s)) | Some(Value::Ident(s)) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// Returns `Some(c)` if the setting is present and a color, `None` if missing or type mismatch.
+    pub fn as_rgba8(&self) -> Option<Rgba8> {
+        self.0.as_ref().and_then(Value::try_to_rgba8)
+    }
+
+    /// Returns `Some([a, b])` if the setting is present and a tuple, `None` if missing or type mismatch.
+    pub fn as_tuple(&self) -> Option<Array> {
+        match &self.0 {
+            Some(Value::U32Tuple(a, b)) => {
+                Some(vec![Dynamic::from(*a as i64), Dynamic::from(*b as i64)])
+            }
+            Some(Value::F32Tuple(a, b)) => {
+                Some(vec![Dynamic::from(*a as f64), Dynamic::from(*b as f64)])
+            }
+            _ => None,
         }
     }
 }
@@ -594,6 +645,17 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
             let id = ViewId(id as u16);
             Dynamic::from(ScriptView::from(s.borrow().view(id)))
         })
+        .register_fn("get_setting", |s: &mut Rc<RefCell<Session>>, name: &str| {
+            ScriptSettingValue(s.borrow().settings.get(name).cloned())
+        })
+        .register_type_with_name::<ScriptSettingValue>("ScriptSettingValue")
+        .register_fn("is_present", ScriptSettingValue::is_present)
+        .register_fn("as_bool", ScriptSettingValue::as_bool)
+        .register_fn("as_f64", ScriptSettingValue::as_f64)
+        .register_fn("as_int", ScriptSettingValue::as_int)
+        .register_fn("as_string", ScriptSettingValue::as_string)
+        .register_fn("as_rgba8", ScriptSettingValue::as_rgba8)
+        .register_fn("as_tuple", ScriptSettingValue::as_tuple)
         .register_type_with_name::<InputState>("InputState")
         .register_fn("to_string", |state: InputState| {
             format!("{:?}", state)
