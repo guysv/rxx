@@ -1349,6 +1349,16 @@ impl Session {
         self.effects.push(Effect::ScriptEffect(ScriptEffect::SwitchMode));
     }
 
+    /// Keys currently held down. Exposed to scripting as `session.keys_pressed`.
+    pub fn keys_pressed(&self) -> Vec<platform::Key> {
+        self.keys_pressed.iter().cloned().collect()
+    }
+
+    /// True if the given key is currently held. Exposed to scripting as `session.key_pressed(key)`.
+    pub fn key_pressed(&self, key: platform::Key) -> bool {
+        self.keys_pressed.contains(&key)
+    }
+
     /// Release all keys and mouse buttons.
     fn release_inputs(&mut self) {
         let pressed: Vec<platform::Key> = self.keys_pressed.iter().cloned().collect();

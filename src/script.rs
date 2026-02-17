@@ -13,7 +13,7 @@ use crate::gfx::shape2d::{self, Fill, Line, Rotation, Shape, Stroke};
 use crate::gfx::{Point, sprite2d};
 use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
-use crate::platform::{InputState, LogicalDelta, MouseButton};
+use crate::platform::{InputState, Key, LogicalDelta, MouseButton};
 use crate::cmd::{Command, Value};
 use crate::session::{Blending, Effect, MessageType, Mode, ModeString, ScriptEffect, Session, SessionCoords, VisualState};
 use crate::view::{View, ViewExtent, ViewId, ViewResource};
@@ -606,6 +606,16 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         .register_get("cursor", |s: &mut Rc<RefCell<Session>>| {
             Vector2::new(s.borrow().cursor.x as f64, s.borrow().cursor.y as f64)
         })
+        .register_get("keys_pressed", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow()
+                .keys_pressed()
+                .into_iter()
+                .map(Dynamic::from)
+                .collect::<Array>()
+        })
+        .register_fn("key_pressed", |s: &mut Rc<RefCell<Session>>, key: Key| {
+            s.borrow().key_pressed(key)
+        })
         .register_fn("active_view_coords", |s: &mut Rc<RefCell<Session>>, p: Vector2<f64>| {
             let coords = s.borrow().active_view_coords(SessionCoords::new(p.x as f32, p.y as f32));
             Vector2::new(coords.x as f64, coords.y as f64)
@@ -661,6 +671,9 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
             format!("{:?}", state)
         })
         .register_fn("==", |a: InputState, b: InputState| a == b)
+        .register_type_with_name::<Key>("Key")
+        .register_fn("to_string", |key: Key| key.to_string())
+        .register_fn("==", |a: Key, b: Key| a == b)
         .register_type_with_name::<MouseButton>("MouseButton")
         .register_fn("to_string", |button: MouseButton| {
             format!("{:?}", button)
@@ -1765,6 +1778,9 @@ fn register_constants(scope: &mut Scope) {
     scope.push_constant("INPUT_STATE_REPEATED", InputState::Repeated);
     scope.push_constant("EFFECT_VIEW_BLENDING_CHANGED_CONSTANT", Effect::ViewBlendingChanged(Blending::Constant));
     scope.push_constant("EFFECT_VIEW_BLENDING_CHANGED_ALPHA", Effect::ViewBlendingChanged(Blending::Alpha));
+    scope.push_constant("KEY_CTRL", Key::Control);
+    scope.push_constant("KEY_SHIFT", Key::Shift);
+    scope.push_constant("KEY_ALT", Key::Alt);
 }
 
 /// Call the script's `unload()` function. Invoked on each plugin just before
