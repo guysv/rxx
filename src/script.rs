@@ -493,7 +493,7 @@ impl ScriptState {
 
     pub fn call_render_event(
         &mut self,
-        script_pass: ScriptPass,
+        script_pass: ScriptRenderPass,
     ) -> Result<(), Box<rhai::EvalAltResult>> {
         for plugin in &mut self.plugins {
             call_render(
@@ -809,16 +809,21 @@ pub enum ScriptBindGroupEntry {
         binding: u32,
         texture: Rc<RefCell<Texture>>,
     },
+    /// Texture view in native format (Rgba8Unorm). Use for compute passes; Texture uses sRGB view.
+    TextureRaw {
+        binding: u32,
+        texture: Rc<RefCell<Texture>>,
+    },
     SamplerDefault { binding: u32 },
 }
 
-/// Unified pass type for script: wraps the wgpu pass and renderer so pass methods can resolve handles.
+/// Render pass type for script: wraps the wgpu render pass so pass methods can resolve handles.
 #[derive(Clone)]
-pub struct ScriptPass {
+pub struct ScriptRenderPass {
     pass: Rc<RefCell<wgpu_types::RenderPass<'static>>>,
 }
 
-impl ScriptPass {
+impl ScriptRenderPass {
     pub fn new(
         pass: Rc<RefCell<wgpu_types::RenderPass<'static>>>,
     ) -> Self {
@@ -878,6 +883,51 @@ impl ScriptPass {
     }
 }
 
+/// Compute pass type for script: wraps the wgpu compute pass so pass methods can resolve handles.
+#[derive(Clone)]
+pub struct ScriptComputePass {
+    pass: Rc<RefCell<wgpu_types::ComputePass<'static>>>,
+}
+
+impl ScriptComputePass {
+    pub fn new(pass: Rc<RefCell<wgpu_types::ComputePass<'static>>>) -> Self {
+        Self { pass }
+    }
+
+    pub fn set_pipeline(
+        &mut self,
+        handle: Rc<RefCell<wgpu_types::ComputePipeline>>,
+    ) -> Result<(), Box<rhai::EvalAltResult>> {
+        let pipeline = handle.borrow();
+        self.pass.borrow_mut().set_pipeline(&pipeline);
+        Ok(())
+    }
+
+    pub fn set_bind_group(
+        &mut self,
+        index: i64,
+        handle: Rc<RefCell<wgpu_types::BindGroup>>,
+    ) -> Result<(), Box<rhai::EvalAltResult>> {
+        let bind_group = handle.borrow();
+        self.pass
+            .borrow_mut()
+            .set_bind_group(index as u32, &*bind_group, &[]);
+        Ok(())
+    }
+
+    pub fn dispatch_workgroups(
+        &mut self,
+        x: i64,
+        y: i64,
+        z: i64,
+    ) -> Result<(), Box<rhai::EvalAltResult>> {
+        self.pass
+            .borrow_mut()
+            .dispatch_workgroups(x as u32, y as u32, z as u32);
+        Ok(())
+    }
+}
+
 /// Register renderer handle type so scripts can use the global `renderer`.
 /// Exposes create_render_texture, view_render_texture, begin_render_pass.
 /// Script-created textures are stored in script_state_handle.
@@ -890,7 +940,7 @@ pub fn register_renderer_handle(
         .register_type_with_name::<ScriptLoadOp>("LoadOp")
         .register_type_with_name::<ScriptStoreOp>("StoreOp")
         .register_type_with_name::<ScriptColorAttachment>("ColorAttachment")
-        .register_type_with_name::<ScriptPass>("ScriptPass")
+        .register_type_with_name::<ScriptRenderPass>("ScriptRenderPass")
         .register_fn("load_load", || ScriptLoadOp::Load)
         .register_fn("load_clear", |r: f64, g: f64, b: f64, a: f64| {
             ScriptLoadOp::Clear { r, g, b, a }
@@ -937,6 +987,13 @@ pub fn register_renderer_handle(
                 texture,
             },
         )
+        .register_fn(
+            "bind_texture_raw",
+            |binding: i64, texture: Rc<RefCell<Texture>>| ScriptBindGroupEntry::TextureRaw {
+                binding: binding as u32,
+                texture,
+            },
+        )
         .register_fn("bind_sampler_default", |binding: i64| {
             ScriptBindGroupEntry::SamplerDefault {
                 binding: binding as u32,
@@ -944,13 +1001,13 @@ pub fn register_renderer_handle(
         })
         .register_fn(
             "set_pipeline",
-            |pass: &mut ScriptPass, handle: Rc<RefCell<wgpu_types::RenderPipeline>>| -> Result<(), Box<rhai::EvalAltResult>> {
+            |pass: &mut ScriptRenderPass, handle: Rc<RefCell<wgpu_types::RenderPipeline>>| -> Result<(), Box<rhai::EvalAltResult>> {
                 pass.set_pipeline(handle.clone())
             },
         )
         .register_fn(
             "set_bind_group",
-            |pass: &mut ScriptPass,
+            |pass: &mut ScriptRenderPass,
              index: i64,
              handle: Rc<RefCell<wgpu_types::BindGroup>>|
              -> Result<(), Box<rhai::EvalAltResult>> {
@@ -959,7 +1016,7 @@ pub fn register_renderer_handle(
         )
         .register_fn(
             "set_vertex_buffer",
-            |pass: &mut ScriptPass,
+            |pass: &mut ScriptRenderPass,
              slot: i64,
              handle: Rc<RefCell<wgpu_types::Buffer>>|
              -> Result<(), Box<rhai::EvalAltResult>> {
@@ -968,12 +1025,36 @@ pub fn register_renderer_handle(
         )
         .register_fn(
             "draw",
-            |pass: &mut ScriptPass,
+            |pass: &mut ScriptRenderPass,
              vertex_count: i64,
              instance_count: i64,
              first_vertex: i64,
              first_instance: i64| {
                 pass.draw(vertex_count, instance_count, first_vertex, first_instance);
+            },
+        )
+        .register_type_with_name::<ScriptComputePass>("ScriptComputePass")
+        .register_fn(
+            "set_pipeline",
+            |pass: &mut ScriptComputePass,
+             handle: Rc<RefCell<wgpu_types::ComputePipeline>>|
+             -> Result<(), Box<rhai::EvalAltResult>> {
+                pass.set_pipeline(handle.clone())
+            },
+        )
+        .register_fn(
+            "set_bind_group",
+            |pass: &mut ScriptComputePass,
+             index: i64,
+             handle: Rc<RefCell<wgpu_types::BindGroup>>|
+             -> Result<(), Box<rhai::EvalAltResult>> {
+                pass.set_bind_group(index, handle.clone())
+            },
+        )
+        .register_fn(
+            "dispatch_workgroups",
+            |pass: &mut ScriptComputePass, x: i64, y: i64, z: i64| -> Result<(), Box<rhai::EvalAltResult>> {
+                pass.dispatch_workgroups(x, y, z)
             },
         )
         .register_type_with_name::<Rc<RefCell<wgpu::Renderer>>>("Renderer")
@@ -1108,6 +1189,60 @@ pub fn register_renderer_handle(
                     &module_handle.borrow(),
                     vs_entry.as_str(),
                     fs_entry.as_str(),
+                    &layout_refs,
+                );
+                Rc::new(RefCell::new(pipeline))
+            }
+        })
+        .register_type_with_name::<Rc<RefCell<wgpu_types::ComputePipeline>>>("ComputePipelineHandle")
+        .register_fn("create_compute_pipeline", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  module_handle: Rc<RefCell<wgpu_types::ShaderModule>>| {
+                let pipeline = r.borrow_mut().create_compute_pipeline(
+                    &module_handle.borrow(),
+                    None,
+                );
+                Rc::new(RefCell::new(pipeline))
+            }
+        })
+        .register_fn("create_compute_pipeline", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  module_handle: Rc<RefCell<wgpu_types::ShaderModule>>,
+                  entry_point: ImmutableString| {
+                let ep = if entry_point.is_empty() {
+                    None
+                } else {
+                    Some(entry_point.as_str())
+                };
+                let pipeline = r.borrow_mut().create_compute_pipeline(
+                    &module_handle.borrow(),
+                    ep,
+                );
+                Rc::new(RefCell::new(pipeline))
+            }
+        })
+        .register_fn("create_compute_pipeline_with_layouts", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  module_handle: Rc<RefCell<wgpu_types::ShaderModule>>,
+                  entry_point: ImmutableString,
+                  bind_group_layouts: Array| {
+                use std::ops::Deref;
+                let ep = if entry_point.is_empty() {
+                    None
+                } else {
+                    Some(entry_point.as_str())
+                };
+                let handles: Vec<Rc<RefCell<wgpu_types::BindGroupLayout>>> = bind_group_layouts
+                    .iter()
+                    .filter_map(|d| d.clone().try_cast::<Rc<RefCell<wgpu_types::BindGroupLayout>>>())
+                    .collect();
+                let ref_guards: Vec<std::cell::Ref<wgpu_types::BindGroupLayout>> =
+                    handles.iter().map(|h| h.borrow()).collect();
+                let layout_refs: Vec<&wgpu_types::BindGroupLayout> =
+                    ref_guards.iter().map(Deref::deref).collect();
+                let pipeline = r.borrow_mut().create_compute_pipeline_with_layouts(
+                    &module_handle.borrow(),
+                    ep,
                     &layout_refs,
                 );
                 Rc::new(RefCell::new(pipeline))
@@ -1278,7 +1413,8 @@ pub fn register_renderer_handle(
                     let mut encoder_mut = encoder.borrow_mut();
                     let pass = encoder_mut.begin_compute_pass(&descriptor);
                     let pass_handle = Rc::new(RefCell::new(pass.forget_lifetime()));
-                    Ok(Dynamic::from(pass_handle))
+                    let script_compute_pass = ScriptComputePass::new(pass_handle);
+                    Ok(Dynamic::from(script_compute_pass))
                 }
             },
         )
@@ -1368,7 +1504,7 @@ pub fn register_renderer_handle(
                     let mut encoder_mut = encoder.borrow_mut();
                     let pass = encoder_mut.begin_render_pass(&descriptor);
                     let pass_handle = Rc::new(RefCell::new(pass.forget_lifetime()));
-                    let script_pass = ScriptPass::new(pass_handle);
+                    let script_pass = ScriptRenderPass::new(pass_handle);
                     Ok(Dynamic::from(script_pass))
                 }
             },
@@ -1702,7 +1838,7 @@ pub fn call_render(
     engine: &Engine,
     scope: &mut Scope,
     ast: &AST,
-    script_pass: ScriptPass,
+    script_pass: ScriptRenderPass,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     match engine.call_fn::<()>(scope, ast, "render", (script_pass,)) {
         Ok(()) => Ok(()),

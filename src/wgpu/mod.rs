@@ -203,6 +203,11 @@ impl Texture {
         &self.view
     }
 
+    /// View in the texture's native format (Rgba8Unorm). Use for compute bindings; view() is sRGB and incompatible with compute.
+    pub fn view_raw(&self) -> &wgpu::TextureView {
+        &self.view_raw
+    }
+
     pub(crate) fn size(&self) -> [u32; 2] {
         self.size
     }
@@ -1812,7 +1817,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             let pass = pass.forget_lifetime();
             let pass_handle = Rc::new(RefCell::new(pass));
-            let script_pass = crate::script::ScriptPass::new(
+            let script_pass = crate::script::ScriptRenderPass::new(
                 pass_handle,
             );
             drop(this);
@@ -2334,6 +2339,7 @@ impl Renderer {
         let mut buffer_refs: Vec<(u32, Ref<wgpu::Buffer>)> = Vec::new();
         let mut texture_refs: Vec<(u32, Ref<Texture>)> = Vec::new();
         let mut sampler_bindings: Vec<u32> = Vec::new();
+        let mut texture_raw_refs: Vec<(u32, Ref<Texture>)> = Vec::new();
         for e in entries {
             match e {
                 ScriptBindGroupEntry::Buffer { binding, buffer } => {
@@ -2341,6 +2347,9 @@ impl Renderer {
                 }
                 ScriptBindGroupEntry::Texture { binding, texture } => {
                     texture_refs.push((*binding, texture.borrow()));
+                }
+                ScriptBindGroupEntry::TextureRaw { binding, texture } => {
+                    texture_raw_refs.push((*binding, texture.borrow()));
                 }
                 ScriptBindGroupEntry::SamplerDefault { binding } => {
                     sampler_bindings.push(*binding);
@@ -2358,6 +2367,12 @@ impl Renderer {
             wgpu_entries.push(wgpu::BindGroupEntry {
                 binding: *binding,
                 resource: wgpu::BindingResource::TextureView(tex_ref.view()),
+            });
+        }
+        for (binding, tex_ref) in &texture_raw_refs {
+            wgpu_entries.push(wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: wgpu::BindingResource::TextureView(tex_ref.view_raw()),
             });
         }
         for binding in &sampler_bindings {
@@ -2527,6 +2542,45 @@ impl Renderer {
                 cache: None,
             });
         pipeline
+    }
+
+    /// Create a compute pipeline. Layout is derived from the shader module when not provided.
+    /// Entry point can be None to use the sole @compute entry in the module.
+    pub fn create_compute_pipeline(
+        &mut self,
+        module: &wgpu::ShaderModule,
+        entry_point: Option<&str>,
+    ) -> wgpu::ComputePipeline {
+        self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("script_compute_pipeline"),
+            layout: None,
+            module,
+            entry_point,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
+    }
+
+    /// Create a compute pipeline with explicit bind group layouts.
+    pub fn create_compute_pipeline_with_layouts(
+        &mut self,
+        module: &wgpu::ShaderModule,
+        entry_point: Option<&str>,
+        bind_group_layouts: &[&wgpu::BindGroupLayout],
+    ) -> wgpu::ComputePipeline {
+        let layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("script_compute_pipeline_layout"),
+            bind_group_layouts,
+            push_constant_ranges: &[],
+        });
+        self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("script_compute_pipeline_custom"),
+            layout: Some(&layout),
+            module,
+            entry_point,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        })
     }
 
     /// Create a buffer and optionally upload initial data. Usage: "vertex", "uniform", "copy_dst" (comma-separated).
