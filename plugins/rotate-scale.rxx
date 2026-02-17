@@ -265,7 +265,7 @@ fn shade(encoder) {
         session.selection.to_rect_f64(),
         0.0,
         rgb8(0, 0, 0, 0),
-        0.9);
+        if draw_to_render { 1.0 } else { 0.9 });
     let vertices = batch.vertices();
     let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
 
