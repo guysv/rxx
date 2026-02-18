@@ -35,7 +35,11 @@ fn init() {
     session.init_setting("rotate-scale/algo", "rotsprite-gl.rxx/render_pass");
 
     register_command("selection/rotate", "Rotates the selection");
+    register_command("rotate/set", "Sets selection rotation in degrees");
+    register_command("rotate/add", "Adds delta rotation in degrees");
     register_command("selection/scale", "Scales the selection");
+    register_command("scale/set", "Sets selection scale");
+    register_command("scale/add", "Adds delta scale");
 
     print(`rotate-scale.rxx initialized`);
 }
@@ -73,6 +77,41 @@ fn cmd_selection_rotate(args) {
     return true;
 }
 
+fn cmd_rotate_set(args) {
+    if !in_progress || session.mode != rotation_mode {
+        return true;
+    }
+    if args.len() != 1 {
+        print("usage: rotate/set <degrees>");
+        return true;
+    }
+    let degrees = parse_float(args[0]);
+    let radians = degrees_to_radians(degrees);
+    rotation_angle = radians;
+    accumulated_angle = radians;
+    drag_start = ();
+    last_p = ();
+    return true;
+}
+
+fn cmd_rotate_add(args) {
+    if !in_progress || session.mode != rotation_mode {
+        return true;
+    }
+    if args.len() != 1 {
+        print("usage: rotate/add <degrees delta>");
+        return true;
+    }
+    let delta_degrees = parse_float(args[0]);
+    let delta_radians = degrees_to_radians(delta_degrees);
+    let new_angle = rotation_angle + delta_radians;
+    rotation_angle = new_angle;
+    accumulated_angle = new_angle;
+    drag_start = ();
+    last_p = ();
+    return true;
+}
+
 fn cmd_selection_scale(args) {
     if session.selection == () {
         return true;
@@ -92,6 +131,46 @@ fn cmd_selection_scale(args) {
     renderer.upload_selection_to_texture(session, clipboard);
     queue_active_view_rect_clear(selection);
     session.switch_mode(scale_mode);
+    return true;
+}
+
+fn cmd_scale_set(args) {
+    if !in_progress || session.mode != scale_mode {
+        return true;
+    }
+    if args.len() != 2 {
+        print("usage: scale/set <x scale> <y scale>");
+        return true;
+    }
+    let new_scale_x = parse_float(args[0]);
+    let new_scale_y = parse_float(args[1]);
+    scale_x = new_scale_x;
+    scale_y = new_scale_y;
+    accumulated_scale_x = new_scale_x;
+    accumulated_scale_y = new_scale_y;
+    drag_start = ();
+    last_p = ();
+    return true;
+}
+
+fn cmd_scale_add(args) {
+    if !in_progress || session.mode != scale_mode {
+        return true;
+    }
+    if args.len() != 2 {
+        print("usage: scale/add <x delta> <y delta>");
+        return true;
+    }
+    let delta_x = parse_float(args[0]);
+    let delta_y = parse_float(args[1]);
+    let new_scale_x = scale_x + delta_x;
+    let new_scale_y = scale_y + delta_y;
+    scale_x = new_scale_x;
+    scale_y = new_scale_y;
+    accumulated_scale_x = new_scale_x;
+    accumulated_scale_y = new_scale_y;
+    drag_start = ();
+    last_p = ();
     return true;
 }
 
@@ -212,6 +291,10 @@ fn vector_distance(a, b) {
 
 fn radians_to_degrees(radians) {
     return radians * (180.0 / 3.141592653589793);
+}
+
+fn degrees_to_radians(degrees) {
+    return degrees * (3.141592653589793 / 180.0);
 }
 
 // ---------------------------------------------------------------------------
