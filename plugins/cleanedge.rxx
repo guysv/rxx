@@ -1,10 +1,10 @@
-// clean-edge.rxx - render pass implementation for rotate-scale
+// cleanedge.rxx - render pass implementation for rotate-scale
 
 fn init() {
     let wgsl = read_file("cleanedge.wgsl");
     let shader = renderer.create_shader_module(wgsl);
     let pipeline = renderer.create_render_pipeline_with_texture(shader, "vs_main", "fs_main");
-    print(`clean-edge.rxx initialized`);
+    print(`cleanedge.rxx initialized`);
 }
 
 fn render_pass(encoder, transform, target_texture, source_texture, vertex_buffer) {

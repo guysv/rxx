@@ -46,8 +46,8 @@ pub struct PluginFnRef {
 }
 
 /// Parse "<plugin>/<function>" into a normalized plugin function handle.
-/// Accepts plugin file names with extension (eg. "clean-edge.rxx/render_pass")
-/// and normalizes to plugin basename ("clean-edge").
+/// Accepts plugin file names with extension (eg. "cleanedge.rxx/render_pass")
+/// and normalizes to plugin basename ("cleanedge").
 fn parse_plugin_fn_ref(addr: &str) -> Result<PluginFnRef, Box<rhai::EvalAltResult>> {
     let trimmed = addr.trim();
     let (plugin_raw, fn_raw) = trimmed
