@@ -11,6 +11,9 @@ fn init() {
         SAMPLER_ADDRESS_CLAMP_TO_EDGE,
         SAMPLER_FILTER_NEAREST
     );
+    let tex2 = renderer.create_render_texture(8, 8);
+    let tex4 = renderer.create_render_texture(8, 8);
+    let tex8 = renderer.create_render_texture(8, 8);
     print(`rotsprite-gl.rxx initialized`);
 }
 
@@ -69,9 +72,9 @@ fn render_pass(encoder, transform, target_texture, source_texture, vertex_buffer
     let w8 = src_w * SCALE;
     let h8 = src_h * SCALE;
 
-    let tex2 = renderer.create_render_texture(w2, h2);
-    let tex4 = renderer.create_render_texture(w4, h4);
-    let tex8 = renderer.create_render_texture(w8, h8);
+    renderer.ensure_render_texture_size(tex2, w2, h2);
+    renderer.ensure_render_texture_size(tex4, w4, h4);
+    renderer.ensure_render_texture_size(tex8, w8, h8);
 
     run_epx_pass!(encoder, source_texture, tex2, src_w, src_h, w2, h2);
     run_epx_pass!(encoder, tex2, tex4, w2, h2, w4, h4);

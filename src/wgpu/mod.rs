@@ -2085,6 +2085,19 @@ impl Renderer {
         )
     }
 
+    /// Resize a render texture only if size changed.
+    pub fn ensure_render_texture_size(
+        &mut self,
+        target: &mut Texture,
+        width: u32,
+        height: u32,
+    ) {
+        let [tw, th] = target.size();
+        if tw != width || th != height {
+            target.resize_same_format(&self.device, width, height);
+        }
+    }
+
     /// Create a new compute texture and return a handle. The texture is stored in script storage.
     pub fn create_compute_texture(
         &mut self,

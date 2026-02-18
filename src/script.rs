@@ -1295,6 +1295,18 @@ pub fn register_renderer_handle(
                 Rc::new(RefCell::new(texture))
             }
         })
+        .register_fn("ensure_render_texture_size", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  target: Rc<RefCell<Texture>>,
+                  width: i64,
+                  height: i64| {
+                r.borrow_mut().ensure_render_texture_size(
+                    &mut target.borrow_mut(),
+                    width as u32,
+                    height as u32,
+                );
+            }
+        })
         .register_fn("create_compute_texture", {
             move |r: &mut Rc<RefCell<wgpu::Renderer>>,
                   width: i64,
