@@ -127,7 +127,7 @@ impl Context {
     pub fn draw(
         &mut self,
         session_handle: &Rc<RefCell<Session>>,
-        script_state: &mut ScriptState,
+        script_state_handle: &Rc<RefCell<ScriptState>>,
         user_batch: &(
             Rc<RefCell<shape2d::Batch>>,
             Rc<RefCell<Option<sprite2d::Batch>>>,
@@ -147,7 +147,7 @@ impl Context {
 
         drop(session);
         // User script draw event (populates user_batch directly)
-        if let Err(e) = script_state.call_draw_event(user_batch) {
+        if let Err(e) = crate::script::call_draw_event(script_state_handle, user_batch) {
             warn!("Script draw error: {}", e);
         }
     }

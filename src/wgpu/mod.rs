@@ -1266,7 +1266,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         this.draw_ctx.clear();
         this.draw_ctx.draw(
             session_handle,
-            &mut *script_state_handle.borrow_mut(),
+            script_state_handle,
             &user_batch,
             avg_frametime,
             execution,
@@ -1544,10 +1544,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
         let encoder_handle = Rc::new(RefCell::new(encoder));
         drop(this);
         drop(session);
-        if let Err(e) = script_state_handle
-            .borrow_mut()
-            .call_shade_event(&encoder_handle)
-        {
+        if let Err(e) = crate::script::call_shade_event(script_state_handle, &encoder_handle) {
             warn!("Script shade error: {}", e);
         }
         let mut encoder = Rc::try_unwrap(encoder_handle).unwrap().into_inner();
@@ -1822,10 +1819,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             );
             drop(this);
             drop(session);
-            if let Err(e) = script_state_handle
-                .borrow_mut()
-                .call_render_event(script_pass)
-            {
+            if let Err(e) = crate::script::call_render_event(script_state_handle, script_pass) {
                 warn!("Script render error: {}", e);
             }
             this = renderer_handle.borrow_mut();

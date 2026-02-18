@@ -615,6 +615,17 @@ impl Settings {
             Err(format!("no such setting `{}`", k))
         }
     }
+
+    /// Initialize a setting only if it doesn't already exist.
+    ///
+    /// Returns `true` if inserted, `false` if the setting already existed.
+    pub fn init(&mut self, k: &str, v: Value) -> bool {
+        if self.map.contains_key(k) {
+            return false;
+        }
+        self.map.insert(k.to_string(), v);
+        true
+    }
 }
 
 impl Default for Settings {

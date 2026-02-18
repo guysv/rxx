@@ -37,6 +37,35 @@ fn plugin_basename(path: &Path) -> String {
         .to_string()
 }
 
+/// Opaque plugin function handle returned by `session.get_plugin_fn(addr)`.
+/// The target is resolved and invoked when the handle is called.
+#[derive(Clone, Debug)]
+pub struct PluginFnRef {
+    pub plugin_key: String,
+    pub fn_name: String,
+}
+
+/// Parse "<plugin>/<function>" into a normalized plugin function handle.
+/// Accepts plugin file names with extension (eg. "clean-edge.rxx/render_pass")
+/// and normalizes to plugin basename ("clean-edge").
+fn parse_plugin_fn_ref(addr: &str) -> Result<PluginFnRef, Box<rhai::EvalAltResult>> {
+    let trimmed = addr.trim();
+    let (plugin_raw, fn_raw) = trimmed
+        .rsplit_once('/')
+        .ok_or_else(|| format!("Invalid plugin function address '{}'", addr))?;
+    let plugin_key = Path::new(plugin_raw)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let fn_name = fn_raw.trim().to_string();
+    if plugin_key.is_empty() || fn_name.is_empty() {
+        return Err(format!("Invalid plugin function address '{}'", addr).into());
+    }
+    Ok(PluginFnRef { plugin_key, fn_name })
+}
+
 /// Type alias for the user batches shared between script and session.
 /// (shape batch, sprite batch for text). Sprite batch is created lazily with font size.
 #[allow(dead_code)]
@@ -58,7 +87,7 @@ pub fn dispatch_command(
 ) {
     // Try script handlers first (session is NOT borrowed here).
     if let Some((name, args)) = cmd.to_invocation() {
-        match script_state_handle.borrow_mut().call_script_command(&name, args) {
+        match call_script_command(script_state_handle, &name, args) {
             Ok(true) => return, // Script handled it.
             Ok(false) => {}     // Fall through to built-in.
             Err(e) => {
@@ -115,48 +144,60 @@ impl From<&View<ViewResource>> for ScriptView {
 pub struct ScriptSettingValue(pub(crate) Option<Value>);
 
 impl ScriptSettingValue {
-    pub fn is_present(&self) -> bool {
+    pub fn is_present(&mut self) -> bool {
         self.0.is_some()
     }
 
-    /// Returns `Some(b)` if the setting is present and a bool, `None` if missing or type mismatch.
-    pub fn as_bool(&self) -> Option<bool> {
-        self.0.as_ref().and_then(Value::try_is_set)
-    }
-
-    /// Returns `Some(n)` if the setting is present and a float, `None` if missing or type mismatch.
-    pub fn as_f64(&self) -> Option<f64> {
-        self.0.as_ref().and_then(Value::try_to_f64)
-    }
-
-    /// Returns `Some(n)` if the setting is present and an integer, `None` if missing or type mismatch.
-    pub fn as_int(&self) -> Option<i64> {
-        self.0.as_ref().and_then(Value::try_to_u64).map(|u| u as i64)
-    }
-
-    /// Returns `Some(s)` if the setting is present and a string/ident, `None` if missing or type mismatch.
-    pub fn as_string(&self) -> Option<String> {
-        match &self.0 {
-            Some(Value::Str(s)) | Some(Value::Ident(s)) => Some(s.clone()),
-            _ => None,
+    /// Returns a bool if the setting is present and a bool, otherwise `()`.
+    pub fn as_bool(&mut self) -> Dynamic {
+        match self.0.as_ref().and_then(Value::try_is_set) {
+            Some(v) => Dynamic::from(v),
+            None => Dynamic::UNIT,
         }
     }
 
-    /// Returns `Some(c)` if the setting is present and a color, `None` if missing or type mismatch.
-    pub fn as_rgba8(&self) -> Option<Rgba8> {
-        self.0.as_ref().and_then(Value::try_to_rgba8)
+    /// Returns a float if the setting is present and a float, otherwise `()`.
+    pub fn as_f64(&mut self) -> Dynamic {
+        match self.0.as_ref().and_then(Value::try_to_f64) {
+            Some(v) => Dynamic::from(v),
+            None => Dynamic::UNIT,
+        }
     }
 
-    /// Returns `Some([a, b])` if the setting is present and a tuple, `None` if missing or type mismatch.
-    pub fn as_tuple(&self) -> Option<Array> {
+    /// Returns an integer if the setting is present and an integer, otherwise `()`.
+    pub fn as_int(&mut self) -> Dynamic {
+        match self.0.as_ref().and_then(Value::try_to_u64).map(|u| u as i64) {
+            Some(v) => Dynamic::from(v),
+            None => Dynamic::UNIT,
+        }
+    }
+
+    /// Returns a string if the setting is present and a string/ident, otherwise `()`.
+    pub fn as_string(&mut self) -> Dynamic {
+        match &self.0 {
+            Some(Value::Str(s)) | Some(Value::Ident(s)) => Dynamic::from(s.clone()),
+            _ => Dynamic::UNIT,
+        }
+    }
+
+    /// Returns a color if the setting is present and a color, otherwise `()`.
+    pub fn as_rgba8(&mut self) -> Dynamic {
+        match self.0.as_ref().and_then(Value::try_to_rgba8) {
+            Some(v) => Dynamic::from(v),
+            None => Dynamic::UNIT,
+        }
+    }
+
+    /// Returns `[a, b]` if the setting is present and a tuple, otherwise `()`.
+    pub fn as_tuple(&mut self) -> Dynamic {
         match &self.0 {
             Some(Value::U32Tuple(a, b)) => {
-                Some(vec![Dynamic::from(*a as i64), Dynamic::from(*b as i64)])
+                Dynamic::from(vec![Dynamic::from(*a as i64), Dynamic::from(*b as i64)])
             }
             Some(Value::F32Tuple(a, b)) => {
-                Some(vec![Dynamic::from(*a as f64), Dynamic::from(*b as f64)])
+                Dynamic::from(vec![Dynamic::from(*a as f64), Dynamic::from(*b as f64)])
             }
-            _ => None,
+            _ => Dynamic::UNIT,
         }
     }
 }
@@ -193,7 +234,8 @@ impl std::fmt::Display for ScriptSpriteVertexList {
     }
 }
 
-/// Per-plugin state: one Rhai engine, scope, and AST per .rxx file.
+/// Per-plugin state: one Rhai engine and scope per .rxx file. AST is stored separately in
+/// `LoadedPluginEntry` so we can borrow plugin (engine/scope) and ast independently when calling into scripts.
 pub struct LoadedPlugin {
     /// Path to the .rxx script file.
     pub path: PathBuf,
@@ -201,18 +243,90 @@ pub struct LoadedPlugin {
     pub mtime: Option<SystemTime>,
     pub engine: Engine,
     pub scope: Scope<'static>,
+}
+
+/// A loaded plugin plus its AST in separate ref-counted cells so plugin code can run while
+/// other plugins are accessible (borrow plugin for engine/scope and ast independently).
+pub struct LoadedPluginEntry {
+    pub plugin: Rc<RefCell<LoadedPlugin>>,
     pub ast: Rc<RefCell<AST>>,
 }
 
 /// State for Rhai plugins (event-handler style). Each plugin has its own engine and ScriptState.
 /// Built in lib.rs and passed to renderer.frame() and draw_ctx.draw().
+/// Plugins are wrapped in `Rc<RefCell<>>` so that plugin code can access other plugins via the script state handle.
 pub struct ScriptState {
     /// Plugin directory (where *.rxx were discovered).
     pub plugin_dir: Option<PathBuf>,
     /// Loaded plugins keyed by script file basename (file stem), e.g. "rotate-scale".
-    pub plugins: HashMap<String, LoadedPlugin>,
+    pub plugins: HashMap<String, LoadedPluginEntry>,
     /// Effects queued by plugins.
     pub effects: Rc<RefCell<Vec<Effect>>>,
+}
+
+thread_local! {
+    static CURRENT_PLUGIN_KEY: RefCell<Option<String>> = RefCell::new(None);
+}
+
+struct CurrentPluginScopeGuard {
+    prev_key: Option<String>,
+}
+
+impl CurrentPluginScopeGuard {
+    fn new(plugin_key: &str) -> Self {
+        let prev_key = CURRENT_PLUGIN_KEY.with(|slot| slot.replace(Some(plugin_key.to_string())));
+        Self { prev_key }
+    }
+}
+
+impl Drop for CurrentPluginScopeGuard {
+    fn drop(&mut self) {
+        CURRENT_PLUGIN_KEY.with(|slot| {
+            slot.replace(self.prev_key.take());
+        });
+    }
+}
+
+fn call_with_plugin_context<T, F>(plugin_key: &str, plugin: &mut LoadedPlugin, f: F) -> T
+where
+    F: FnOnce(&mut LoadedPlugin) -> T,
+{
+    let _guard = CurrentPluginScopeGuard::new(plugin_key);
+    f(plugin)
+}
+
+fn invoke_plugin_fn_ref(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    plugin_fn: &PluginFnRef,
+    args: Vec<Dynamic>,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    let caller_plugin = CURRENT_PLUGIN_KEY
+        .with(|slot| slot.borrow().clone())
+        .unwrap_or_else(|| "<unknown>".to_string());
+    let (target_plugin_rc, target_ast_rc) = {
+        let state = script_state_handle.borrow();
+        let entry = state.plugins.get(&plugin_fn.plugin_key).ok_or_else(|| {
+            format!(
+                "Plugin '{}' not found (requested from '{}')",
+                plugin_fn.plugin_key, caller_plugin
+            )
+        })?;
+        (entry.plugin.clone(), entry.ast.clone())
+    };
+    let ast = target_ast_rc.borrow();
+    let mut target_plugin = target_plugin_rc.try_borrow_mut().map_err(|_| {
+        format!(
+            "Plugin '{}' is already executing",
+            plugin_fn.plugin_key
+        )
+    })?;
+    {
+        let plugin = &mut *target_plugin;
+        plugin
+            .engine
+            .call_fn::<()>(&mut plugin.scope, &*ast, &plugin_fn.fn_name, args)?;
+    }
+    Ok(())
 }
 
 /// Discover *.rxx files in a directory. Returns paths sorted by name for deterministic load order.
@@ -233,7 +347,7 @@ fn load_one_plugin(
     session_handle: &Rc<RefCell<Session>>,
     renderer_handle: &Rc<RefCell<wgpu::Renderer>>,
     script_state_handle: &Rc<RefCell<ScriptState>>,
-) -> Result<(LoadedPlugin, Vec<(String, String)>), String> {
+) -> Result<(LoadedPlugin, Rc<RefCell<AST>>, Vec<(String, String)>), String> {
     if !path.exists() {
         return Err(format!("Plugin not found: {}", path.display()));
     }
@@ -242,7 +356,11 @@ fn load_one_plugin(
     let mut engine = Engine::new();
     engine.set_max_expr_depths(10_000, 10_000);
     register_draw_primitives(&mut engine, shape_batch, sprite_batch);
-    register_session_handle(&mut engine, script_state_handle.borrow_mut().effects.clone());
+    register_session_handle(
+        &mut engine,
+        script_state_handle.borrow().effects.clone(),
+        script_state_handle.clone(),
+    );
     register_renderer_handle(&mut engine);
     register_wgpu_types(&mut engine);
     register_script_queue(&mut engine);
@@ -268,9 +386,9 @@ fn load_one_plugin(
         mtime,
         engine,
         scope,
-        ast: Rc::new(RefCell::new(ast)),
     };
-    Ok((plugin, cmds))
+    let ast_rc = Rc::new(RefCell::new(ast));
+    Ok((plugin, ast_rc, cmds))
 }
 
 impl ScriptState {
@@ -302,13 +420,11 @@ pub fn load_plugins(
     }
     // Call unload() on each plugin before replacing them.
     {
-        let mut state = script_state_handle.borrow_mut();
-        for plugin in state.plugins.values_mut() {
-            let _ = call_unload(
-                &plugin.engine,
-                &mut plugin.scope,
-                &plugin.ast.borrow(),
-            );
+        let state = script_state_handle.borrow();
+        for entry in state.plugins.values() {
+            let ast = entry.ast.borrow();
+            let mut plugin = entry.plugin.borrow_mut();
+            let _ = call_unload(&mut plugin, &*ast);
         }
     }
     let paths = discover_rxx(&plugin_dir)?;
@@ -316,9 +432,15 @@ pub fn load_plugins(
     let mut plugins = HashMap::with_capacity(paths.len());
     for path in &paths {
         match load_one_plugin(path, session_handle, renderer_handle, script_state_handle) {
-            Ok((plugin, cmds)) => {
+            Ok((plugin, ast_rc, cmds)) => {
                 all_commands.extend(cmds);
-                plugins.insert(plugin_basename(path), plugin);
+                plugins.insert(
+                    plugin_basename(path),
+                    LoadedPluginEntry {
+                        plugin: Rc::new(RefCell::new(plugin)),
+                        ast: ast_rc,
+                    },
+                );
             }
             Err(e) => return Err(format!("{}: {}", path.display(), e)),
         }
@@ -358,7 +480,8 @@ impl ScriptState {
         }
         for path in &current_paths {
             let key = plugin_basename(path);
-            if let Some(plugin) = self.plugins.get(&key) {
+            if let Some(entry) = self.plugins.get(&key) {
+                let plugin = entry.plugin.borrow();
                 if plugin.path != *path {
                     return true;
                 }
@@ -380,220 +503,201 @@ impl ScriptState {
     pub fn plugin_dir(&self) -> Option<&PathBuf> {
         self.plugin_dir.as_ref()
     }
+}
 
-    /// Traverse effects: call each plugin's event handlers (`view_added`, `view_removed`,
-    /// `mouse_input`, etc.). Returns effects not consumed for the renderer.
-    pub fn call_view_effects(
-        &mut self,
-        effects: &[Effect],
-    ) -> Vec<Effect> {
-        let mut renderer_effects = Vec::new();
-        for eff in effects {
-            match eff {
-                Effect::ViewAdded(id) => {
-                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-                    keys.sort();
-                    for k in &keys {
-                        if let Some(plugin) = self.plugins.get_mut(k) {
-                            let _ = call_view_added(
-                                &plugin.engine,
-                                &mut plugin.scope,
-                                &plugin.ast.borrow(),
-                                id.raw() as i64,
-                            );
-                        }
-                    }
-                    renderer_effects.push(eff.clone());
-                }
-                Effect::ViewRemoved(id) => {
-                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-                    keys.sort();
-                    for k in &keys {
-                        if let Some(plugin) = self.plugins.get_mut(k) {
-                            let _ = call_view_removed(
-                                &plugin.engine,
-                                &mut plugin.scope,
-                                &plugin.ast.borrow(),
-                                id.raw() as i64,
-                            );
-                        }
-                    }
-                    renderer_effects.push(eff.clone());
-                }
-                Effect::ScriptEffect(ScriptEffect::MouseInput(state, button, p)) => {
-                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-                    keys.sort();
-                    for k in &keys {
-                        if let Some(plugin) = self.plugins.get_mut(k) {
-                            let _ = call_mouse_input(
-                                &plugin.engine,
-                                &mut plugin.scope,
-                                &plugin.ast.borrow(),
-                                state,
-                                button,
-                                p,
-                            );
-                        }
-                    }
-                    renderer_effects.push(eff.clone());
-                }
-                Effect::ScriptEffect(ScriptEffect::MouseWheel(delta)) => {
-                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-                    keys.sort();
-                    for k in &keys {
-                        if let Some(plugin) = self.plugins.get_mut(k) {
-                            let _ = call_mouse_wheel(
-                                &plugin.engine,
-                                &mut plugin.scope,
-                                &plugin.ast.borrow(),
-                                delta,
-                            );
-                        }
-                    }
-                    renderer_effects.push(eff.clone());
-                }
-                Effect::ScriptEffect(ScriptEffect::CursorMoved(p)) => {
-                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-                    keys.sort();
-                    for k in &keys {
-                        if let Some(plugin) = self.plugins.get_mut(k) {
-                            if let Err(e) = call_cursor_moved(
-                                &plugin.engine,
-                                &mut plugin.scope,
-                                &plugin.ast.borrow(),
-                                p,
-                            ) {
-                                error!("Script command 'cursor_moved' error: {}", e);
-                            }
-                        }
-                    }
-                    renderer_effects.push(eff.clone());
-                }
-                Effect::ScriptEffect(ScriptEffect::SwitchMode) => {
-                    let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-                    keys.sort();
-                    for k in &keys {
-                        if let Some(plugin) = self.plugins.get_mut(k) {
-                            let _ = call_switch_mode(
-                                &plugin.engine,
-                                &mut plugin.scope,
-                                &plugin.ast.borrow(),
-                            );
-                        }
+/// Traverse effects: call each plugin's event handlers (`view_added`, `view_removed`,
+/// `mouse_input`, etc.). Returns effects not consumed for the renderer.
+/// Takes `script_state_handle` so plugin code can access other plugins without holding a borrow.
+pub fn call_view_effects(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    effects: &[Effect],
+) -> Vec<Effect> {
+    let mut keys: Vec<_> = script_state_handle.borrow().plugins.keys().cloned().collect();
+    keys.sort();
+    let mut renderer_effects = Vec::new();
+    for eff in effects {
+        match eff {
+            Effect::ViewAdded(id) => {
+                for k in &keys {
+                    if let Some(entry) = script_state_handle.borrow().plugins.get(k) {
+                        let ast = entry.ast.borrow();
+                        let mut plugin = entry.plugin.borrow_mut();
+                        let _ = call_with_plugin_context(k, &mut plugin, |plugin| {
+                            call_view_added(plugin, &*ast, id.raw() as i64)
+                        });
                     }
                 }
-                other => renderer_effects.push(other.clone()),
+                renderer_effects.push(eff.clone());
             }
+            Effect::ViewRemoved(id) => {
+                for k in &keys {
+                    if let Some(entry) = script_state_handle.borrow().plugins.get(k) {
+                        let ast = entry.ast.borrow();
+                        let mut plugin = entry.plugin.borrow_mut();
+                        let _ = call_with_plugin_context(k, &mut plugin, |plugin| {
+                            call_view_removed(plugin, &*ast, id.raw() as i64)
+                        });
+                    }
+                }
+                renderer_effects.push(eff.clone());
+            }
+            Effect::ScriptEffect(ScriptEffect::MouseInput(state, button, p)) => {
+                for k in &keys {
+                    if let Some(entry) = script_state_handle.borrow().plugins.get(k) {
+                        let ast = entry.ast.borrow();
+                        let mut plugin = entry.plugin.borrow_mut();
+                        let _ = call_with_plugin_context(k, &mut plugin, |plugin| {
+                            call_mouse_input(plugin, &*ast, state, button, p)
+                        });
+                    }
+                }
+                renderer_effects.push(eff.clone());
+            }
+            Effect::ScriptEffect(ScriptEffect::MouseWheel(delta)) => {
+                for k in &keys {
+                    if let Some(entry) = script_state_handle.borrow().plugins.get(k) {
+                        let ast = entry.ast.borrow();
+                        let mut plugin = entry.plugin.borrow_mut();
+                        let _ = call_with_plugin_context(k, &mut plugin, |plugin| {
+                            call_mouse_wheel(plugin, &*ast, delta)
+                        });
+                    }
+                }
+                renderer_effects.push(eff.clone());
+            }
+            Effect::ScriptEffect(ScriptEffect::CursorMoved(p)) => {
+                for k in &keys {
+                    if let Some(entry) = script_state_handle.borrow().plugins.get(k) {
+                        let ast = entry.ast.borrow();
+                        let mut plugin = entry.plugin.borrow_mut();
+                        if let Err(e) = call_with_plugin_context(k, &mut plugin, |plugin| {
+                            call_cursor_moved(plugin, &*ast, p)
+                        }) {
+                            error!("Script command 'cursor_moved' error: {}", e);
+                        }
+                    }
+                }
+                renderer_effects.push(eff.clone());
+            }
+            Effect::ScriptEffect(ScriptEffect::SwitchMode) => {
+                for k in &keys {
+                    if let Some(entry) = script_state_handle.borrow().plugins.get(k) {
+                        let ast = entry.ast.borrow();
+                        let mut plugin = entry.plugin.borrow_mut();
+                        let _ = call_with_plugin_context(k, &mut plugin, |plugin| {
+                            call_switch_mode(plugin, &*ast)
+                        });
+                    }
+                }
+            }
+            other => renderer_effects.push(other.clone()),
         }
-        let mut script_state_effects = self.effects.borrow_mut();
+    }
+    {
+        let state = script_state_handle.borrow_mut();
+        let mut script_state_effects = state.effects.borrow_mut();
         renderer_effects.append(&mut script_state_effects);
         script_state_effects.clear();
-        renderer_effects
     }
+    renderer_effects
+}
 
-    /// Call each plugin's `draw()` event handler. User batch is cleared once before the first plugin.
-    /// The script's draw primitives (e.g. `draw_line`, `draw_text`) mutate the user batches directly.
-    pub fn call_draw_event(
-        &mut self,
-        user_batch: &(
-            Rc<RefCell<shape2d::Batch>>,
-            Rc<RefCell<Option<sprite2d::Batch>>>,
-        ),
-    ) -> Result<(), Box<rhai::EvalAltResult>> {
-        user_batch.0.borrow_mut().clear();
-        if let Some(ref mut b) = *user_batch.1.borrow_mut() {
-            b.clear();
-        }
-        let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-        keys.sort();
-        for k in &keys {
-            if let Some(plugin) = self.plugins.get_mut(k) {
-                call_draw(&plugin.engine, &mut plugin.scope, &plugin.ast.borrow())?;
-            }
-        }
-        Ok(())
+/// Call each plugin's `draw()` event handler. User batch is cleared once before the first plugin.
+/// The script's draw primitives (e.g. `draw_line`, `draw_text`) mutate the user batches directly.
+pub fn call_draw_event(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    user_batch: &(
+        Rc<RefCell<shape2d::Batch>>,
+        Rc<RefCell<Option<sprite2d::Batch>>>,
+    ),
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    user_batch.0.borrow_mut().clear();
+    if let Some(ref mut b) = *user_batch.1.borrow_mut() {
+        b.clear();
     }
+    let mut keys: Vec<_> = script_state_handle.borrow().plugins.keys().cloned().collect();
+    keys.sort();
+    for k in &keys {
+        if let Some(entry) = script_state_handle.borrow().plugins.get(k) {
+            let ast = entry.ast.borrow();
+            let mut plugin = entry.plugin.borrow_mut();
+            call_with_plugin_context(k, &mut plugin, |plugin| call_draw(plugin, &*ast))?;
+        }
+    }
+    Ok(())
+}
 
-    pub fn call_shade_event(
-        &mut self,
-        encoder: &Rc<RefCell<wgpu_types::CommandEncoder>>,
-    ) -> Result<(), Box<rhai::EvalAltResult>> {
-        let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-        keys.sort();
-        for k in &keys {
-            if let Some(plugin) = self.plugins.get_mut(k) {
-                call_shade(
-                    &plugin.engine,
-                    &mut plugin.scope,
-                    &plugin.ast.borrow(),
-                    encoder,
-                )?;
-            }
+/// Call each plugin's `shade(encoder)` event handler.
+pub fn call_shade_event(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    encoder: &Rc<RefCell<wgpu_types::CommandEncoder>>,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    let mut keys: Vec<_> = script_state_handle.borrow().plugins.keys().cloned().collect();
+    keys.sort();
+    for k in &keys {
+        if let Some(entry) = script_state_handle.borrow().plugins.get(k) {
+            let ast = entry.ast.borrow();
+            let mut plugin = entry.plugin.borrow_mut();
+            call_with_plugin_context(k, &mut plugin, |plugin| call_shade(plugin, &*ast, encoder))?;
         }
-        Ok(())
     }
+    Ok(())
+}
 
-    pub fn call_render_event(
-        &mut self,
-        script_pass: ScriptRenderPass,
-    ) -> Result<(), Box<rhai::EvalAltResult>> {
-        let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-        keys.sort();
-        for k in &keys {
-            if let Some(plugin) = self.plugins.get_mut(k) {
-                call_render(
-                    &plugin.engine,
-                    &mut plugin.scope,
-                    &plugin.ast.borrow(),
-                    script_pass.clone(),
-                )?;
-            }
+/// Call each plugin's `render(pass)` event handler.
+pub fn call_render_event(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    script_pass: ScriptRenderPass,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    let mut keys: Vec<_> = script_state_handle.borrow().plugins.keys().cloned().collect();
+    keys.sort();
+    for k in &keys {
+        if let Some(entry) = script_state_handle.borrow().plugins.get(k) {
+            let ast = entry.ast.borrow();
+            let mut plugin = entry.plugin.borrow_mut();
+            call_with_plugin_context(k, &mut plugin, |plugin| {
+                call_render(plugin, &*ast, script_pass.clone())
+            })?;
         }
-        Ok(())
     }
+    Ok(())
+}
 
-    /// Call a script command handler `cmd_<name>(args)` on each plugin in turn.
-    ///
-    /// A handler can:
-    /// - Return `true`  → command is handled, skip built-in.
-    /// - Return `false` → command is not handled, try next plugin / built-in.
-    /// - Return nothing  → treated as `false` (not handled).
-    ///
-    /// Returns `Ok(true)` if any plugin handled it, `Ok(false)` if none did.
-    pub fn call_script_command(
-        &mut self,
-        name: &str,
-        args: Vec<String>,
-    ) -> Result<bool, Box<rhai::EvalAltResult>> {
-        let handler_name = format!("cmd_{}", name.replace('/', "_"));
-        let rhai_args: Array = args.into_iter().map(Dynamic::from).collect();
-        let mut keys: Vec<_> = self.plugins.keys().cloned().collect();
-        keys.sort();
-        for k in &keys {
-            let plugin = match self.plugins.get_mut(k) {
-                Some(p) => p,
-                None => continue,
-            };
-            match plugin.engine.call_fn::<Dynamic>(
-                &mut plugin.scope,
-                &plugin.ast.borrow(),
-                &handler_name,
-                (rhai_args.clone(),),
-            ) {
-                Ok(val) => {
-                    // true  → handled; false / () / anything else → not handled.
-                    if val.as_bool().unwrap_or(false) {
-                        return Ok(true);
-                    }
-                    // This plugin explicitly declined; try the next one.
-                    continue;
-                }
-                Err(ref e) if is_function_not_found(e, &handler_name) => continue,
-                Err(e) => return Err(e),
-            }
+/// Call a script command handler `cmd_<name>(args)` on each plugin in turn.
+///
+/// A handler can:
+/// - Return `true`  → command is handled, skip built-in.
+/// - Return `false` → command is not handled, try next plugin / built-in.
+/// - Return nothing  → treated as `false` (not handled).
+///
+/// Returns `Ok(true)` if any plugin handled it, `Ok(false)` if none did.
+pub fn call_script_command(
+    script_state_handle: &Rc<RefCell<ScriptState>>,
+    name: &str,
+    args: Vec<String>,
+) -> Result<bool, Box<rhai::EvalAltResult>> {
+    let handler_name = format!("cmd_{}", name.replace('/', "_"));
+    let rhai_args: Array = args.into_iter().map(Dynamic::from).collect();
+    let mut keys: Vec<_> = script_state_handle.borrow().plugins.keys().cloned().collect();
+    keys.sort();
+    for k in &keys {
+        let state = script_state_handle.borrow();
+        let (plugin_rc, ast_rc) = match state.plugins.get(k) {
+            Some(entry) => (entry.plugin.clone(), entry.ast.clone()),
+            None => continue,
+        };
+        drop(state);
+        let ast = ast_rc.borrow();
+        let mut plugin = plugin_rc.borrow_mut();
+        match call_with_plugin_context(k, &mut plugin, |plugin| {
+            call_script_command_plugin(plugin, &*ast, &handler_name, &rhai_args)
+        }) {
+            Ok(Some(true)) => return Ok(true),
+            Ok(_) => continue,
+            Err(e) => return Err(e),
         }
-        Ok(false)
     }
+    Ok(false)
 }
 
 impl Default for ScriptState {
@@ -609,7 +713,11 @@ pub fn compile_file(engine: &Engine, path: &Path) -> Result<AST, Box<rhai::EvalA
 
 /// Register session handle type so scripts can use the global `session`.
 /// Exposes width, height, offset_x, offset_y from the session.
-pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<RefCell<Vec<Effect>>>) {
+pub fn register_session_handle(
+    engine: &mut Engine,
+    script_effects_queue: Rc<RefCell<Vec<Effect>>>,
+    script_state_handle: Rc<RefCell<ScriptState>>,
+) {
     engine
         .register_type_with_name::<Rc<RefCell<Session>>>("Session")
         .register_get("width", |s: &mut Rc<RefCell<Session>>| {
@@ -709,6 +817,27 @@ pub fn register_session_handle(engine: &mut Engine, script_effects_queue: Rc<Ref
         })
         .register_fn("get_setting", |s: &mut Rc<RefCell<Session>>, name: &str| {
             ScriptSettingValue(s.borrow().settings.get(name).cloned())
+        })
+        .register_fn("init_setting", |s: &mut Rc<RefCell<Session>>, name: &str, value: &str| {
+            s.borrow_mut()
+                .settings
+                .init(name, Value::Str(value.to_string()))
+        })
+        .register_fn("get_plugin_fn", |_: &mut Rc<RefCell<Session>>, addr: &str| {
+            parse_plugin_fn_ref(addr)
+        })
+        .register_fn("get_plugin_fn", |_: &mut Rc<RefCell<Session>>, addr: Option<String>| {
+            match addr {
+                Some(s) => parse_plugin_fn_ref(s.as_str()),
+                None => Err("Plugin function address is missing".into()),
+            }
+        })
+        .register_type_with_name::<PluginFnRef>("PluginFnRef")
+        .register_fn("invoke", {
+            let script_state_handle = script_state_handle.clone();
+            move |plugin_fn: &mut PluginFnRef, call_args: Array| {
+                invoke_plugin_fn_ref(&script_state_handle, plugin_fn, call_args)
+            }
         })
         .register_type_with_name::<ScriptSettingValue>("ScriptSettingValue")
         .register_fn("is_present", ScriptSettingValue::is_present)
@@ -1840,11 +1969,10 @@ fn register_constants(scope: &mut Scope) {
 ///
 /// If the script does not define `unload`, this is a no-op (no error).
 pub fn call_unload(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "unload", ()) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "unload", ()) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "unload") => Ok(()),
         Err(e) => Err(e),
@@ -1876,11 +2004,10 @@ pub fn call_init(
 ///
 /// If the script does not define `draw`, this is a no-op (no error).
 pub fn call_draw(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "draw", ()) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "draw", ()) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "draw") => Ok(()),
         Err(e) => Err(e),
@@ -1888,14 +2015,12 @@ pub fn call_draw(
 }
 
 /// Call the script's `shade(encoder)` event handler.
-
 pub fn call_shade(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
     encoder: &Rc<RefCell<wgpu_types::CommandEncoder>>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "shade", (encoder.clone(),)) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "shade", (encoder.clone(),)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "shade") => Ok(()),
         Err(e) => Err(e),
@@ -1903,12 +2028,11 @@ pub fn call_shade(
 }
 
 pub fn call_render(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
     script_pass: ScriptRenderPass,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "render", (script_pass,)) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "render", (script_pass,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "render") => Ok(()),
         Err(e) => Err(e),
@@ -1917,12 +2041,11 @@ pub fn call_render(
 
 /// Call the script's `view_added(view_id)` handler.
 fn call_view_added(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
     view_id: i64,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "view_added", (view_id,)) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "view_added", (view_id,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "view_added") => Ok(()),
         Err(e) => Err(e),
@@ -1931,12 +2054,11 @@ fn call_view_added(
 
 /// Call the script's `view_removed(view_id)` handler.
 fn call_view_removed(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
     view_id: i64,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "view_removed", (view_id,)) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "view_removed", (view_id,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "view_removed") => Ok(()),
         Err(e) => Err(e),
@@ -1944,15 +2066,14 @@ fn call_view_removed(
 }
 
 fn call_mouse_input(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
     state: &InputState,
     button: &MouseButton,
     p: &Point<Session, f32>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     let p: Point<Session, f64> = p.clone().into();
-    match engine.call_fn::<()>(scope, ast, "mouse_input", (state.clone(), button.clone(), p)) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "mouse_input", (state.clone(), button.clone(), p)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "mouse_input") => Ok(()),
         Err(e) => Err(e),
@@ -1960,12 +2081,11 @@ fn call_mouse_input(
 }
 
 fn call_mouse_wheel(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
     delta: &LogicalDelta,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "mouse_wheel", (delta.clone(),)) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "mouse_wheel", (delta.clone(),)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "mouse_wheel") => Ok(()),
         Err(e) => Err(e),
@@ -1973,13 +2093,12 @@ fn call_mouse_wheel(
 }
 
 fn call_cursor_moved(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
     p: &Point<Session, f32>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     let p: Point<Session, f64> = p.clone().into();
-    match engine.call_fn::<()>(scope, ast, "cursor_moved", (p,)) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "cursor_moved", (p,)) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "cursor_moved") => Ok(()),
         Err(e) => Err(e),
@@ -1987,13 +2106,30 @@ fn call_cursor_moved(
 }
 
 fn call_switch_mode(
-    engine: &Engine,
-    scope: &mut Scope,
+    plugin: &mut LoadedPlugin,
     ast: &AST,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
-    match engine.call_fn::<()>(scope, ast, "switch_mode", ()) {
+    match plugin.engine.call_fn::<()>(&mut plugin.scope, ast, "switch_mode", ()) {
         Ok(()) => Ok(()),
         Err(ref e) if is_function_not_found(e, "switch_mode") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn call_script_command_plugin(
+    plugin: &mut LoadedPlugin,
+    ast: &AST,
+    handler_name: &str,
+    rhai_args: &Array,
+) -> Result<Option<bool>, Box<rhai::EvalAltResult>> {
+    match plugin.engine.call_fn::<Dynamic>(
+        &mut plugin.scope,
+        ast,
+        handler_name,
+        (rhai_args.clone(),),
+    ) {
+        Ok(val) => Ok(Some(val.as_bool().unwrap_or(false))),
+        Err(ref e) if is_function_not_found(e, handler_name) => Ok(None),
         Err(e) => Err(e),
     }
 }

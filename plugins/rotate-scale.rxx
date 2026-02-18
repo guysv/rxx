@@ -6,11 +6,6 @@ fn init() {
     const PIVOT_COLOR_UNLOCKED = rgb8(0xff, 0xff, 0x00);
     const PIVOT_COLOR_LOCKED = rgb8(0xff, 0xff, 0xff);
 
-    // shader and pipeline
-    let wgsl = read_file("cleanedge.wgsl");
-    let shader = renderer.create_shader_module(wgsl);
-    let pipeline = renderer.create_render_pipeline_with_texture(shader, "vs_main", "fs_main");
-
     // visual modes
     let rotation_mode = script_mode("visual (rotation)");
     let scale_mode = script_mode("visual (scale)");
@@ -37,6 +32,7 @@ fn init() {
     let pasted_once = false;
     let active_view_id = ();
     let apply_queue = script_queue;
+    session.init_setting("rotate-scale/algo", "clean-edge.rxx/render_pass");
 
     register_command("selection/rotate", "Rotates the selection");
     register_command("selection/scale", "Scales the selection");
@@ -248,6 +244,11 @@ fn shade(encoder) {
     if !in_progress {
         return;
     }
+    let algo_addr = session.get_setting("rotate-scale/algo").as_string();
+    if algo_addr == () || algo_addr == "" {
+        throw "rotate-scale/algo setting is required";
+    }
+    let pass_fn = session.get_plugin_fn(algo_addr);
     let draw_to_render = apply_queue.pop() == "draw_to_render";
     let target_texture = if draw_to_render {
         renderer.view_render_texture(active_view_id)
@@ -258,7 +259,6 @@ fn shade(encoder) {
         pasted_once = true;
     }
 
-    let view = session.view(session.active_view_id);
     let batch = renderer.sprite_singleton_batch(
         8, 8,
         rect(0.0, 0.0, 8.0, 8.0),
@@ -279,13 +279,5 @@ fn shade(encoder) {
         t2 * s * t1
     };
 
-    let transform_bind_group = renderer.create_ortho_custom_transform_bind_group(view.frame_width, view.frame_height, transform);
-    let clipboard_bind_group = renderer.create_texture_sampler_bind_group(clipboard);
-
-    let pass = encoder.begin_render_pass("cleanedge", [color_attachment(target_texture, load_load(), store_store())]);
-    pass.set_pipeline(pipeline);
-    pass.set_bind_group(0, transform_bind_group);
-    pass.set_bind_group(1, clipboard_bind_group);
-    pass.set_vertex_buffer(0, vertex_buffer);
-    pass.draw(6, 1, 0, 0);
+    pass_fn.invoke([encoder, transform, target_texture, clipboard, vertex_buffer]);
 }

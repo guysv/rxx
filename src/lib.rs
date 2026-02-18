@@ -445,9 +445,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
         let mut all_effects = effects;
         all_effects.extend(session_handle.borrow_mut().collect_effects());
 
-        let renderer_effects = script_state_handle
-            .borrow_mut()
-            .call_view_effects(&all_effects);
+        let renderer_effects = script::call_view_effects(&script_state_handle, &all_effects);
 
         render_timer.run(|avg| {
             Renderer::frame(

@@ -1,0 +1,20 @@
+// clean-edge.rxx - render pass implementation for rotate-scale
+
+fn init() {
+    let wgsl = read_file("cleanedge.wgsl");
+    let shader = renderer.create_shader_module(wgsl);
+    let pipeline = renderer.create_render_pipeline_with_texture(shader, "vs_main", "fs_main");
+    print(`clean-edge.rxx initialized`);
+}
+
+fn render_pass(encoder, transform, target_texture, source_texture, vertex_buffer) {
+    let view = session.view(session.active_view_id);
+    let transform_bind_group = renderer.create_ortho_custom_transform_bind_group(view.frame_width, view.frame_height, transform);
+    let source_bind_group = renderer.create_texture_sampler_bind_group(source_texture);
+    let pass = encoder.begin_render_pass("cleanedge", [color_attachment(target_texture, load_load(), store_store())]);
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, transform_bind_group);
+    pass.set_bind_group(1, source_bind_group);
+    pass.set_vertex_buffer(0, vertex_buffer);
+    pass.draw(6, 1, 0, 0);
+}
