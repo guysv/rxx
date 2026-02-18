@@ -234,6 +234,36 @@ impl std::fmt::Display for ScriptSpriteVertexList {
     }
 }
 
+impl ScriptSpriteVertexList {
+    fn extents(&self) -> Option<(f32, f32, f32, f32)> {
+        let mut it = self.vertices.iter();
+        let first = it.next()?;
+        let mut min_x = first.position.x;
+        let mut min_y = first.position.y;
+        let mut max_x = first.position.x;
+        let mut max_y = first.position.y;
+        for v in it {
+            min_x = min_x.min(v.position.x);
+            min_y = min_y.min(v.position.y);
+            max_x = max_x.max(v.position.x);
+            max_y = max_y.max(v.position.y);
+        }
+        Some((min_x, min_y, max_x, max_y))
+    }
+
+    pub fn width(&self) -> f64 {
+        self.extents()
+            .map(|(min_x, _, max_x, _)| (max_x - min_x) as f64)
+            .unwrap_or(0.0)
+    }
+
+    pub fn height(&self) -> f64 {
+        self.extents()
+            .map(|(_, min_y, _, max_y)| (max_y - min_y) as f64)
+            .unwrap_or(0.0)
+    }
+}
+
 /// Per-plugin state: one Rhai engine and scope per .rxx file. AST is stored separately in
 /// `LoadedPluginEntry` so we can borrow plugin (engine/scope) and ast independently when calling into scripts.
 pub struct LoadedPlugin {
@@ -1653,6 +1683,12 @@ pub fn register_renderer_handle(
         })
         .register_fn("to_debug", |list: &mut ScriptSpriteVertexList| {
             format!("{list:?}")
+        })
+        .register_fn("width", |list: &mut ScriptSpriteVertexList| {
+            list.width()
+        })
+        .register_fn("height", |list: &mut ScriptSpriteVertexList| {
+            list.height()
         })
         .register_fn("create_vertex_buffer_from_sprite_vertices", {
             move |r: &mut Rc<RefCell<wgpu::Renderer>>, list: ScriptSpriteVertexList| {

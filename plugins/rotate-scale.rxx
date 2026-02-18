@@ -267,7 +267,6 @@ fn shade(encoder) {
         rgb8(0, 0, 0, 0),
         if draw_to_render { 1.0 } else { 0.9 });
     let vertices = batch.vertices();
-    let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
 
     let t1 = mat4_translation(-pivot.x, -pivot.y);
     let t2 = mat4_translation(pivot.x, pivot.y);
@@ -279,5 +278,5 @@ fn shade(encoder) {
         t2 * s * t1
     };
 
-    pass_fn.invoke([encoder, transform, target_texture, clipboard, vertex_buffer]);
+    pass_fn.invoke([encoder, transform, target_texture, clipboard, vertices]);
 }

@@ -7,10 +7,11 @@ fn init() {
     print(`cleanedge.rxx initialized`);
 }
 
-fn render_pass(encoder, transform, target_texture, source_texture, vertex_buffer) {
+fn render_pass(encoder, transform, target_texture, source_texture, vertices) {
     let view = session.view(session.active_view_id);
     let transform_bind_group = renderer.create_ortho_custom_transform_bind_group(view.frame_width, view.frame_height, transform);
     let source_bind_group = renderer.create_texture_sampler_bind_group(source_texture);
+    let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
     let pass = encoder.begin_render_pass("cleanedge", [color_attachment(target_texture, load_load(), store_store())]);
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, transform_bind_group);

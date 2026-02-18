@@ -52,15 +52,9 @@ fn run_epx_pass(encoder, source_texture, target_texture, src_w, src_h, dst_w, ds
     pass.draw(6, 1, 0, 0);
 }
 
-fn render_pass(encoder, transform, target_texture, source_texture, vertex_buffer) {
-    let selection = session.selection;
-    if selection == () {
-        return;
-    }
-
-    let src_rect = selection.to_rect_f64();
-    let src_w = src_rect.width.to_int();
-    let src_h = src_rect.height.to_int();
+fn render_pass(encoder, transform, target_texture, source_texture, vertices) {
+    let src_w = vertices.width().to_int();
+    let src_h = vertices.height().to_int();
     if src_w <= 0 || src_h <= 0 {
         return;
     }
@@ -87,6 +81,7 @@ fn render_pass(encoder, transform, target_texture, source_texture, vertex_buffer
         transform
     );
     let source_bg = renderer.create_texture_sampler_bind_group(tex8, clamp_nearest_sampler);
+    let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
 
     let pass = encoder.begin_render_pass(
         "rotsprite-final",
