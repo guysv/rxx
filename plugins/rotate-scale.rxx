@@ -32,7 +32,7 @@ fn init() {
     let pasted_once = false;
     let active_view_id = ();
     let apply_queue = script_queue;
-    session.init_setting("rotate-scale/algo", "clean-edge.rxx/render_pass");
+    session.init_setting("rotate-scale/algo", "rotsprite-gl.rxx/render_pass");
 
     register_command("selection/rotate", "Rotates the selection");
     register_command("selection/scale", "Scales the selection");

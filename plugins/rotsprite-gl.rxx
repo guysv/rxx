@@ -1,0 +1,97 @@
+// rotsprite-gl.rxx - self-contained rotsprite implementation for rotate-scale
+
+fn init() {
+    let wgsl = read_file("rotsprite.wgsl");
+    const SCALE = 8;
+
+    let shader_module = renderer.create_shader_module(wgsl);
+    let epx_pipeline = renderer.create_render_pipeline_with_texture(shader_module, "vs_main", "fs_epx");
+    let final_pipeline = renderer.create_render_pipeline_with_texture(shader_module, "vs_main", "fs_final");
+    let clamp_nearest_sampler = renderer.create_sampler(
+        SAMPLER_ADDRESS_CLAMP_TO_EDGE,
+        SAMPLER_FILTER_NEAREST
+    );
+    print(`rotsprite-gl.rxx initialized`);
+}
+
+fn make_vertex_buffer(src_w, src_h, dst_w, dst_h) {
+    let src_wf = src_w.to_float();
+    let src_hf = src_h.to_float();
+    let dst_wf = dst_w.to_float();
+    let dst_hf = dst_h.to_float();
+    let batch = renderer.sprite_singleton_batch(
+        src_w, src_h,
+        rect(0.0, 0.0, src_wf, src_hf),
+        rect(0.0, 0.0, dst_wf, dst_hf),
+        0.0,
+        rgb8(0, 0, 0, 0),
+        1.0
+    );
+    renderer.create_vertex_buffer_from_sprite_vertices(batch.vertices())
+}
+
+fn run_epx_pass(encoder, source_texture, target_texture, src_w, src_h, dst_w, dst_h) {
+    let transform_bg = renderer.create_ortho_custom_transform_bind_group(
+        dst_w.to_float(),
+        dst_h.to_float(),
+        mat4_identity()
+    );
+    let source_bg = renderer.create_texture_sampler_bind_group(source_texture, clamp_nearest_sampler);
+    let vertex_buffer = make_vertex_buffer!(src_w, src_h, dst_w, dst_h);
+    let pass = encoder.begin_render_pass(
+        "rotsprite-epx",
+        [color_attachment(target_texture, load_clear(0.0, 0.0, 0.0, 0.0), store_store())]
+    );
+    pass.set_pipeline(epx_pipeline);
+    pass.set_bind_group(0, transform_bg);
+    pass.set_bind_group(1, source_bg);
+    pass.set_vertex_buffer(0, vertex_buffer);
+    pass.draw(6, 1, 0, 0);
+}
+
+fn render_pass(encoder, transform, target_texture, source_texture, vertex_buffer) {
+    let selection = session.selection;
+    if selection == () {
+        return;
+    }
+
+    let src_rect = selection.to_rect_f64();
+    let src_w = src_rect.width.to_int();
+    let src_h = src_rect.height.to_int();
+    if src_w <= 0 || src_h <= 0 {
+        return;
+    }
+
+    let w2 = src_w * 2;
+    let h2 = src_h * 2;
+    let w4 = src_w * 4;
+    let h4 = src_h * 4;
+    let w8 = src_w * SCALE;
+    let h8 = src_h * SCALE;
+
+    let tex2 = renderer.create_render_texture(w2, h2);
+    let tex4 = renderer.create_render_texture(w4, h4);
+    let tex8 = renderer.create_render_texture(w8, h8);
+
+    run_epx_pass!(encoder, source_texture, tex2, src_w, src_h, w2, h2);
+    run_epx_pass!(encoder, tex2, tex4, w2, h2, w4, h4);
+    run_epx_pass!(encoder, tex4, tex8, w4, h4, w8, h8);
+
+    let view = session.view(session.active_view_id);
+    let transform_bg = renderer.create_ortho_custom_transform_bind_group(
+        view.frame_width,
+        view.frame_height,
+        transform
+    );
+    let source_bg = renderer.create_texture_sampler_bind_group(tex8, clamp_nearest_sampler);
+
+    let pass = encoder.begin_render_pass(
+        "rotsprite-final",
+        [color_attachment(target_texture, load_load(), store_store())]
+    );
+    pass.set_pipeline(final_pipeline);
+    pass.set_bind_group(0, transform_bg);
+    pass.set_bind_group(1, source_bg);
+    pass.set_vertex_buffer(0, vertex_buffer);
+    pass.draw(6, 1, 0, 0);
+}

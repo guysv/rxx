@@ -1008,7 +1008,33 @@ pub enum ScriptBindGroupEntry {
         binding: u32,
         texture: Rc<RefCell<Texture>>,
     },
+    Sampler {
+        binding: u32,
+        sampler: Rc<RefCell<wgpu_types::Sampler>>,
+    },
     SamplerDefault { binding: u32 },
+}
+
+const SAMPLER_ADDRESS_CLAMP_TO_EDGE: i64 = 0;
+const SAMPLER_ADDRESS_REPEAT: i64 = 1;
+const SAMPLER_ADDRESS_MIRROR_REPEAT: i64 = 2;
+
+const SAMPLER_FILTER_NEAREST: i64 = 0;
+const SAMPLER_FILTER_LINEAR: i64 = 1;
+
+fn script_sampler_address_mode(mode: i64) -> wgpu_types::AddressMode {
+    match mode {
+        SAMPLER_ADDRESS_REPEAT => wgpu_types::AddressMode::Repeat,
+        SAMPLER_ADDRESS_MIRROR_REPEAT => wgpu_types::AddressMode::MirrorRepeat,
+        _ => wgpu_types::AddressMode::ClampToEdge,
+    }
+}
+
+fn script_sampler_filter_mode(mode: i64) -> wgpu_types::FilterMode {
+    match mode {
+        SAMPLER_FILTER_LINEAR => wgpu_types::FilterMode::Linear,
+        _ => wgpu_types::FilterMode::Nearest,
+    }
 }
 
 /// Render pass type for script: wraps the wgpu render pass so pass methods can resolve handles.
@@ -1131,6 +1157,7 @@ pub fn register_renderer_handle(
     engine
         .register_type_with_name::<wgpu_types::TextureFormat>("TextureFormat")
         .register_type_with_name::<Rc<RefCell<Texture>>>("TextureHandle")
+        .register_type_with_name::<Rc<RefCell<wgpu_types::Sampler>>>("SamplerHandle")
         .register_type_with_name::<ScriptLoadOp>("LoadOp")
         .register_type_with_name::<ScriptStoreOp>("StoreOp")
         .register_type_with_name::<ScriptColorAttachment>("ColorAttachment")
@@ -1193,6 +1220,15 @@ pub fn register_renderer_handle(
                 binding: binding as u32,
             }
         })
+        .register_fn(
+            "bind_sampler",
+            |binding: i64, sampler: Rc<RefCell<wgpu_types::Sampler>>| {
+                ScriptBindGroupEntry::Sampler {
+                    binding: binding as u32,
+                    sampler,
+                }
+            },
+        )
         .register_fn(
             "set_pipeline",
             |pass: &mut ScriptRenderPass, handle: Rc<RefCell<wgpu_types::RenderPipeline>>| -> Result<(), Box<rhai::EvalAltResult>> {
@@ -1317,6 +1353,45 @@ pub fn register_renderer_handle(
                 let bind_group = r.borrow_mut()
                     .create_texture_sampler_bind_group(&texture);
                 Rc::new(RefCell::new(bind_group))
+            }
+        })
+        .register_fn("create_texture_sampler_bind_group", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  texture_handle: Rc<RefCell<Texture>>,
+                  sampler_handle: Rc<RefCell<wgpu_types::Sampler>>| {
+                let texture = texture_handle.borrow();
+                let sampler = sampler_handle.borrow();
+                let bind_group = r.borrow_mut()
+                    .create_texture_sampler_bind_group_with_sampler(&texture, &sampler);
+                Rc::new(RefCell::new(bind_group))
+            }
+        })
+        .register_fn("create_sampler", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>, address_mode: i64, filter_mode: i64| {
+                let address = script_sampler_address_mode(address_mode);
+                let filter = script_sampler_filter_mode(filter_mode);
+                let sampler = r.borrow()
+                    .create_sampler(address, address, address, filter, filter, filter);
+                Rc::new(RefCell::new(sampler))
+            }
+        })
+        .register_fn("create_sampler", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>,
+                  address_mode_u: i64,
+                  address_mode_v: i64,
+                  address_mode_w: i64,
+                  mag_filter: i64,
+                  min_filter: i64,
+                  mipmap_filter: i64| {
+                let sampler = r.borrow().create_sampler(
+                    script_sampler_address_mode(address_mode_u),
+                    script_sampler_address_mode(address_mode_v),
+                    script_sampler_address_mode(address_mode_w),
+                    script_sampler_filter_mode(mag_filter),
+                    script_sampler_filter_mode(min_filter),
+                    script_sampler_filter_mode(mipmap_filter),
+                );
+                Rc::new(RefCell::new(sampler))
             }
         })
         .register_fn("create_shader_module", {
@@ -1946,6 +2021,11 @@ fn register_constants(scope: &mut Scope) {
     scope.push_constant("SHADER_STAGE_VERTEX", 1_i64);
     scope.push_constant("SHADER_STAGE_FRAGMENT", 2_i64);
     scope.push_constant("SHADER_STAGE_COMPUTE", 4_i64);
+    scope.push_constant("SAMPLER_ADDRESS_CLAMP_TO_EDGE", SAMPLER_ADDRESS_CLAMP_TO_EDGE);
+    scope.push_constant("SAMPLER_ADDRESS_REPEAT", SAMPLER_ADDRESS_REPEAT);
+    scope.push_constant("SAMPLER_ADDRESS_MIRROR_REPEAT", SAMPLER_ADDRESS_MIRROR_REPEAT);
+    scope.push_constant("SAMPLER_FILTER_NEAREST", SAMPLER_FILTER_NEAREST);
+    scope.push_constant("SAMPLER_FILTER_LINEAR", SAMPLER_FILTER_LINEAR);
     scope.push_constant("MODE_NORMAL", Mode::Normal);
     scope.push_constant("MODE_VISUAL", Mode::Visual(VisualState::default()));
     scope.push_constant("MODE_COMMAND", Mode::Command);

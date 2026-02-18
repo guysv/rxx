@@ -2165,11 +2165,19 @@ impl Renderer {
     /// Create a bind group (texture + sampler) from a script texture handle for use as @group(1) uniform sampler.
     /// Resolves ViewLayer from view_data and ScriptCreated from storage. Returns bind group handle (u64).
     pub fn create_texture_sampler_bind_group(
-        &mut self,
+        &self,
         texture: &Texture,
     ) -> wgpu::BindGroup {
+        self.create_texture_sampler_bind_group_with_sampler(texture, &self.sampler)
+    }
+
+    /// Create a bind group (texture + explicit sampler) from a script texture handle.
+    pub fn create_texture_sampler_bind_group_with_sampler(
+        &self,
+        texture: &Texture,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
         let layout = &self.texture_bind_group_layout;
-        let sampler = &self.sampler;
         let bind_group = {
             let view = texture.view();
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2189,6 +2197,27 @@ impl Renderer {
         };
         bind_group
 
+    }
+
+    /// Create a sampler with explicit address and filter modes for script usage.
+    pub fn create_sampler(
+        &self,
+        address_mode_u: wgpu::AddressMode,
+        address_mode_v: wgpu::AddressMode,
+        address_mode_w: wgpu::AddressMode,
+        mag_filter: wgpu::FilterMode,
+        min_filter: wgpu::FilterMode,
+        mipmap_filter: wgpu::FilterMode,
+    ) -> wgpu::Sampler {
+        self.device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u,
+            address_mode_v,
+            address_mode_w,
+            mag_filter,
+            min_filter,
+            mipmap_filter,
+            ..Default::default()
+        })
     }
 
     /// Create a shader module from WGSL source. Returns handle (u64).
@@ -2333,6 +2362,7 @@ impl Renderer {
         let mut buffer_refs: Vec<(u32, Ref<wgpu::Buffer>)> = Vec::new();
         let mut texture_refs: Vec<(u32, Ref<Texture>)> = Vec::new();
         let mut sampler_bindings: Vec<u32> = Vec::new();
+        let mut sampler_refs: Vec<(u32, Ref<wgpu::Sampler>)> = Vec::new();
         let mut texture_raw_refs: Vec<(u32, Ref<Texture>)> = Vec::new();
         for e in entries {
             match e {
@@ -2344,6 +2374,9 @@ impl Renderer {
                 }
                 ScriptBindGroupEntry::TextureRaw { binding, texture } => {
                     texture_raw_refs.push((*binding, texture.borrow()));
+                }
+                ScriptBindGroupEntry::Sampler { binding, sampler } => {
+                    sampler_refs.push((*binding, sampler.borrow()));
                 }
                 ScriptBindGroupEntry::SamplerDefault { binding } => {
                     sampler_bindings.push(*binding);
@@ -2373,6 +2406,12 @@ impl Renderer {
             wgpu_entries.push(wgpu::BindGroupEntry {
                 binding: *binding,
                 resource: wgpu::BindingResource::Sampler(&self.sampler),
+            });
+        }
+        for (binding, sampler_ref) in &sampler_refs {
+            wgpu_entries.push(wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: wgpu::BindingResource::Sampler(&*sampler_ref),
             });
         }
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
