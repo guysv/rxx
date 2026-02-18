@@ -219,6 +219,17 @@ fn draw() {
     if session.mode != rotation_mode && session.mode != scale_mode {
         return;
     }
+    let algo_addr = session.get_setting("rotate-scale/algo").as_string();
+    if algo_addr != () {
+        draw_text(vec2(10.0, 86.0), `Algorithm: ${algo_addr}`, rgb8(0xff, 0x33, 0x66));
+        if session.mode == rotation_mode {
+            draw_text(vec2(10.0, 66.0), `Angle: ${rotation_angle}`, rgb8(0xff, 0x33, 0x66));
+        }
+        if session.mode == scale_mode {
+            draw_text(vec2(10.0, 66.0), `Scale: ${scale_x}, ${scale_y}`, rgb8(0xff, 0x33, 0x66));
+        }
+    }
+    
     let view = session.view(session.active_view_id);
     let offset_x = session.offset_x + view.offset.x;
     let offset_y = session.offset_y + view.offset.y;
