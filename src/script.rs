@@ -1248,6 +1248,7 @@ pub fn register_renderer_handle(
         .register_type_with_name::<ScriptBindingType>("BindingType")
         .register_type_with_name::<ScriptBindGroupLayoutEntry>("BindGroupLayoutEntry")
         .register_type_with_name::<ScriptBindGroupEntry>("BindGroupEntry")
+        .register_type_with_name::<Rc<RefCell<wgpu_types::RenderPipeline>>>("RenderPipelineHandle")
         .register_type_with_name::<Rc<RefCell<wgpu_types::BindGroupLayout>>>("BindGroupLayoutHandle")
         .register_fn("binding_uniform_buffer", || ScriptBindingType::UniformBuffer)
         .register_fn("binding_texture_2d", || ScriptBindingType::Texture2dFilterable)
@@ -1479,6 +1480,11 @@ pub fn register_renderer_handle(
                 let module = r.borrow_mut()
                     .create_shader_module(None, wgsl_source.as_str());
                 Rc::new(RefCell::new(module))
+            }
+        })
+        .register_fn("sprite_pipeline", {
+            move |r: &mut Rc<RefCell<wgpu::Renderer>>| {
+                r.borrow().sprite_pipeline_handle()
             }
         })
         .register_fn("create_render_pipeline", {

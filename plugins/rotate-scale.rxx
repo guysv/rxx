@@ -30,7 +30,7 @@ fn init() {
     let active_view_id = ();
     let base_selection = ();
     let apply_queue = script_queue;
-    session.init_setting("rotate-scale/algo", "rotsprite-gl.rxx/render_pass");
+    session.init_setting("rotate-scale/algo", "");
 
     register_command("selection/rotate", "Rotates the selection");
     register_command("rotate/set", "Sets selection rotation in degrees");
@@ -407,14 +407,16 @@ fn draw() {
         sync_selection_bounds!();
     }
     let algo_addr = session.get_setting("rotate-scale/algo").as_string();
-    if algo_addr != () {
+    if algo_addr == () || algo_addr == "" {
+        draw_text(vec2(10.0, 86.0), "Algorithm: nearest neighbor (default)", rgb8(0xff, 0x33, 0x66));
+    } else {
         draw_text(vec2(10.0, 86.0), `Algorithm: ${algo_addr}`, rgb8(0xff, 0x33, 0x66));
-        if session.mode == rotation_mode {
-            draw_text(vec2(10.0, 66.0), `Angle: ${rotation_degrees}`, rgb8(0xff, 0x33, 0x66));
-        }
-        if session.mode == scale_mode {
-            draw_text(vec2(10.0, 66.0), `Scale: ${scale_x}, ${scale_y}`, rgb8(0xff, 0x33, 0x66));
-        }
+    }
+    if session.mode == rotation_mode {
+        draw_text(vec2(10.0, 66.0), `Angle: ${rotation_degrees}`, rgb8(0xff, 0x33, 0x66));
+    }
+    if session.mode == scale_mode {
+        draw_text(vec2(10.0, 66.0), `Scale: ${scale_x}, ${scale_y}`, rgb8(0xff, 0x33, 0x66));
     }
     
     let view = session.view(session.active_view_id);
@@ -443,10 +445,6 @@ fn shade(encoder) {
         return;
     }
     let algo_addr = session.get_setting("rotate-scale/algo").as_string();
-    if algo_addr == () || algo_addr == "" {
-        throw "rotate-scale/algo setting is required";
-    }
-    let pass_fn = session.get_plugin_fn(algo_addr);
     let draw_to_render = apply_queue.pop() == "draw_to_render";
     let target_texture = if draw_to_render {
         renderer.view_render_texture(active_view_id)
@@ -467,6 +465,32 @@ fn shade(encoder) {
     let vertices = batch.vertices();
 
     let transform = total_transform!();
+    if algo_addr == () || algo_addr == "" {
+        let target_view_id = if draw_to_render {
+            active_view_id
+        } else {
+            session.active_view_id
+        };
+        let view = session.view(target_view_id);
+        let transform_bg = renderer.create_ortho_custom_transform_bind_group(
+            view.frame_width,
+            view.frame_height,
+            transform
+        );
+        let source_bg = renderer.create_texture_sampler_bind_group(clipboard);
+        let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
+        let pass = encoder.begin_render_pass(
+            "rotate-scale-sprite-fallback",
+            [color_attachment(target_texture, load_load(), store_store())]
+        );
+        pass.set_pipeline(renderer.sprite_pipeline());
+        pass.set_bind_group(0, transform_bg);
+        pass.set_bind_group(1, source_bg);
+        pass.set_vertex_buffer(0, vertex_buffer);
+        pass.draw(6, 1, 0, 0);
+        return;
+    }
 
+    let pass_fn = session.get_plugin_fn(algo_addr);
     pass_fn.invoke([encoder, transform, target_texture, clipboard, vertices]);
 }

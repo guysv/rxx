@@ -529,7 +529,7 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
 
     // Pipelines
-    sprite_pipeline: wgpu::RenderPipeline,
+    sprite_pipeline: Rc<RefCell<wgpu::RenderPipeline>>,
     shape_pipeline: wgpu::RenderPipeline,
     shape_replace_pipeline: wgpu::RenderPipeline,
     cursor_pipeline: wgpu::RenderPipeline,
@@ -1197,7 +1197,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             checker,
             paste,
             sampler,
-            sprite_pipeline,
+            sprite_pipeline: Rc::new(RefCell::new(sprite_pipeline)),
             shape_pipeline,
             shape_replace_pipeline,
             cursor_pipeline,
@@ -1445,7 +1445,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     ],
                 });
 
-                staging_pass.set_pipeline(&this.sprite_pipeline);
+                let sprite_pipeline = this.sprite_pipeline.borrow();
+                staging_pass.set_pipeline(&sprite_pipeline);
                 staging_pass.set_bind_group(0, &staging_transform_bind_group, &[]);
                 staging_pass.set_bind_group(1, &paste_bind_group, &[]);
                 staging_pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1530,7 +1531,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                     ],
                 });
 
-                final_pass.set_pipeline(&this.sprite_pipeline);
+                let sprite_pipeline = this.sprite_pipeline.borrow();
+                final_pass.set_pipeline(&sprite_pipeline);
                 final_pass.set_bind_group(0, &final_transform_bind_group, &[]);
                 final_pass.set_bind_group(1, &paste_bind_group, &[]);
 
@@ -1577,7 +1579,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
             // Draw checkers if enabled
             if session.settings["checker"].is_set() {
                 if let Some((buffer, count)) = &checker_vertices {
-                    pass.set_pipeline(&this.sprite_pipeline);
+                    let sprite_pipeline = this.sprite_pipeline.borrow();
+                    pass.set_pipeline(&sprite_pipeline);
                     pass.set_bind_group(0, &transform_bind_group, &[]);
                     pass.set_bind_group(1, &checker_bind_group, &[]);
                     pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1639,7 +1642,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                             ],
                         });
 
-                    pass.set_pipeline(&this.sprite_pipeline);
+                    let sprite_pipeline = this.sprite_pipeline.borrow();
+                    pass.set_pipeline(&sprite_pipeline);
                     pass.set_bind_group(0, &view_transform_bind_group, &[]);
                     pass.set_bind_group(1, &view_texture_bind_group, &[]);
                     pass.set_vertex_buffer(0, view_data.layer.vertex_buffer.slice(..));
@@ -1687,7 +1691,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render user script text (sprite batch, same font as UI text).
             if let Some((buffer, count)) = &user_sprite_tess {
-                pass.set_pipeline(&this.sprite_pipeline);
+                let sprite_pipeline = this.sprite_pipeline.borrow();
+                pass.set_pipeline(&sprite_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
                 pass.set_bind_group(1, &font_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1696,7 +1701,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render text
             if let Some((buffer, count)) = &text_vertices {
-                pass.set_pipeline(&this.sprite_pipeline);
+                let sprite_pipeline = this.sprite_pipeline.borrow();
+                pass.set_pipeline(&sprite_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
                 pass.set_bind_group(1, &font_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1705,7 +1711,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
 
             // Render tool sprites
             if let Some((buffer, count)) = &tool_vertices {
-                pass.set_pipeline(&this.sprite_pipeline);
+                let sprite_pipeline = this.sprite_pipeline.borrow();
+                pass.set_pipeline(&sprite_pipeline);
                 pass.set_bind_group(0, &transform_bind_group, &[]);
                 pass.set_bind_group(1, &cursors_bind_group, &[]);
                 pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1773,7 +1780,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                         ],
                                     });
 
-                                pass.set_pipeline(&this.sprite_pipeline);
+                                let sprite_pipeline = this.sprite_pipeline.borrow();
+                                pass.set_pipeline(&sprite_pipeline);
                                 pass.set_bind_group(0, &anim_bind_group, &[]);
                                 pass.set_bind_group(1, &layer_bind_group, &[]);
                                 pass.set_vertex_buffer(0, anim_buffer.slice(..));
@@ -1804,7 +1812,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 if let Some((buffer, count)) =
                     this.create_sprite_vertices(&help_text_batch.vertices())
                 {
-                    pass.set_pipeline(&this.sprite_pipeline);
+                    let sprite_pipeline = this.sprite_pipeline.borrow();
+                    pass.set_pipeline(&sprite_pipeline);
                     pass.set_bind_group(0, &transform_bind_group, &[]);
                     pass.set_bind_group(1, &font_bind_group, &[]);
                     pass.set_vertex_buffer(0, buffer.slice(..));
@@ -1977,7 +1986,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                             }],
                         });
 
-                    pass.set_pipeline(&this.sprite_pipeline);
+                    let sprite_pipeline = this.sprite_pipeline.borrow();
+                    pass.set_pipeline(&sprite_pipeline);
                     pass.set_bind_group(0, &overlay_bind_group, &[]);
                     pass.set_bind_group(1, &font_bind_group, &[]);
                     pass.set_vertex_buffer(0, buffer.slice(..));
@@ -2123,6 +2133,11 @@ impl Renderer {
         } else {
             None
         }
+    }
+
+    /// Return a shared handle to the built-in sprite render pipeline.
+    pub fn sprite_pipeline_handle(&self) -> Rc<RefCell<wgpu::RenderPipeline>> {
+        self.sprite_pipeline.clone()
     }
 
     /// Upload the current session selection from the active view's CPU snapshot into a script texture.
