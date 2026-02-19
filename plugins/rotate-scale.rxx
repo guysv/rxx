@@ -63,20 +63,26 @@ fn cmd_selection_rotate(args) {
     if session.selection == () {
         return true;
     }
-    drag_start = ();
-    last_p = ();
-    last_mode = rotation_mode;
-    pivot_locked = false;
-    in_progress = true;
-    pasted_once = false;
-    rotation_degrees = 0.0;
-    accumulated_rotation_degrees = 0.0;
+
     let selection = session.selection;
-    base_selection = selection;
-    pivot = selection.center();
-    active_view_id = session.active_view_id;
-    renderer.upload_selection_to_texture(session, clipboard);
-    queue_active_view_rect_clear(selection);
+    if session.mode != scale_mode && session.mode != rotation_mode {
+        print("switching to rotation mode hard reset");
+        drag_start = ();
+        last_p = ();
+        pivot_locked = false;
+        in_progress = true;
+        pasted_once = false;
+        rotation_degrees = 0.0;
+        accumulated_rotation_degrees = 0.0;
+        base_selection = selection;
+        pivot = selection.center();
+        active_view_id = session.active_view_id;
+        renderer.upload_selection_to_texture(session, clipboard);
+        queue_active_view_rect_clear(selection);
+    }
+    // base_selection = selection;
+
+    last_mode = rotation_mode;
     session.switch_mode(rotation_mode);
     return true;
 }
@@ -119,22 +125,27 @@ fn cmd_selection_scale(args) {
     if session.selection == () {
         return true;
     }
-    drag_start = ();
-    last_p = ();
-    last_mode = scale_mode;
-    pivot_locked = false;
-    in_progress = true;
-    pasted_once = false;
-    scale_x = 1.0;
-    scale_y = 1.0;
-    accumulated_scale_x = 1.0;
-    accumulated_scale_y = 1.0;
+    
     let selection = session.selection;
-    base_selection = selection;
-    pivot = selection.center();
-    active_view_id = session.active_view_id;
-    renderer.upload_selection_to_texture(session, clipboard);
-    queue_active_view_rect_clear(selection);
+    if session.mode != rotation_mode && session.mode != scale_mode {
+        print("switching to scale mode hard reset");
+        drag_start = ();
+        last_p = ();
+        pivot_locked = false;
+        in_progress = true;
+        pasted_once = false;
+        scale_x = 1.0;
+        scale_y = 1.0;
+        accumulated_scale_x = 1.0;
+        accumulated_scale_y = 1.0;
+        base_selection = selection;    
+        pivot = selection.center();
+        active_view_id = session.active_view_id;
+        renderer.upload_selection_to_texture(session, clipboard);
+        queue_active_view_rect_clear(selection);
+    }
+    // base_selection = selection;
+    last_mode = scale_mode;
     session.switch_mode(scale_mode);
     return true;
 }
@@ -319,13 +330,12 @@ fn wrap_rotation_degrees(degrees) {
 fn transformed_point(x, y) {
     let dx = x - pivot.x;
     let dy = y - pivot.y;
-    if last_mode == rotation_mode {
-        let rotation_radians = degrees_to_radians(rotation_degrees);
-        let c = cos(rotation_radians);
-        let s = sin(rotation_radians);
-        return vec2(pivot.x + dx * c - dy * s, pivot.y + dx * s + dy * c);
-    }
-    return vec2(pivot.x + dx * scale_x, pivot.y + dy * scale_y);
+    let sx = dx * scale_x;
+    let sy = dy * scale_y;
+    let rotation_radians = degrees_to_radians(rotation_degrees);
+    let c = cos(rotation_radians);
+    let s = sin(rotation_radians);
+    return vec2(pivot.x + sx * c - sy * s, pivot.y + sx * s + sy * c);
 }
 
 fn current_transformed_bounds() {
@@ -445,14 +455,10 @@ fn shade(encoder) {
 
     let t1 = mat4_translation(-pivot.x, -pivot.y);
     let t2 = mat4_translation(pivot.x, pivot.y);
-    let transform = if last_mode == rotation_mode {
-        let rotation_radians = degrees_to_radians(rotation_degrees);
-        let r = mat4_rotation_z(rotation_radians);
-        t2 * r * t1
-    } else {
-        let s = mat4_scale(scale_x, scale_y);
-        t2 * s * t1
-    };
+    let rotation_radians = degrees_to_radians(rotation_degrees);
+    let r = mat4_rotation_z(rotation_radians);
+    let s = mat4_scale(scale_x, scale_y);
+    let transform = t2 * r * s * t1;
 
     pass_fn.invoke([encoder, transform, target_texture, clipboard, vertices]);
 }
