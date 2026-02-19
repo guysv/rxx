@@ -12,20 +12,16 @@ fn init() {
 
     // rotation state
     let rotation_degrees = 0.0;
-    let accumulated_rotation_degrees = 0.0;
 
     // scale state
     let scale_x = 1.0;
     let scale_y = 1.0;
-    let accumulated_scale_x = 1.0;
-    let accumulated_scale_y = 1.0;
+    let committed_transform = mat4_identity();
+    let gesture_transform = mat4_identity();
 
     // interaction state
     let pivot = ();
-    let pivot_locked = false;
     let drag_start = ();
-    let last_p = ();
-    let last_mode = ();
 
     // operation state
     let clipboard = renderer.create_render_texture(8, 8);
@@ -65,24 +61,25 @@ fn cmd_selection_rotate(args) {
     }
 
     let selection = session.selection;
+    if in_progress && session.mode == scale_mode {
+        commit_gesture_transform!();
+    }
     if session.mode != scale_mode && session.mode != rotation_mode {
         print("switching to rotation mode hard reset");
         drag_start = ();
-        last_p = ();
-        pivot_locked = false;
         in_progress = true;
         pasted_once = false;
         rotation_degrees = 0.0;
-        accumulated_rotation_degrees = 0.0;
+        scale_x = 1.0;
+        scale_y = 1.0;
+        committed_transform = mat4_identity();
+        gesture_transform = mat4_identity();
         base_selection = selection;
         pivot = selection.center();
         active_view_id = session.active_view_id;
         renderer.upload_selection_to_texture(session, clipboard);
         queue_active_view_rect_clear(selection);
     }
-    // base_selection = selection;
-
-    last_mode = rotation_mode;
     session.switch_mode(rotation_mode);
     return true;
 }
@@ -96,11 +93,8 @@ fn cmd_rotate_set(args) {
         return true;
     }
     let degrees = parse_float(args[0]);
-    let wrapped_degrees = wrap_rotation_degrees(degrees);
-    rotation_degrees = wrapped_degrees;
-    accumulated_rotation_degrees = wrapped_degrees;
+    set_rotation_gesture!(degrees);
     drag_start = ();
-    last_p = ();
     return true;
 }
 
@@ -114,10 +108,8 @@ fn cmd_rotate_add(args) {
     }
     let delta_degrees = parse_float(args[0]);
     let new_degrees = wrap_rotation_degrees(rotation_degrees + delta_degrees);
-    rotation_degrees = new_degrees;
-    accumulated_rotation_degrees = new_degrees;
+    set_rotation_gesture!(new_degrees);
     drag_start = ();
-    last_p = ();
     return true;
 }
 
@@ -127,25 +119,25 @@ fn cmd_selection_scale(args) {
     }
     
     let selection = session.selection;
+    if in_progress && session.mode == rotation_mode {
+        commit_gesture_transform!();
+    }
     if session.mode != rotation_mode && session.mode != scale_mode {
         print("switching to scale mode hard reset");
         drag_start = ();
-        last_p = ();
-        pivot_locked = false;
         in_progress = true;
         pasted_once = false;
+        rotation_degrees = 0.0;
         scale_x = 1.0;
         scale_y = 1.0;
-        accumulated_scale_x = 1.0;
-        accumulated_scale_y = 1.0;
+        committed_transform = mat4_identity();
+        gesture_transform = mat4_identity();
         base_selection = selection;    
         pivot = selection.center();
         active_view_id = session.active_view_id;
         renderer.upload_selection_to_texture(session, clipboard);
         queue_active_view_rect_clear(selection);
     }
-    // base_selection = selection;
-    last_mode = scale_mode;
     session.switch_mode(scale_mode);
     return true;
 }
@@ -160,12 +152,8 @@ fn cmd_scale_set(args) {
     }
     let new_scale_x = parse_float(args[0]);
     let new_scale_y = parse_float(args[1]);
-    scale_x = new_scale_x;
-    scale_y = new_scale_y;
-    accumulated_scale_x = new_scale_x;
-    accumulated_scale_y = new_scale_y;
+    set_scale_gesture!(new_scale_x, new_scale_y);
     drag_start = ();
-    last_p = ();
     return true;
 }
 
@@ -181,12 +169,8 @@ fn cmd_scale_add(args) {
     let delta_y = parse_float(args[1]);
     let new_scale_x = scale_x + delta_x;
     let new_scale_y = scale_y + delta_y;
-    scale_x = new_scale_x;
-    scale_y = new_scale_y;
-    accumulated_scale_x = new_scale_x;
-    accumulated_scale_y = new_scale_y;
+    set_scale_gesture!(new_scale_x, new_scale_y);
     drag_start = ();
-    last_p = ();
     return true;
 }
 
@@ -236,27 +220,22 @@ fn mouse_input(state, button, cursor) {
     let cursor = vec2(cursor.x + d / 4, cursor.y + d / 4);
     let p = session.active_view_sub_coords(cursor, 2);
 
-    // right-click: set or clear pivot (only before first drag)
-    if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_RIGHT && !pivot_locked {
-        pivot = if p == pivot { () } else { p };
+    // right-click: set pivot between gestures
+    if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_RIGHT && drag_start == () {
+        pivot = p;
         return;
     }
 
     // left-click: start or end drag
     if state == INPUT_STATE_PRESSED && button == MOUSE_BUTTON_LEFT {
+        commit_gesture_transform!();
         drag_start = p;
     }
     if state == INPUT_STATE_RELEASED && button == MOUSE_BUTTON_LEFT {
-        if session.mode == rotation_mode {
-            accumulated_rotation_degrees = wrap_rotation_degrees(rotation_degrees);
+        if drag_start != () {
+            commit_gesture_transform!();
         }
-        if session.mode == scale_mode {
-            accumulated_scale_x = scale_x;
-            accumulated_scale_y = scale_y;
-        }
-        pivot_locked = true;
         drag_start = ();
-        last_p = ();
     }
 }
 
@@ -267,28 +246,28 @@ fn cursor_moved(p) {
     let view = session.view(session.active_view_id);
     let zoom = view.zoom;
     let offset = vec2(session.offset_x + view.offset.x, session.offset_y + view.offset.y);
+    if pivot == () {
+        return;
+    }
     let pivot_session = pivot * zoom + offset;
 
     if session.mode == rotation_mode {
         if p == pivot_session || p == drag_start || pivot_session == drag_start {
             return;
         }
-        last_p = p;
         let drag_start_session = drag_start * zoom + offset;
         let angle_radians = vector_angle(pivot_session, drag_start_session, p.to_vec2());
         let angle_degrees = radians_to_degrees(angle_radians);
-        rotation_degrees = wrap_rotation_degrees(accumulated_rotation_degrees + angle_degrees);
+        set_rotation_gesture!(angle_degrees);
     }
 
     if session.mode == scale_mode {
-        last_p = p;
         let drag_start_session = drag_start * zoom + offset;
         let dist_start = vector_distance(pivot_session, drag_start_session);
         let dist_now = vector_distance(pivot_session, p.to_vec2());
         if dist_start > 0.001 {
             let scale = dist_now / dist_start;
-            scale_x = accumulated_scale_x * scale;
-            scale_y = accumulated_scale_y * scale;
+            set_scale_gesture!(scale, scale);
         }
     }
 }
@@ -327,26 +306,60 @@ fn wrap_rotation_degrees(degrees) {
     return wrapped;
 }
 
-fn transformed_point(x, y) {
-    let dx = x - pivot.x;
-    let dy = y - pivot.y;
-    let sx = dx * scale_x;
-    let sy = dy * scale_y;
-    let rotation_radians = degrees_to_radians(rotation_degrees);
-    let c = cos(rotation_radians);
-    let s = sin(rotation_radians);
-    return vec2(pivot.x + sx * c - sy * s, pivot.y + sx * s + sy * c);
+fn rotation_transform(degrees) {
+    if pivot == () {
+        return mat4_identity();
+    }
+    let t1 = mat4_translation(-pivot.x, -pivot.y);
+    let t2 = mat4_translation(pivot.x, pivot.y);
+    let rotation_radians = degrees_to_radians(degrees);
+    let r = mat4_rotation_z(rotation_radians);
+    return t2 * r * t1;
+}
+
+fn scale_transform(sx, sy) {
+    if pivot == () {
+        return mat4_identity();
+    }
+    let t1 = mat4_translation(-pivot.x, -pivot.y);
+    let t2 = mat4_translation(pivot.x, pivot.y);
+    let s = mat4_scale(sx, sy);
+    return t2 * s * t1;
+}
+
+fn total_transform() {
+    return gesture_transform * committed_transform;
+}
+
+fn commit_gesture_transform() {
+    committed_transform = gesture_transform * committed_transform;
+    gesture_transform = mat4_identity();
+    rotation_degrees = 0.0;
+    scale_x = 1.0;
+    scale_y = 1.0;
+}
+
+fn set_rotation_gesture(degrees) {
+    rotation_degrees = wrap_rotation_degrees(degrees);
+    gesture_transform = rotation_transform!(rotation_degrees);
+}
+
+fn set_scale_gesture(sx, sy) {
+    scale_x = sx;
+    scale_y = sy;
+    gesture_transform = scale_transform!(scale_x, scale_y);
 }
 
 fn current_transformed_bounds() {
-    if base_selection == () || pivot == () {
+    if base_selection == () {
         return ();
     }
     let r = base_selection;
-    let p1 = transformed_point!(r.x1, r.y1);
-    let p2 = transformed_point!(r.x2, r.y1);
-    let p3 = transformed_point!(r.x2, r.y2);
-    let p4 = transformed_point!(r.x1, r.y2);
+    let transform = total_transform!();
+    let p1 = mat4_transform_point2(transform, r.x1, r.y1);
+    let p2 = mat4_transform_point2(transform, r.x2, r.y1);
+    let p3 = mat4_transform_point2(transform, r.x2, r.y2);
+    let p4 = mat4_transform_point2(transform, r.x1, r.y2);
 
     let min_x = min(min(p1.x, p2.x), min(p3.x, p4.x)).floor();
     let min_y = min(min(p1.y, p2.y), min(p3.y, p4.y)).floor();
@@ -414,7 +427,7 @@ fn draw() {
     }
     let x1 = pivot.x * d + offset_x;
     let y1 = pivot.y * d + offset_y;
-    let pivot_color = if pivot_locked { PIVOT_COLOR_LOCKED } else { PIVOT_COLOR_UNLOCKED };
+    let pivot_color = if drag_start == () { PIVOT_COLOR_UNLOCKED } else { PIVOT_COLOR_LOCKED };
 
     // pivot crosshair
     draw_line(vec2(x1 - PIVOT_HALF, y1), vec2(x1 + PIVOT_HALF, y1), pivot_color);
@@ -453,12 +466,7 @@ fn shade(encoder) {
         if draw_to_render { 1.0 } else { 0.9 });
     let vertices = batch.vertices();
 
-    let t1 = mat4_translation(-pivot.x, -pivot.y);
-    let t2 = mat4_translation(pivot.x, pivot.y);
-    let rotation_radians = degrees_to_radians(rotation_degrees);
-    let r = mat4_rotation_z(rotation_radians);
-    let s = mat4_scale(scale_x, scale_y);
-    let transform = t2 * r * s * t1;
+    let transform = total_transform!();
 
     pass_fn.invoke([encoder, transform, target_texture, clipboard, vertices]);
 }

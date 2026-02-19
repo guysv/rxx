@@ -7,7 +7,7 @@
 
 use crate::draw::{self, USER_LAYER};
 use crate::gfx::color::Rgba;
-use crate::gfx::math::{Matrix4, Point2, Vector2, Vector3};
+use crate::gfx::math::{Matrix4, Point2, Vector2, Vector3, Vector4};
 use crate::gfx::rect::Rect;
 use crate::gfx::shape2d::{self, Fill, Line, Rotation, Shape, Stroke};
 use crate::gfx::{Point, sprite2d};
@@ -1899,6 +1899,10 @@ fn register_draw_types(engine: &mut Engine) {
         })
         .register_fn("mat4_scale", |sx: f64, sy: f64| {
             Matrix4::<f32>::from_nonuniform_scale(sx as f32, sy as f32, 1.0)
+        })
+        .register_fn("mat4_transform_point2", |m: Matrix4<f32>, x: f64, y: f64| {
+            let p = m * Vector4::new(x as f32, y as f32, 0.0, 1.0);
+            Vector2::new(p.x as f64, p.y as f64)
         })
         .register_fn("*", |a: Matrix4<f32>, b: Matrix4<f32>| a * b)
         .register_fn("to_string", |m: Matrix4<f32>| format!("{:?}", m));
