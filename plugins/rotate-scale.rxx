@@ -11,8 +11,8 @@ fn init() {
     let scale_mode = script_mode("visual (scale)");
 
     // rotation state
-    let rotation_angle = 0.0;
-    let accumulated_angle = 0.0;
+    let rotation_degrees = 0.0;
+    let accumulated_rotation_degrees = 0.0;
 
     // scale state
     let scale_x = 1.0;
@@ -69,8 +69,8 @@ fn cmd_selection_rotate(args) {
     pivot_locked = false;
     in_progress = true;
     pasted_once = false;
-    rotation_angle = 0.0;
-    accumulated_angle = 0.0;
+    rotation_degrees = 0.0;
+    accumulated_rotation_degrees = 0.0;
     let selection = session.selection;
     base_selection = selection;
     pivot = selection.center();
@@ -90,9 +90,9 @@ fn cmd_rotate_set(args) {
         return true;
     }
     let degrees = parse_float(args[0]);
-    let radians = degrees_to_radians(degrees);
-    rotation_angle = radians;
-    accumulated_angle = radians;
+    let wrapped_degrees = wrap_rotation_degrees(degrees);
+    rotation_degrees = wrapped_degrees;
+    accumulated_rotation_degrees = wrapped_degrees;
     drag_start = ();
     last_p = ();
     return true;
@@ -107,10 +107,9 @@ fn cmd_rotate_add(args) {
         return true;
     }
     let delta_degrees = parse_float(args[0]);
-    let delta_radians = degrees_to_radians(delta_degrees);
-    let new_angle = rotation_angle + delta_radians;
-    rotation_angle = new_angle;
-    accumulated_angle = new_angle;
+    let new_degrees = wrap_rotation_degrees(rotation_degrees + delta_degrees);
+    rotation_degrees = new_degrees;
+    accumulated_rotation_degrees = new_degrees;
     drag_start = ();
     last_p = ();
     return true;
@@ -238,7 +237,7 @@ fn mouse_input(state, button, cursor) {
     }
     if state == INPUT_STATE_RELEASED && button == MOUSE_BUTTON_LEFT {
         if session.mode == rotation_mode {
-            accumulated_angle = rotation_angle;
+            accumulated_rotation_degrees = wrap_rotation_degrees(rotation_degrees);
         }
         if session.mode == scale_mode {
             accumulated_scale_x = scale_x;
@@ -265,8 +264,9 @@ fn cursor_moved(p) {
         }
         last_p = p;
         let drag_start_session = drag_start * zoom + offset;
-        let angle = vector_angle(pivot_session, drag_start_session, p.to_vec2());
-        rotation_angle = accumulated_angle + angle;
+        let angle_radians = vector_angle(pivot_session, drag_start_session, p.to_vec2());
+        let angle_degrees = radians_to_degrees(angle_radians);
+        rotation_degrees = wrap_rotation_degrees(accumulated_rotation_degrees + angle_degrees);
     }
 
     if session.mode == scale_mode {
@@ -308,12 +308,21 @@ fn degrees_to_radians(degrees) {
     return degrees * (3.141592653589793 / 180.0);
 }
 
+fn wrap_rotation_degrees(degrees) {
+    let wrapped = degrees - (degrees / 360.0).floor() * 360.0;
+    if wrapped > 180.0 {
+        wrapped = wrapped - 360.0;
+    }
+    return wrapped;
+}
+
 fn transformed_point(x, y) {
     let dx = x - pivot.x;
     let dy = y - pivot.y;
     if last_mode == rotation_mode {
-        let c = cos(rotation_angle);
-        let s = sin(rotation_angle);
+        let rotation_radians = degrees_to_radians(rotation_degrees);
+        let c = cos(rotation_radians);
+        let s = sin(rotation_radians);
         return vec2(pivot.x + dx * c - dy * s, pivot.y + dx * s + dy * c);
     }
     return vec2(pivot.x + dx * scale_x, pivot.y + dy * scale_y);
@@ -378,7 +387,6 @@ fn draw() {
     if algo_addr != () {
         draw_text(vec2(10.0, 86.0), `Algorithm: ${algo_addr}`, rgb8(0xff, 0x33, 0x66));
         if session.mode == rotation_mode {
-            let rotation_degrees = radians_to_degrees(rotation_angle);
             draw_text(vec2(10.0, 66.0), `Angle: ${rotation_degrees}`, rgb8(0xff, 0x33, 0x66));
         }
         if session.mode == scale_mode {
@@ -438,7 +446,8 @@ fn shade(encoder) {
     let t1 = mat4_translation(-pivot.x, -pivot.y);
     let t2 = mat4_translation(pivot.x, pivot.y);
     let transform = if last_mode == rotation_mode {
-        let r = mat4_rotation_z(rotation_angle);
+        let rotation_radians = degrees_to_radians(rotation_degrees);
+        let r = mat4_rotation_z(rotation_radians);
         t2 * r * t1
     } else {
         let s = mat4_scale(scale_x, scale_y);
