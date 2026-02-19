@@ -25,6 +25,7 @@ fn init() {
     let pivot_locked = false;
     let drag_start = ();
     let last_p = ();
+    let last_mode = ();
 
     // operation state
     let clipboard = renderer.create_render_texture(8, 8);
@@ -63,6 +64,7 @@ fn cmd_selection_rotate(args) {
     }
     drag_start = ();
     last_p = ();
+    last_mode = rotation_mode;
     pivot_locked = false;
     in_progress = true;
     pasted_once = false;
@@ -118,6 +120,7 @@ fn cmd_selection_scale(args) {
     }
     drag_start = ();
     last_p = ();
+    last_mode = scale_mode;
     pivot_locked = false;
     in_progress = true;
     pasted_once = false;
@@ -368,7 +371,7 @@ fn shade(encoder) {
 
     let t1 = mat4_translation(-pivot.x, -pivot.y);
     let t2 = mat4_translation(pivot.x, pivot.y);
-    let transform = if session.mode == rotation_mode {
+    let transform = if last_mode == rotation_mode {
         let r = mat4_rotation_z(rotation_angle);
         t2 * r * t1
     } else {
