@@ -446,11 +446,19 @@ pub struct KeyBinding {
     /// How this key binding should be displayed to the user.
     /// If `None`, then this binding shouldn't be shown to the user.
     pub display: Option<String>,
+    /// Optional override for key-repeat behavior.
+    pub repeats_override: Option<bool>,
     /// Priority tier for this binding. Also carries mode information.
     pub tier: BindingTier,
 }
 
 impl KeyBinding {
+    /// Whether this binding should fire on key-repeat events.
+    pub fn repeats(&self) -> bool {
+        self.repeats_override
+            .unwrap_or_else(|| self.command.repeats())
+    }
+
     /// Check whether this binding applies to the given mode.
     pub fn mode_matches(&self, mode: Mode) -> bool {
         match &self.tier {
@@ -2334,7 +2342,7 @@ impl Session {
                 // For toggle-like key bindings, we don't want to run the command
                 // on key repeats. For regular key bindings, we run the command
                 // depending on if it's supposed to repeat.
-                if (repeat && kb.command.repeats() && !kb.is_toggle) || !repeat {
+                if (repeat && kb.repeats() && !kb.is_toggle) || !repeat {
                     self.push_command(kb.command);
                 }
                 return;
@@ -3007,6 +3015,7 @@ impl Session {
                     input,
                     press,
                     release,
+                    repeats,
                     tier,
                 } = *map;
 
@@ -3017,6 +3026,7 @@ impl Session {
                     modifiers: platform::ModifiersState::default(),
                     is_toggle: release.is_some(),
                     display: Some(format!("{}", input)),
+                    repeats_override: repeats,
                     tier: tier.clone(),
                 });
                 if let Some(cmd) = release {
@@ -3027,6 +3037,7 @@ impl Session {
                         modifiers: platform::ModifiersState::default(),
                         is_toggle: true,
                         display: None,
+                        repeats_override: repeats,
                         tier,
                     });
                 }
@@ -3322,6 +3333,7 @@ mod test {
             command: Command::Noop,
             is_toggle: false,
             display: None,
+            repeats_override: None,
             modifiers,
             state,
             tier: BindingTier::ModeSpecific(vec![Mode::Normal]),
@@ -3361,6 +3373,7 @@ mod test {
             command: Command::Noop,
             is_toggle: false,
             display: None,
+            repeats_override: None,
             modifiers: Default::default(),
             state: InputState::Pressed,
             tier: BindingTier::ModeSpecific(vec![Mode::Normal]),
@@ -3408,6 +3421,7 @@ mod test {
             command: Command::Noop,
             is_toggle: false,
             display: None,
+            repeats_override: None,
             modifiers,
             state,
             tier: BindingTier::General,
@@ -3454,6 +3468,7 @@ mod test {
             command: Command::Noop,
             is_toggle: false,
             display: None,
+            repeats_override: None,
             modifiers,
             state,
             tier: BindingTier::General,
@@ -3490,6 +3505,7 @@ mod test {
             command: Command::Noop,
             is_toggle: false,
             display: None,
+            repeats_override: None,
             modifiers,
             state,
             tier: BindingTier::Script(ModeString::try_from_str("foo").unwrap()),
@@ -3539,6 +3555,7 @@ mod test {
             command: Command::Noop,
             is_toggle: false,
             display: None,
+            repeats_override: None,
             modifiers,
             state,
             tier: BindingTier::General,
@@ -3582,6 +3599,7 @@ mod test {
             command: Command::Noop,
             is_toggle: false,
             display: None,
+            repeats_override: None,
             modifiers,
             state,
             tier: BindingTier::ModeSpecific(vec![Mode::Normal]),
@@ -3593,6 +3611,7 @@ mod test {
             command: Command::Quit,
             is_toggle: false,
             display: None,
+            repeats_override: None,
             modifiers,
             state,
             tier: BindingTier::ModeSpecific(vec![Mode::Normal]),
@@ -3604,6 +3623,42 @@ mod test {
         assert_eq!(
             kbs.find(Input::Key(platform::Key::A), modifiers, state, Mode::Normal),
             Some(second),
+        );
+    }
+
+    #[test]
+    fn test_key_binding_repeats_override() {
+        let base = KeyBinding {
+            input: Input::Key(platform::Key::A),
+            command: Command::ViewNext, // repeats by default
+            is_toggle: false,
+            display: None,
+            repeats_override: None,
+            modifiers: ModifiersState::default(),
+            state: InputState::Pressed,
+            tier: BindingTier::General,
+        };
+
+        assert!(
+            base.repeats(),
+            "without override, should use Command::repeats()"
+        );
+        assert!(
+            !KeyBinding {
+                repeats_override: Some(false),
+                ..base.clone()
+            }
+            .repeats(),
+            "explicit false override should disable repeats"
+        );
+        assert!(
+            KeyBinding {
+                command: Command::Noop, // does not repeat by default
+                repeats_override: Some(true),
+                ..base
+            }
+            .repeats(),
+            "explicit true override should enable repeats"
         );
     }
 }

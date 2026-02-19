@@ -461,6 +461,7 @@ pub struct KeyMapping {
     pub input: Input,
     pub press: Command,
     pub release: Option<Command>,
+    pub repeats: Option<bool>,
     pub tier: BindingTier,
 }
 
@@ -508,6 +509,7 @@ impl KeyMapping {
                 input,
                 press,
                 release,
+                repeats: None,
                 tier: tier.clone(),
             })
             .label("<key> <cmd>") // TODO: We should provide the full command somehow.
@@ -1154,17 +1156,21 @@ impl Default for Commands {
                 p.then(Parser::new(
                     |input: &str| {
                         let input = input.trim_start();
-                        let (name_str, rest) = quoted().parse(input)
+                        let (repeats, rest) = optional(string("repeats").skip(whitespace()))
+                            .map(|v| v.is_some())
+                            .parse(input)?;
+                        let (name_str, rest) = quoted().parse(rest.trim_start())
                             .map_err(|(e, _)| (e, input))?;
                         let name = ModeString::try_from_str(&name_str)
                             .map_err(|e| (format!("{}", e).into(), rest))?;
                         let rest = rest.trim_start();
-                        let (km, rest) =
+                        let (mut km, rest) =
                             KeyMapping::parser(BindingTier::Script(name))
                                 .parse(rest)?;
+                        km.repeats = Some(repeats);
                         Ok((km, rest))
                     },
-                    "<script-mode> <key> <cmd>",
+                    "[repeats] <script-mode> <key> <cmd>",
                 ))
                 .map(|(_, km)| Command::Map(Box::new(km)))
             })
@@ -1725,6 +1731,27 @@ mod test {
         match &cmd {
             Command::Map(km) => {
                 assert_eq!(km.input, Input::Key(platform::Key::Tab));
+                assert_eq!(km.repeats, Some(false));
+                assert!(matches!(
+                    &km.tier,
+                    BindingTier::Script(name) if name.as_str() == "visual (rotation)"
+                ));
+            }
+            _ => panic!("expected Command::Map, got {:?}", cmd),
+        }
+    }
+
+    #[test]
+    fn test_map_script_repeats_parser() {
+        let p = Commands::default().line_parser();
+        let (cmd, rest) = p
+            .parse(r#":map/script repeats "visual (rotation)" <tab> :v/prev"#)
+            .unwrap();
+        assert_eq!(rest, "");
+        match &cmd {
+            Command::Map(km) => {
+                assert_eq!(km.input, Input::Key(platform::Key::Tab));
+                assert_eq!(km.repeats, Some(true));
                 assert!(matches!(
                     &km.tier,
                     BindingTier::Script(name) if name.as_str() == "visual (rotation)"
@@ -1764,5 +1791,10 @@ mod test {
             err.to_string(),
             "extraneous input found: :tool/prev".to_string()
         );
+
+        assert!(p.parse(":map repeats <tab> :q!").is_err());
+        assert!(p.parse(":map/normal repeats <tab> :q!").is_err());
+        assert!(p.parse(":map/visual repeats <tab> :q!").is_err());
+        assert!(p.parse(":map/help repeats <tab> :q!").is_err());
     }
 }
