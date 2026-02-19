@@ -15,7 +15,7 @@ use crate::gfx::ZDepth;
 use crate::gfx::{Repeat, Rgba8};
 use crate::platform::{InputState, Key, LogicalDelta, MouseButton};
 use crate::cmd::{Command, Value};
-use crate::session::{Blending, Effect, MessageType, Mode, ModeString, ScriptEffect, Session, SessionCoords, VisualState};
+use crate::session::{Blending, Effect, MessageType, Mode, ModeString, ScriptEffect, Selection, Session, SessionCoords, VisualState};
 use crate::view::{View, ViewExtent, ViewId, ViewResource};
 use crate::wgpu::{self, Texture};
 use ::wgpu as wgpu_types;
@@ -792,6 +792,41 @@ pub fn register_session_handle(
                 Some(s) => { Dynamic::from(s.abs().bounds()) },
                 None => Dynamic::UNIT
             }
+        })
+        .register_fn(
+            "set_selection_rect",
+            |s: &mut Rc<RefCell<Session>>, x1: i64, y1: i64, x2: i64, y2: i64| {
+                let mut lo_x = x1.min(x2).clamp(i32::MIN as i64, i32::MAX as i64);
+                let mut hi_x = x1.max(x2).clamp(i32::MIN as i64, i32::MAX as i64);
+                let mut lo_y = y1.min(y2).clamp(i32::MIN as i64, i32::MAX as i64);
+                let mut hi_y = y1.max(y2).clamp(i32::MIN as i64, i32::MAX as i64);
+
+                // Keep the rectangle non-empty for Selection::new (exclusive max corner).
+                if lo_x == hi_x {
+                    if hi_x < i32::MAX as i64 {
+                        hi_x += 1;
+                    } else {
+                        lo_x -= 1;
+                    }
+                }
+                if lo_y == hi_y {
+                    if hi_y < i32::MAX as i64 {
+                        hi_y += 1;
+                    } else {
+                        lo_y -= 1;
+                    }
+                }
+
+                s.borrow_mut().selection = Some(Selection::new(
+                    lo_x as i32,
+                    lo_y as i32,
+                    hi_x as i32,
+                    hi_y as i32,
+                ));
+            },
+        )
+        .register_fn("clear_selection", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow_mut().selection = None;
         })
         .register_get("cursor", |s: &mut Rc<RefCell<Session>>| {
             Vector2::new(s.borrow().cursor.x as f64, s.borrow().cursor.y as f64)

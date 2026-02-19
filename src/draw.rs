@@ -135,6 +135,10 @@ impl Context {
         avg_frametime: &time::Duration,
         execution: &Execution,
     ) {
+        // User script draw event (populates user_batch directly)
+        if let Err(e) = crate::script::call_draw_event(script_state_handle, user_batch) {
+            warn!("Script draw error: {}", e);
+        }
         let session = session_handle.borrow_mut();
         self::draw_brush(&session, &session.brush, &mut self.ui_batch);
         self::draw_paste(&session, &mut self.paste_batch);
@@ -144,12 +148,6 @@ impl Context {
         self::draw_palette(&session, &mut self.ui_batch);
         self::draw_cursor(&session, &mut self.cursor_sprite, &mut self.tool_batch);
         self::draw_checker(&session, &mut self.checker_batch);
-
-        drop(session);
-        // User script draw event (populates user_batch directly)
-        if let Err(e) = crate::script::call_draw_event(script_state_handle, user_batch) {
-            warn!("Script draw error: {}", e);
-        }
     }
 
     pub fn clear(&mut self) {

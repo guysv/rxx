@@ -32,6 +32,7 @@ fn init() {
     let in_progress = false;
     let pasted_once = false;
     let active_view_id = ();
+    let base_selection = ();
     let apply_queue = script_queue;
     session.init_setting("rotate-scale/algo", "rotsprite-gl.rxx/render_pass");
 
@@ -71,6 +72,7 @@ fn cmd_selection_rotate(args) {
     rotation_angle = 0.0;
     accumulated_angle = 0.0;
     let selection = session.selection;
+    base_selection = selection;
     pivot = selection.center();
     active_view_id = session.active_view_id;
     renderer.upload_selection_to_texture(session, clipboard);
@@ -129,6 +131,7 @@ fn cmd_selection_scale(args) {
     accumulated_scale_x = 1.0;
     accumulated_scale_y = 1.0;
     let selection = session.selection;
+    base_selection = selection;
     pivot = selection.center();
     active_view_id = session.active_view_id;
     renderer.upload_selection_to_texture(session, clipboard);
@@ -185,6 +188,7 @@ fn unload() {
     if !in_progress {
         return;
     }
+    restore_base_selection_if_not_applied!();
     if !pasted_once {
         queue_effect(effect_view_damaged(active_view_id));
     }
@@ -198,9 +202,13 @@ fn switch_mode() {
         return;
     }
     if session.mode != MODE_COMMAND && session.mode != rotation_mode && session.mode != scale_mode {
+        restore_base_selection_if_not_applied!();
         in_progress = false;
         if !pasted_once {
             queue_effect(effect_view_damaged(active_view_id));
+        }
+        if session.mode != MODE_VISUAL {
+            session.clear_selection();
         }
     }
 }
@@ -300,6 +308,61 @@ fn degrees_to_radians(degrees) {
     return degrees * (3.141592653589793 / 180.0);
 }
 
+fn transformed_point(x, y) {
+    let dx = x - pivot.x;
+    let dy = y - pivot.y;
+    if last_mode == rotation_mode {
+        let c = cos(rotation_angle);
+        let s = sin(rotation_angle);
+        return vec2(pivot.x + dx * c - dy * s, pivot.y + dx * s + dy * c);
+    }
+    return vec2(pivot.x + dx * scale_x, pivot.y + dy * scale_y);
+}
+
+fn current_transformed_bounds() {
+    if base_selection == () || pivot == () {
+        return ();
+    }
+    let r = base_selection;
+    let p1 = transformed_point!(r.x1, r.y1);
+    let p2 = transformed_point!(r.x2, r.y1);
+    let p3 = transformed_point!(r.x2, r.y2);
+    let p4 = transformed_point!(r.x1, r.y2);
+
+    let min_x = min(min(p1.x, p2.x), min(p3.x, p4.x)).floor();
+    let min_y = min(min(p1.y, p2.y), min(p3.y, p4.y)).floor();
+    let max_x = max(max(p1.x, p2.x), max(p3.x, p4.x)).ceiling();
+    let max_y = max(max(p1.y, p2.y), max(p3.y, p4.y)).ceiling();
+
+    if max_x <= min_x {
+        max_x = min_x + 1.0;
+    }
+    if max_y <= min_y {
+        max_y = min_y + 1.0;
+    }
+    return rect(min_x, min_y, max_x, max_y);
+}
+
+fn sync_selection_bounds() {
+    let bounds = current_transformed_bounds!();
+    if bounds == () {
+        return;
+    }
+    session.set_selection_rect(bounds.x1.to_int(), bounds.y1.to_int(), bounds.x2.to_int(), bounds.y2.to_int());
+}
+
+fn restore_base_selection_if_not_applied() {
+    if pasted_once || base_selection == () {
+        return;
+    }
+    session.set_selection_rect(
+        base_selection.x1.to_int(),
+        base_selection.y1.to_int(),
+        base_selection.x2.to_int(),
+        base_selection.y2.to_int()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Draw
 // ---------------------------------------------------------------------------
@@ -307,6 +370,9 @@ fn degrees_to_radians(degrees) {
 fn draw() {
     if session.mode != rotation_mode && session.mode != scale_mode {
         return;
+    }
+    if in_progress {
+        sync_selection_bounds!();
     }
     let algo_addr = session.get_setting("rotate-scale/algo").as_string();
     if algo_addr != () {
@@ -363,7 +429,7 @@ fn shade(encoder) {
     let batch = renderer.sprite_singleton_batch(
         8, 8,
         rect(0.0, 0.0, 8.0, 8.0),
-        session.selection.to_rect_f64(),
+        base_selection.to_rect_f64(),
         0.0,
         rgb8(0, 0, 0, 0),
         if draw_to_render { 1.0 } else { 0.9 });
