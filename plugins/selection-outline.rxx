@@ -1,0 +1,68 @@
+// selection-outline.rxx - draws foreground-color outline for current selection
+
+fn init() {
+    let wgsl = read_file("selection-outline.wgsl");
+    let shader = renderer.create_shader_module(wgsl);
+    let pipeline = renderer.create_render_pipeline_with_texture(shader, "vs_main", "fs_main");
+
+    let clipboard = renderer.create_render_texture(8, 8);
+    let apply_queue = script_queue;
+    let outlined_selection = ();
+    let outlined_view_id = ();
+
+    register_command("selection/outline", "Outlines the selection");
+    print(`selection-outline.rxx initialized`);
+}
+
+fn cmd_selection_outline(args) {
+    if session.selection == () {
+        return true;
+    }
+
+    outlined_selection = session.selection;
+    outlined_view_id = session.active_view_id;
+
+    renderer.upload_selection_to_texture(session, clipboard);
+    apply_queue.push("apply");
+    session.touch_active_view();
+    return true;
+}
+
+fn shade(encoder) {
+    if apply_queue.pop() != "apply" || outlined_selection == () {
+        return;
+    }
+
+    let target_view_id = if outlined_view_id == () {
+        session.active_view_id
+    } else {
+        outlined_view_id
+    };
+    let view = session.view(target_view_id);
+    let transform_bg = renderer.create_ortho_custom_transform_bind_group(
+        view.frame_width,
+        view.frame_height,
+        mat4_identity()
+    );
+    let source_bg = renderer.create_texture_sampler_bind_group(clipboard);
+    let target_texture = renderer.view_render_texture(target_view_id);
+    let batch = renderer.sprite_singleton_batch(
+        8, 8,
+        rect(0.0, 0.0, 8.0, 8.0),
+        outlined_selection.to_rect_f64(),
+        0.0,
+        session.fg,
+        1.0
+    );
+    let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(batch.vertices());
+
+    let pass = encoder.begin_render_pass(
+        "selection-outline",
+        [color_attachment(target_texture, load_load(), store_store())]
+    );
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, transform_bg);
+    pass.set_bind_group(1, source_bg);
+    pass.set_vertex_buffer(0, vertex_buffer);
+    pass.draw(6, 1, 0, 0);
+}

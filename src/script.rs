@@ -765,6 +765,9 @@ pub fn register_session_handle(
         .register_get("active_view_id", |s: &mut Rc<RefCell<Session>>| {
             s.borrow().views.active_id.raw() as i64
         })
+        .register_get("fg", |s: &mut Rc<RefCell<Session>>| {
+            s.borrow().fg
+        })
         .register_get("mode", |s: &mut Rc<RefCell<Session>>| {
             s.borrow().mode
         })
