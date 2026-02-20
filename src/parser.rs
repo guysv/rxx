@@ -15,7 +15,7 @@ pub type Error = memoir::result::Error;
 
 pub fn identifier() -> Parser<String> {
     many::<_, String>(satisfy(
-        |c: char| c.is_ascii_alphabetic() || c == '/' || c == '-',
+        |c: char| c.is_ascii_alphanumeric() || c == '/' || c == '-',
         "<identifier>",
     ))
     .label("<identifier>")
@@ -250,5 +250,13 @@ mod test {
         assert_eq!(rest, "");
         assert_eq!(a, Rgba8::new(0xff, 0xaa, 0x44, 127));
         assert_eq!(b, Rgba8::new(0x14, 0x14, 0x14, 255));
+    }
+
+    #[test]
+    fn test_setting_identifier_allows_digits() {
+        let p = setting();
+        let (key, rest) = p.parse("rotsprite-gl/x2-algo = true").unwrap();
+        assert_eq!(key, "rotsprite-gl/x2-algo");
+        assert_eq!(rest, " = true");
     }
 }

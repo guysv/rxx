@@ -1653,6 +1653,16 @@ mod test {
             p.parse(":set foo"),
             Ok((Command::Set("foo".to_owned(), Value::Bool(true)), ""))
         );
+        assert_eq!(
+            p.parse(":set rotsprite-gl/x2-algo=\"mmpx/render_pass\""),
+            Ok((
+                Command::Set(
+                    "rotsprite-gl/x2-algo".to_owned(),
+                    Value::Str("mmpx/render_pass".to_owned())
+                ),
+                ""
+            ))
+        );
 
         assert_eq!(
             param::<platform::Key>()

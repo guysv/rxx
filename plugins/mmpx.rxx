@@ -1,0 +1,34 @@
+// mmpx.rxx - MMPX x2 render pass for rotate-scale / rotsprite-gl
+
+fn init() {
+    let wgsl = read_file("mmpx.wgsl");
+    let shader = renderer.create_shader_module(wgsl);
+    let pipeline = renderer.create_render_pipeline_with_texture(shader, "vs_main", "fs_mmpx");
+    let clamp_nearest_sampler = renderer.create_sampler(
+        SAMPLER_ADDRESS_CLAMP_TO_EDGE,
+        SAMPLER_FILTER_NEAREST
+    );
+    print(`mmpx.rxx initialized`);
+}
+
+fn render_pass(encoder, transform, target_texture, source_texture, vertices) {
+    // rotsprite x2 passes provide vertices already expressed in destination texture space.
+    let dst_w = max(1.0, vertices.width());
+    let dst_h = max(1.0, vertices.height());
+    let transform_bg = renderer.create_ortho_custom_transform_bind_group(
+        dst_w,
+        dst_h,
+        transform
+    );
+    let source_bg = renderer.create_texture_sampler_bind_group(source_texture, clamp_nearest_sampler);
+    let vertex_buffer = renderer.create_vertex_buffer_from_sprite_vertices(vertices);
+    let pass = encoder.begin_render_pass(
+        "mmpx",
+        [color_attachment(target_texture, load_clear(0.0, 0.0, 0.0, 0.0), store_store())]
+    );
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, transform_bg);
+    pass.set_bind_group(1, source_bg);
+    pass.set_vertex_buffer(0, vertex_buffer);
+    pass.draw(6, 1, 0, 0);
+}
