@@ -2273,36 +2273,44 @@ impl Session {
         let mut repeat = state == InputState::Repeated;
         let state = if repeat { InputState::Pressed } else { state };
 
-        if let Some(key) = key {
-            // While the mouse is down, don't accept keyboard input.
-            if self.mouse_state == InputState::Pressed {
-                return;
-            }
+        let Some(key) = key else {
+            return;
+        };
 
-            if state == InputState::Pressed {
-                repeat = repeat || !self.keys_pressed.insert(key);
-            } else if state == InputState::Released {
-                if !self.keys_pressed.remove(&key) {
-                    return;
-                }
-            }
+        let key_input = Input::Key(key);
+        if state == InputState::Pressed {
+            repeat = repeat || !self.keys_pressed.insert(key);
+        } else if state == InputState::Released && !self.keys_pressed.remove(&key) {
+            return;
+        }
 
-            match self.mode {
-                Mode::Command => {
-                    if state == InputState::Pressed {
-                        match key {
+        let binding = self
+            .key_bindings
+            .find(key_input, modifiers, state, self.mode);
+
+        // While the mouse is down, only allow script-tier key bindings.
+        if self.mouse_state == InputState::Pressed
+            && !matches!(binding.as_ref().map(|kb| &kb.tier), Some(BindingTier::Script(_)))
+        {
+            return;
+        }
+
+        match self.mode {
+            Mode::Command => {
+                if state == InputState::Pressed {
+                    match key {
                             platform::Key::Up => {
                                 self.cmdline.history_prev();
                             }
                             platform::Key::Down => {
                                 self.cmdline.history_next();
                             }
-                            platform::Key::Left => {
-                                self.cmdline.cursor_backward();
-                            }
-                            platform::Key::Right => {
-                                self.cmdline.cursor_forward();
-                            }
+                        platform::Key::Left => {
+                            self.cmdline.cursor_backward();
+                        }
+                        platform::Key::Right => {
+                            self.cmdline.cursor_forward();
+                        }
                             platform::Key::Tab => {
                                 self.cmdline.completion_next();
                             }
@@ -2315,45 +2323,40 @@ impl Session {
                             platform::Key::Escape => {
                                 self.cmdline_hide();
                             }
-                            platform::Key::Home => {
-                                self.cmdline.cursor_back();
-                            }
-                            platform::Key::End => {
-                                self.cmdline.cursor_front();
-                            }
-                            _ => {}
+                        platform::Key::Home => {
+                            self.cmdline.cursor_back();
                         }
+                        platform::Key::End => {
+                            self.cmdline.cursor_front();
+                        }
+                        _ => {}
                     }
-                    return;
-                }
-                _ => {
-                    if state == InputState::Pressed && key == platform::Key::Escape {
-                        self.switch_mode(Mode::Normal);
-                        return;
-                    }
-
-                }
-            }
-
-            if let Some(kb) = self
-                .key_bindings
-                .find(Input::Key(key), modifiers, state, self.mode)
-            {
-                // For toggle-like key bindings, we don't want to run the command
-                // on key repeats. For regular key bindings, we run the command
-                // depending on if it's supposed to repeat.
-                if (repeat && kb.repeats() && !kb.is_toggle) || !repeat {
-                    self.push_command(kb.command);
                 }
                 return;
             }
-
-            if let Execution::Recording { events, .. } = exec {
-                if key == platform::Key::End {
-                    events.pop(); // Discard this key event.
-                    self.message("Saving recording...", MessageType::Execution);
-                    self.queue.push(InternalCommand::StopRecording);
+            _ => {
+                if state == InputState::Pressed && key == platform::Key::Escape {
+                    self.switch_mode(Mode::Normal);
+                    return;
                 }
+            }
+        }
+
+        if let Some(kb) = binding {
+            // For toggle-like key bindings, we don't want to run the command
+            // on key repeats. For regular key bindings, we run the command
+            // depending on if it's supposed to repeat.
+            if (repeat && kb.repeats() && !kb.is_toggle) || !repeat {
+                self.push_command(kb.command);
+            }
+            return;
+        }
+
+        if let Execution::Recording { events, .. } = exec {
+            if key == platform::Key::End {
+                events.pop(); // Discard this key event.
+                self.message("Saving recording...", MessageType::Execution);
+                self.queue.push(InternalCommand::StopRecording);
             }
         }
     }
