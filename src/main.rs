@@ -25,7 +25,11 @@ OPTIONS
     --replay <dir>       Replay user input from a directory
     --width <width>      Set the window width
     --height <height>    Set the window height
+    --plugin-dir <dir>   Add <dir> to the plugin search path (repeatable)
     --debug              Set debug mode
+
+ENVIRONMENT
+    RXX_PLUGIN_PATH      Plugin directories separated like the system PATH
 "#;
 
 fn main() {
@@ -58,12 +62,24 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
     let verify_digests = args.contains("--verify-digests");
     let headless = args.contains("--headless");
     let source = args.opt_value_from_str::<_, PathBuf>("-u")?;
-    let plugin_dir = args
-        .opt_value_from_str::<_, PathBuf>("--plugin-dir")?
-        .or_else(|| {
-            directories::ProjectDirs::from("io", "cloudhead", "rx")
-                .map(|d| d.config_dir().join("plugins"))
-        });
+    let mut plugin_dirs = Vec::new();
+    while let Some(dir) = args.opt_value_from_str::<_, PathBuf>("--plugin-dir")? {
+        push_unique(&mut plugin_dirs, dir);
+    }
+    if let Some(path) = std::env::var_os("RXX_PLUGIN_PATH") {
+        for dir in std::env::split_paths(&path).filter(|p| !p.as_os_str().is_empty()) {
+            push_unique(&mut plugin_dirs, dir);
+        }
+    }
+    let local_plugins = std::env::current_dir()?.join("plugins");
+    if local_plugins.is_dir() {
+        push_unique(&mut plugin_dirs, local_plugins);
+    }
+    if let Some(dir) = directories::ProjectDirs::from("io", "cloudhead", "rx")
+        .map(|d| d.config_dir().join("plugins"))
+    {
+        push_unique(&mut plugin_dirs, dir);
+    }
     let replay = args.opt_value_from_str::<_, PathBuf>("--replay")?;
     let record = args.opt_value_from_str::<_, PathBuf>("--record")?;
     let resizable = width.is_none() && height.is_none() && replay.is_none() && record.is_none();
@@ -123,7 +139,8 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
         headless,
         resizable,
         source,
-        plugin_dir,
+        plugin_dir: None,
+        plugin_dirs,
         exec,
         glyphs,
         debug,
@@ -134,5 +151,11 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
         Err(e) => {
             Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{}\n{}", e, HELP)).into())
         }
+    }
+}
+
+fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.contains(&path) {
+        paths.push(path);
     }
 }

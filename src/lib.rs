@@ -77,7 +77,10 @@ pub struct Options<'a> {
     pub resizable: bool,
     pub headless: bool,
     pub source: Option<PathBuf>,
+    /// Legacy single plugin directory. New callers should use `plugin_dirs`.
     pub plugin_dir: Option<PathBuf>,
+    /// Plugin search path, in precedence order. The first plugin name wins.
+    pub plugin_dirs: Vec<PathBuf>,
     pub exec: ExecutionMode,
     pub glyphs: &'a [u8],
     pub debug: bool,
@@ -92,6 +95,7 @@ impl<'a> Default for Options<'a> {
             resizable: true,
             source: None,
             plugin_dir: None,
+            plugin_dirs: Vec::new(),
             exec: ExecutionMode::Normal,
             glyphs: data::GLYPHS,
             debug: false,
@@ -172,7 +176,11 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
     // The renderer exists before plugins load, so `init` hooks can
     // create GPU resources through the attached device/queue handles.
-    let mut plugins = script::PluginHost::new(options.plugin_dir.clone())
+    let mut plugin_dirs = options.plugin_dirs.clone();
+    if let Some(dir) = options.plugin_dir.clone() {
+        plugin_dirs.insert(0, dir);
+    }
+    let mut plugins = script::PluginHost::with_dirs(plugin_dirs)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
     let (device, queue) = renderer.gpu_handles();
     plugins.attach_gfx(device, queue);

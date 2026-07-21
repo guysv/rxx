@@ -2807,8 +2807,8 @@ pub struct PluginHost {
     commands: ScriptCommands,
     /// GPU capability; attached once the renderer exists.
     gfx: Option<Gfx>,
-    dir: Option<std::path::PathBuf>,
-    watcher: Option<ReloadWatcher>,
+    dirs: Vec<std::path::PathBuf>,
+    watchers: Vec<ReloadWatcher>,
     /// Last mode reported to `switch_mode` hooks (edge detection).
     last_mode: Option<String>,
 }
@@ -2853,24 +2853,34 @@ macro_rules! dispatch {
 impl PluginHost {
     /// A host rooted at the given plugin directory (`None` = no plugins).
     pub fn new(dir: Option<std::path::PathBuf>) -> Result<Self, ScriptError> {
+        Self::with_dirs(dir.into_iter().collect())
+    }
+
+    /// A host searching plugin directories in precedence order.
+    pub fn with_dirs(dirs: Vec<std::path::PathBuf>) -> Result<Self, ScriptError> {
         let engine = ScriptEngine::new()?;
-        let watcher = match &dir {
-            Some(d) if d.is_dir() => ReloadWatcher::new(d).ok(),
-            _ => None,
-        };
+        let watchers = dirs
+            .iter()
+            .filter(|d| d.is_dir())
+            .filter_map(|d| ReloadWatcher::new(d).ok())
+            .collect();
         Ok(Self {
             engine,
             plugins: Vec::new(),
             commands: ScriptCommands::default(),
             gfx: None,
-            dir,
-            watcher,
+            dirs,
+            watchers,
             last_mode: None,
         })
     }
 
     pub fn plugin_dir(&self) -> Option<&Path> {
-        self.dir.as_deref()
+        self.dirs.first().map(std::path::PathBuf::as_path)
+    }
+
+    pub fn plugin_dirs(&self) -> impl Iterator<Item = &Path> {
+        self.dirs.iter().map(std::path::PathBuf::as_path)
     }
 
     /// Attach the GPU capability (device + queue clones). Called once
@@ -2920,15 +2930,26 @@ impl PluginHost {
         found
     }
 
-    /// Load (or re-load) all plugins from the plugin dir. A plugin that
+    /// Load (or re-load) all plugins from the plugin search path. A plugin that
     /// fails to compile or whose `init` errors is reported to the message
     /// line and skipped; it never affects its siblings.
     pub fn load(&mut self, session: &mut Session) {
-        let dir = match &self.dir {
-            Some(d) => d.clone(),
-            None => return,
-        };
-        for (name, path) in Self::discover(&dir) {
+        let mut found = Vec::new();
+        let mut names = std::collections::HashSet::new();
+        for dir in &self.dirs {
+            for (name, path) in Self::discover(dir) {
+                if names.insert(name.clone()) {
+                    found.push((name, path));
+                } else {
+                    log::warn!(
+                        "plugin `{}` at {} shadowed by an earlier plugin directory",
+                        name,
+                        path.display()
+                    );
+                }
+            }
+        }
+        for (name, path) in found {
             let script = match self.engine.compile_path(&path) {
                 Ok(s) => s,
                 Err(e) => {
@@ -2943,7 +2964,7 @@ impl PluginHost {
             let root = path
                 .parent()
                 .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| dir.clone());
+                .unwrap_or_default();
             let state = {
                 let mut ctx = Ctx::new(session)
                     .with_commands(&mut self.commands, &name)
@@ -2998,7 +3019,7 @@ impl PluginHost {
     /// Reload all plugins if the watcher saw a change. Returns whether a
     /// reload happened.
     pub fn reload_if_changed(&mut self, session: &mut Session) -> bool {
-        if self.watcher.as_ref().is_some_and(|w| w.changed()) {
+        if self.watchers.iter().any(ReloadWatcher::changed) {
             self.reload(session);
             true
         } else {
@@ -4164,6 +4185,36 @@ mod test {
         assert_eq!(names, vec!["alpha", "beta"]);
         // beta loaded last; its message is the visible one.
         assert_eq!(session.message.to_string(), "beta up");
+    }
+
+    #[test]
+    fn host_searches_multiple_plugin_dirs_with_first_match_winning() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        write_plugin(
+            first.path(),
+            "shared",
+            r#"pub fn init(rx) { rx.message("first"); #{} }"#,
+        );
+        write_plugin(second.path(), "extra", r#"pub fn init(rx) { #{} }"#);
+        write_plugin(
+            second.path(),
+            "shared",
+            r#"pub fn init(rx) { rx.message("second"); #{} }"#,
+        );
+
+        let mut session = test_session();
+        let mut host = PluginHost::with_dirs(vec![
+            first.path().to_path_buf(),
+            second.path().to_path_buf(),
+        ])
+        .unwrap();
+        host.load(&mut session);
+
+        let names: Vec<_> = host.plugins().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["shared", "extra"]);
+        assert_eq!(host.plugin_dirs().collect::<Vec<_>>(), vec![first.path(), second.path()]);
+        assert_eq!(session.message.to_string(), "first");
     }
 
     #[test]

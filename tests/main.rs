@@ -310,6 +310,7 @@ fn run(name: &str, path: &Path) -> io::Result<()> {
         headless: true,
         source: Some(path.join(&stem).with_extension("rx")),
         plugin_dir,
+        plugin_dirs: Vec::new(),
         width: cfg.window.width,
         height: cfg.window.height,
         exec: ExecutionMode::Replay(path.to_path_buf(), DigestMode::Verify),
