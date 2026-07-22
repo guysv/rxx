@@ -87,6 +87,7 @@ pub enum Command {
 
     // Palette
     PaletteAdd(Rgba8),
+    PaletteRemoveForeground,
     PaletteClear,
     PaletteGradient(Rgba8, Rgba8, usize),
     PaletteSample,
@@ -318,6 +319,7 @@ impl From<Command> for String {
             Command::Export(Some(s), path) => format!("export @{}x {}", s, path),
             Command::Noop => format!(""),
             Command::PaletteAdd(c) => format!("p/add {}", c),
+            Command::PaletteRemoveForeground => format!("p/remove"),
             Command::PaletteClear => format!("p/clear"),
             Command::PaletteWrite(_) => format!("p/write"),
             Command::PaletteSample => format!("p/sample"),
@@ -1012,6 +1014,11 @@ impl Default for Commands {
             .command("p/add", "Add a color to the palette", |p| {
                 p.then(color()).map(|(_, rgba)| Command::PaletteAdd(rgba))
             })
+            .command(
+                "p/remove",
+                "Remove the foreground color from the palette",
+                |p| p.value(Command::PaletteRemoveForeground),
+            )
             .command("p/clear", "Clear the color palette", |p| {
                 p.value(Command::PaletteClear)
             })

@@ -139,7 +139,7 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
             Session::DEFAULT_VIEW_W,
             Session::DEFAULT_VIEW_H,
         )
-        .init(options.source.clone())?;
+        .init()?;
 
     if options.debug {
         session
@@ -186,7 +186,29 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
     plugins.attach_gfx(device, queue);
     plugins.load(&mut session);
 
-    if let Err(e) = session.edit(paths) {
+    session.source_init(options.source.clone(), &mut plugins)?;
+
+    // Initialization scripts historically ran before command-line and replay
+    // overrides. Preserve that precedence now that scripts run after plugins.
+    if options.debug {
+        session
+            .settings
+            .set("debug", Value::Bool(true))
+            .expect("'debug' is a bool");
+    }
+    match &execution {
+        Execution::Replaying { digest, .. } | Execution::Recording { digest, .. }
+            if digest.mode != DigestMode::Ignore =>
+        {
+            session
+                .settings
+                .set("animation", Value::Bool(false))
+                .expect("'animation' is a bool");
+        }
+        _ => {}
+    }
+
+    if let Err(e) = session.edit_with_plugins(paths, &mut plugins) {
         session.message(format!("Error loading path(s): {}", e), MessageType::Error);
     }
     // Make sure our session ticks once before anything is rendered.

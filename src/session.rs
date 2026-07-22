@@ -839,29 +839,38 @@ impl Session {
     }
 
     /// Initialize a session.
-    pub fn init(mut self, source: Option<PathBuf>) -> std::io::Result<Self> {
+    pub fn init(mut self) -> std::io::Result<Self> {
         self.transition(State::Running);
         self.reset()?;
-
-        if let Some(init) = source {
-            // The special source '-' is used to skip initialization.
-            if init.as_os_str() != "-" {
-                self.source_path(&init)?;
-            }
-        } else {
-            let dir = self.proj_dirs.config_dir().to_owned();
-            let cfg = dir.join(Self::INIT);
-
-            if cfg.exists() {
-                self.source_path(cfg)?;
-            }
-        }
-
-        self.source_dir(self.cwd.clone()).ok();
         self.cmdline.history.load()?;
         self.message(format!("rx v{}", crate::VERSION), MessageType::Debug);
 
         Ok(self)
+    }
+
+    /// Source the user-selected (or default) initialization script and the
+    /// project-local `.rxrc`. This runs after plugins have loaded so init
+    /// scripts can invoke plugin commands.
+    pub(crate) fn source_init(
+        &mut self,
+        source: Option<PathBuf>,
+        plugins: &mut crate::script::PluginHost,
+    ) -> io::Result<()> {
+        if let Some(init) = source {
+            // The special source '-' is used to skip user initialization.
+            if init.as_os_str() != "-" {
+                self.source_path_with_plugins(&init, plugins)?;
+            }
+        } else {
+            let cfg = self.proj_dirs.config_dir().join(Self::INIT);
+
+            if cfg.exists() {
+                self.source_path_with_plugins(cfg, plugins)?;
+            }
+        }
+
+        self.source_dir_with_plugins(self.cwd.clone(), plugins).ok();
+        Ok(())
     }
 
     // Reset to factory defaults.
@@ -870,7 +879,7 @@ impl Session {
         self.settings = Settings::default();
         self.tool = Tool::default();
 
-        self.source_reader(io::BufReader::new(data::CONFIG), "<init>")
+        self.source_reader(io::BufReader::new(data::CONFIG), "<init>", None)
     }
 
     /// Create a blank view.
@@ -1470,6 +1479,22 @@ impl Session {
     ///
     /// If a path doesn't exist, creates a blank view for that path.
     pub fn edit<P: AsRef<Path>>(&mut self, paths: &[P]) -> io::Result<(usize, usize)> {
+        self.edit_inner(paths, None)
+    }
+
+    pub(crate) fn edit_with_plugins<P: AsRef<Path>>(
+        &mut self,
+        paths: &[P],
+        plugins: &mut crate::script::PluginHost,
+    ) -> io::Result<(usize, usize)> {
+        self.edit_inner(paths, Some(plugins))
+    }
+
+    fn edit_inner<P: AsRef<Path>>(
+        &mut self,
+        paths: &[P],
+        mut plugins: Option<&mut crate::script::PluginHost>,
+    ) -> io::Result<(usize, usize)> {
         use std::ffi::OsStr;
 
         let (mut success_count, mut fail_count) = (0usize, 0usize);
@@ -1497,7 +1522,10 @@ impl Session {
 
                     success_count += 1;
                 }
-                self.source_dir(path).ok();
+                match plugins.as_deref_mut() {
+                    Some(plugins) => self.source_dir_with_plugins(path, plugins).ok(),
+                    None => self.source_dir(path).ok(),
+                };
             } else {
                 if path.exists() {
                     self.load_view(path)?;
@@ -2342,12 +2370,28 @@ impl Session {
     /// Source an rx script at the given path. Returns an error if the path
     /// does not exist or the script couldn't be sourced.
     fn source_path<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
+        self.source_path_inner(path, None)
+    }
+
+    fn source_path_with_plugins<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        plugins: &mut crate::script::PluginHost,
+    ) -> io::Result<()> {
+        self.source_path_inner(path, Some(plugins))
+    }
+
+    fn source_path_inner<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        plugins: Option<&mut crate::script::PluginHost>,
+    ) -> io::Result<()> {
         let path = path.as_ref();
         debug!("source: {}", path.display());
 
         File::open(path)
             .or_else(|_| File::open(self.proj_dirs.config_dir().join(path)))
-            .and_then(|f| self.source_reader(io::BufReader::new(f), path))
+            .and_then(|f| self.source_reader(io::BufReader::new(f), path, plugins))
             .map_err(|e| {
                 io::Error::new(
                     e.kind(),
@@ -2362,8 +2406,21 @@ impl Session {
         self.source_path(dir.as_ref().join(".rxrc"))
     }
 
+    fn source_dir_with_plugins<P: AsRef<Path>>(
+        &mut self,
+        dir: P,
+        plugins: &mut crate::script::PluginHost,
+    ) -> io::Result<()> {
+        self.source_path_with_plugins(dir.as_ref().join(".rxrc"), plugins)
+    }
+
     /// Source a script from an [`io::BufRead`].
-    fn source_reader<P: AsRef<Path>, R: io::BufRead>(&mut self, r: R, _path: P) -> io::Result<()> {
+    fn source_reader<P: AsRef<Path>, R: io::BufRead>(
+        &mut self,
+        r: R,
+        _path: P,
+        mut plugins: Option<&mut crate::script::PluginHost>,
+    ) -> io::Result<()> {
         for (i, line) in r.lines().enumerate() {
             let line = line?;
 
@@ -2377,7 +2434,10 @@ impl Session {
                         format!("{} on line {}", e, i + 1),
                     ))
                 }
-                Ok(cmd) => self.command(cmd),
+                Ok(cmd) => match plugins.as_deref_mut() {
+                    Some(plugins) => self.run_command(cmd, plugins),
+                    None => self.command(cmd),
+                },
             }
         }
         Ok(())
@@ -2531,6 +2591,17 @@ impl Session {
     pub(crate) fn run_command(&mut self, cmd: Command, plugins: &mut crate::script::PluginHost) {
         match cmd {
             Command::Script(name, args) => plugins.dispatch_command(self, &name, &args),
+            Command::Source(Some(path)) => {
+                if let Err(e) = self.source_path_with_plugins(&path, plugins) {
+                    self.message(
+                        format!("Error sourcing `{}`: {}", path, e),
+                        MessageType::Error,
+                    );
+                }
+            }
+            Command::Source(None) => {
+                self.message("Error: source command requires a path", MessageType::Error);
+            }
             cmd => self.command(cmd),
         }
     }
@@ -2664,6 +2735,10 @@ impl Session {
             }
             Command::PaletteAdd(rgba) => {
                 self.palette.add(rgba);
+                self.center_palette();
+            }
+            Command::PaletteRemoveForeground => {
+                self.palette.remove(self.fg);
                 self.center_palette();
             }
             Command::PaletteClear => {
@@ -3482,6 +3557,38 @@ impl Session {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn sourced_commands_dispatch_to_loaded_plugins() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("hello.rune"),
+            r#"
+            pub fn init(rx) {
+                rx.register_command("hello/source", [], "test sourced plugin command", sourced);
+                #{}
+            }
+            pub fn sourced(state, rx, args) {
+                rx.message("sourced through plugin host");
+            }
+            "#,
+        )
+        .unwrap();
+        let init = dir.path().join("init.rx");
+        std::fs::write(&init, "hello/source\n").unwrap();
+
+        let proj_dirs = directories::ProjectDirs::from("io", "cloudhead", "rx").unwrap();
+        let base_dirs = directories::BaseDirs::new().unwrap();
+        let mut session = Session::new(640, 480, dir.path(), proj_dirs, base_dirs);
+        let mut plugins = crate::script::PluginHost::new(Some(dir.path().to_path_buf())).unwrap();
+        plugins.load(&mut session);
+
+        session
+            .source_path_with_plugins(init, &mut plugins)
+            .unwrap();
+
+        assert_eq!(session.message.to_string(), "sourced through plugin host");
+    }
 
     #[test]
     fn test_key_bindings() {
