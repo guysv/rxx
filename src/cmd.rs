@@ -1660,6 +1660,7 @@ mod test {
         assert_eq!(p.parse("1.0 2.0").unwrap(), (Value::F32Tuple(1.0, 2.0), ""));
         assert_eq!(p.parse("1.0").unwrap(), (Value::F64(1.0), ""));
         assert_eq!(p.parse("1").unwrap(), (Value::U32(1), ""));
+        assert_eq!(p.parse("68157570").unwrap(), (Value::U32(68157570), ""));
         assert_eq!(p.parse("1 2").unwrap(), (Value::U32Tuple(1, 2), ""));
         assert_eq!(p.parse("on").unwrap(), (Value::Bool(true), ""));
         assert_eq!(p.parse("off").unwrap(), (Value::Bool(false), ""));

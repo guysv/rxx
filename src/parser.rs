@@ -139,6 +139,9 @@ pub fn color() -> Parser<Rgba8> {
                 if input.is_empty() {
                     return Err("expected color".to_owned());
                 }
+                if !input.starts_with('#') {
+                    return Err(format!("{:?} is not a valid color value", input));
+                }
                 if input.len() < 7 {
                     return Err(format!("{:?} is not a valid color value", input));
                 }
