@@ -127,7 +127,8 @@ pub fn mouse_input(state, rx, button, input) {
     let (x, y0, row_h) = layout(sw as f64, sh as f64, n);
 
     for row in 0..n {
-        if hit(icon_rect(x, y0, row_h, row), state.mx, state.my) {
+        // Drawing uses y-up coordinates; pointer events use y-down.
+        if hit(icon_rect(x, y0, row_h, row), state.mx, (sh as f64) - state.my) {
             let cmd = if vis[row] { "hide" } else { "show" };
             rx.run_builtin(`layer/${cmd} ${row}`);
             return; // one toggle per click
@@ -155,7 +156,8 @@ fn draw_frame(rx, x0, top, x1, bottom, color, draw_bottom) {
 
 // The index column + per-row frames (UI tier): every layer's row is boxed
 // — grey when it's not the active layer, pink when it is — and labelled
-// with its layer index (0 = bottom strip), so the brush's target layer and
+// with its one-based layer number (1 = bottom strip), matching visibility
+// messages; internal indices remain zero-based so the brush's target layer and
 // the stack order both read at a glance.
 pub fn draw(state, rx) {
     if !rx.setting("layer-status/show") {
@@ -190,7 +192,7 @@ pub fn draw(state, rx) {
         let top = y - VPAD;
         let bottom = if front { y + ICON + VPAD } else { y + pitch - VPAD };
 
-        rx.draw_text(`${layer}`, idx_x, y + 1.0, if active { pink } else { white });
+        rx.draw_text(`${layer + 1}`, idx_x, y + 1.0, if active { pink } else { white });
         draw_frame(
             rx,
             idx_x - FRAME,
