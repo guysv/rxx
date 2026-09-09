@@ -56,7 +56,7 @@ pub fn shade(state, rx, encoder) {
 
     let tbg = rx.create_transform_bind_group(view.width, view.height, rx::mat4_identity()).unwrap();
     let sbg = rx.create_texture_bind_group(job.clipboard).unwrap();
-    let verts = rx.create_sprite_vertices(job.clipboard, job.dst, rx.fg(), 1.0).unwrap();
+    let verts = rx.create_sprite_vertices(job.clipboard, #{ dst: job.dst, color: rx.fg() }).unwrap();
 
     let pass = encoder.begin_view_pass("selection-outline", job.view_id, "load").unwrap();
     pass.set_pipeline(state.pipeline).unwrap();

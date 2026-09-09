@@ -1,5 +1,5 @@
 // A minimal textured-quad pipeline for the layer-status overlay: the
-// sprite vertices from `create_sprite_vertices_src` (group 0 = ortho +
+// sprite vertices from `create_sprite_vertices` (group 0 = ortho +
 // transform, group 1 = the icon atlas) drawn as a screen-space quad.
 
 struct TransformUniforms { ortho: mat4x4<f32>, transform: mat4x4<f32>, }

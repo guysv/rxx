@@ -407,7 +407,7 @@ fn active_view(state, rx) {
 fn sprite_pass(rx, encoder, pipeline, label, transform, target, source, dst, ortho_w, ortho_h, clear) {
     let tbg = rx.create_transform_bind_group(ortho_w, ortho_h, transform).unwrap();
     let sbg = rx.create_texture_bind_group(source).unwrap();
-    let verts = rx.create_sprite_vertices(source, dst, rx::rgb(255, 255, 255), 1.0).unwrap();
+    let verts = rx.create_sprite_vertices(source, #{ dst }).unwrap();
     let load = if clear { "clear" } else { "load" };
     let pass = if target is i64 {
         encoder.begin_view_pass(label, target, "load").unwrap()
@@ -576,7 +576,7 @@ pub fn shade(state, rx, encoder) {
 
     let tbg = rx.create_transform_bind_group(view.width, view.height, sprite_transform).unwrap();
     let sbg = rx.create_texture_bind_group(source).unwrap();
-    let verts = rx.create_sprite_vertices(source, sprite_dst, rx::rgb(255, 255, 255), opacity).unwrap();
+    let verts = rx.create_sprite_vertices(source, #{ dst: sprite_dst, opacity }).unwrap();
 
     let pass = if to_view {
         encoder.begin_view_pass("rotate-scale", state.active_view_id, "load").unwrap()

@@ -4,7 +4,7 @@
 // attribute; the active layer's row is boxed. Clicking an eye toggles that
 // layer's visibility (UX is WIP).
 //
-// create_texture -> create_sprite_vertices_src, drawn in the `render` hook
+// create_texture -> create_sprite_vertices, drawn in the `render` hook
 // `mouse_input` hook carries no coords) and toggles via `run_builtin`.
 //
 // The icon atlas (layers.png) is 64x16: four 16x16 cells — eye-open,
@@ -96,7 +96,7 @@ pub fn render(state, rx, pass) {
         let src = rx::rect(cell * ICON, 0.0, cell * ICON + ICON, ICON);
         let r = icon_rect(x, y0, row_h, row);
         let dst = rx::rect(r.0, r.1, r.2, r.3);
-        let v = rx.create_sprite_vertices_src(state.icons, src, dst).unwrap();
+        let v = rx.create_sprite_vertices(state.icons, #{ src, dst }).unwrap();
         pass.set_vertex_buffer(0, v).unwrap();
         pass.draw(v.count(), 1).unwrap();
     }

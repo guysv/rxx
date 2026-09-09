@@ -28,12 +28,7 @@ pub fn init(rx) {
 fn quad(state, rx, pass, transform, w, h) {
     let tbg = rx.create_transform_bind_group(w, h, transform).unwrap();
     let sbg = rx.create_texture_bind_group(state.tex).unwrap();
-    let v = rx.create_sprite_vertices(
-        state.tex,
-        rx::rect(0.0, 0.0, 64.0, 64.0),
-        rx::rgb(255, 255, 255),
-        1.0,
-    ).unwrap();
+    let v = rx.create_sprite_vertices(state.tex, #{ dst: rx::rect(0.0, 0.0, 64.0, 64.0) }).unwrap();
     pass.set_pipeline(state.pipeline).unwrap();
     pass.set_bind_group(0, tbg).unwrap();
     pass.set_bind_group(1, sbg).unwrap();

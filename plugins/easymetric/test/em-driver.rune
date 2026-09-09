@@ -48,12 +48,9 @@ pub fn shade(state, rx, encoder) {
         tex.fill(color);
         let tbg = rx.create_transform_bind_group(view.width, sheet_h, rx::mat4_identity()).unwrap();
         let sbg = rx.create_texture_bind_group(tex).unwrap();
-        let v = rx.create_sprite_vertices(
-            tex,
-            rx::rect(x1 as f64, (y1 + off) as f64, x2 as f64, (y2 + off) as f64),
-            rx::rgb(255, 255, 255),
-            1.0,
-        ).unwrap();
+        let v = rx.create_sprite_vertices(tex, #{
+            dst: rx::rect(x1 as f64, (y1 + off) as f64, x2 as f64, (y2 + off) as f64),
+        }).unwrap();
         let pass = encoder.begin_view_pass("t-fill", id, "load").unwrap();
         pass.set_pipeline(state.show).unwrap();
         pass.set_bind_group(0, tbg).unwrap();

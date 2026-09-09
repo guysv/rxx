@@ -91,7 +91,7 @@ impl DigestState {
 pub enum ExecutionMode {
     Normal,
     Record(PathBuf, DigestMode, GifMode),
-    Replay(PathBuf, DigestMode),
+    Replay(PathBuf, DigestMode, GifMode),
 }
 
 /// Execution mode. Controls whether the session is playing or recording
@@ -177,7 +177,13 @@ impl Execution {
     }
 
     /// Create a replay.
-    pub fn replaying<P: AsRef<Path>>(path: P, mode: DigestMode) -> io::Result<Self> {
+    pub fn replaying<P: AsRef<Path>>(
+        path: P,
+        mode: DigestMode,
+        width: u16,
+        height: u16,
+        gif: GifMode,
+    ) -> io::Result<Self> {
         use io::{Error, ErrorKind};
 
         let mut events = VecDeque::new();
@@ -219,7 +225,15 @@ impl Execution {
                 }
                 FrameRecorder::from(frames, mode)
             }
-            _ => FrameRecorder::new(GifRecorder::dummy(), GifMode::Ignore, mode),
+            _ => FrameRecorder::new(
+                if gif == GifMode::Record {
+                    GifRecorder::new(path.join(file_name).with_extension("gif"), width, height)?
+                } else {
+                    GifRecorder::dummy()
+                },
+                gif,
+                mode,
+            ),
         };
 
         let events_path = path.join(file_name).with_extension("events");
@@ -338,6 +352,17 @@ impl Execution {
         result
     }
 
+    pub fn capture_replay(&self) -> bool {
+        matches!(self, Self::Replaying { recorder, .. } if recorder.gif_mode == GifMode::Record)
+    }
+
+    pub fn finish_replay_capture(&mut self) -> io::Result<()> {
+        if let Self::Replaying { recorder, .. } = self {
+            recorder.finish()?;
+        }
+        Ok(())
+    }
+
     pub fn finalize_replaying(&self) -> io::Result<PathBuf> {
         if let Execution::Replaying {
             digest:
@@ -428,13 +453,47 @@ impl GifRecorder {
                     time::Duration::from_secs(1)
                 };
 
-                let data = util::align_u8(gif_data);
-                let mut frame = gif::Frame::from_rgb_speed(
-                    self.width,
-                    self.height,
-                    data,
-                    Self::GIF_ENCODING_SPEED,
-                );
+                let data: Vec<u8> = util::align_u8(gif_data)
+                    .chunks_exact(4)
+                    .flat_map(|pixel| pixel[..3].iter().copied())
+                    .collect();
+                // Pixel-art screens often fit a GIF palette exactly. Preserve
+                // rare colors (one-pixel cursors/borders) rather than letting
+                // the sampled quantizer merge them into the background.
+                let mut colors = std::collections::HashMap::new();
+                let mut palette = Vec::new();
+                let mut indices = Vec::with_capacity(gif_data.len());
+                for pixel in data.chunks_exact(3) {
+                    let color = [pixel[0], pixel[1], pixel[2]];
+                    let index = if let Some(index) = colors.get(&color) {
+                        *index
+                    } else {
+                        if colors.len() == 256 {
+                            break;
+                        }
+                        let index = colors.len() as u8;
+                        colors.insert(color, index);
+                        palette.extend_from_slice(&color);
+                        index
+                    };
+                    indices.push(index);
+                }
+                let mut frame = if indices.len() == gif_data.len() {
+                    gif::Frame::from_palette_pixels(
+                        self.width,
+                        self.height,
+                        &indices,
+                        &palette,
+                        None,
+                    )
+                } else {
+                    gif::Frame::from_rgb_speed(
+                        self.width,
+                        self.height,
+                        &data,
+                        Self::GIF_ENCODING_SPEED,
+                    )
+                };
                 frame.dispose = gif::DisposalMethod::Background;
                 frame.delay = (delay.as_millis() / 10)
                     .try_into()
@@ -620,5 +679,55 @@ impl FromStr for Hash {
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         u64::from_str_radix(input, 16).map(Hash)
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn replay_capture_preserves_rgb_and_finishes_gif() {
+        use gif::SetParameter;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("capture");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("capture.events"),
+            "00000 0000000 cursor/moved 0 0\n",
+        )
+        .unwrap();
+        let mut execution =
+            Execution::replaying(&dir, DigestMode::Ignore, 64, 64, GifMode::Record).unwrap();
+        assert!(execution.capture_replay());
+        // Framebuffer alpha is not meaningful for the opaque screen capture.
+        let pixels: Vec<_> = (0..4096)
+            .map(|i| {
+                if i == 4095 {
+                    Rgba8::new(255, 255, 255, 255) // A rare one-pixel UI detail.
+                } else if i < 2048 {
+                    Rgba8::new(255, 0, 0, 0)
+                } else {
+                    Rgba8::new(0, 255, 0, 255)
+                }
+            })
+            .collect();
+        execution.record(&pixels).unwrap();
+        execution.finish_replay_capture().unwrap();
+        drop(execution);
+        let mut decoder = gif::Decoder::new(File::open(dir.join("capture.gif")).unwrap());
+        decoder.set(gif::ColorOutput::RGBA);
+        let mut reader = decoder.read_info().unwrap();
+        assert_eq!((reader.width(), reader.height()), (64, 64));
+        let frame = reader.read_next_frame().unwrap().unwrap();
+        for (actual, expected) in frame.buffer.chunks_exact(4).zip(pixels) {
+            let expected = util::align_u8(std::slice::from_ref(&expected));
+            for channel in 0..3 {
+                assert_eq!(actual[channel], expected[channel]);
+            }
+            assert_eq!(actual[3], 255);
+        }
+        assert_eq!(frame.delay, 100);
+        assert!(reader.read_next_frame().unwrap().is_none());
     }
 }

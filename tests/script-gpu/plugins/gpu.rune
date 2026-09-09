@@ -57,7 +57,7 @@ pub fn check(state, rx, args) {
 fn quad(rx, pass, pipeline, texture, dst, w, h) {
     let tbg = rx.create_transform_bind_group(w, h, rx::mat4_identity()).unwrap();
     let sbg = rx.create_texture_bind_group(texture).unwrap();
-    let v = rx.create_sprite_vertices(texture, dst, rx::rgb(255, 255, 255), 1.0).unwrap();
+    let v = rx.create_sprite_vertices(texture, #{ dst }).unwrap();
     pass.set_pipeline(pipeline).unwrap();
     pass.set_bind_group(0, tbg).unwrap();
     pass.set_bind_group(1, sbg).unwrap();

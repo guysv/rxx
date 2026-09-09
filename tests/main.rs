@@ -313,7 +313,7 @@ fn run(name: &str, path: &Path) -> io::Result<()> {
         plugin_dirs: Vec::new(),
         width: cfg.window.width,
         height: cfg.window.height,
-        exec: ExecutionMode::Replay(path.to_path_buf(), DigestMode::Verify),
+        exec: ExecutionMode::Replay(path.to_path_buf(), DigestMode::Verify, rx::execution::GifMode::Ignore),
         glyphs,
         debug: false,
     };

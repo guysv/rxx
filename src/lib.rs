@@ -150,7 +150,9 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
     let mut execution = match options.exec {
         ExecutionMode::Normal => Execution::normal(),
-        ExecutionMode::Replay(path, digest) => Execution::replaying(path, digest),
+        ExecutionMode::Replay(path, digest, gif) => {
+            Execution::replaying(path, digest, win_w as u16, win_h as u16, gif)
+        }
         ExecutionMode::Record(path, digest, gif) => {
             Execution::recording(path, digest, win_w as u16, win_h as u16, gif)
         }
@@ -365,6 +367,10 @@ pub fn init<P: AsRef<Path>>(paths: &[P], options: Options<'_>) -> std::io::Resul
 
         plugins.reload_if_changed(&mut session);
 
+        if execution.capture_replay() {
+            let interval = std::time::Duration::from_secs_f64(1.0 / 60.0);
+            std::thread::sleep(interval.saturating_sub(last.elapsed()));
+        }
         delta = last.elapsed();
         last += delta;
 

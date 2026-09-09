@@ -56,12 +56,7 @@ pub fn shade(state, rx, encoder) {
 }
 
 fn quad_verts(rx, tex, x, y) {
-    rx.create_sprite_vertices(
-        tex,
-        rx::rect(x, y, x + 64.0, y + 64.0),
-        rx::rgb(255, 255, 255),
-        1.0,
-    ).unwrap()
+    rx.create_sprite_vertices(tex, #{ dst: rx::rect(x, y, x + 64.0, y + 64.0) }).unwrap()
 }
 
 pub fn render(state, rx, pass) {

@@ -540,6 +540,61 @@ fn rect(x1: f64, y1: f64, x2: f64, y2: f64) -> Rect {
     Rect { x1, y1, x2, y2 }
 }
 
+/// Parsed sprite descriptor. Borrow fields so descriptors stored in plugin
+/// state can be reused across frames without consuming their native values.
+struct SpriteOptions {
+    src: Rect,
+    dst: Rect,
+    color: crate::gfx::color::Rgba8,
+    opacity: f64,
+}
+
+impl SpriteOptions {
+    fn parse(options: &rune::runtime::Object, width: u32, height: u32) -> Result<Self, String> {
+        for key in options.keys() {
+            if !matches!(key.as_str(), "src" | "dst" | "color" | "opacity") {
+                return Err(format!("unknown option `{}`", key));
+            }
+        }
+        let read_rect = |key: &str| -> Result<Option<Rect>, String> {
+            options
+                .get(key)
+                .map(|value| {
+                    value
+                        .borrow_ref::<Rect>()
+                        .map(|rect| *rect)
+                        .map_err(|_| format!("`{}` must be a Rect", key))
+                })
+                .transpose()
+        };
+        let dst = read_rect("dst")?.ok_or("missing required option `dst`")?;
+        let src = read_rect("src")?.unwrap_or(Rect {
+            x1: 0.0,
+            y1: 0.0,
+            x2: width as f64,
+            y2: height as f64,
+        });
+        let color = match options.get("color") {
+            Some(value) => *value
+                .borrow_ref::<crate::gfx::color::Rgba8>()
+                .map_err(|_| "`color` must be an Rgba8")?,
+            None => crate::gfx::color::Rgba8::WHITE,
+        };
+        let opacity = match options.get("opacity") {
+            Some(value) => {
+                rune::from_value::<f64>(value.clone()).map_err(|_| "`opacity` must be a float")?
+            }
+            None => 1.0,
+        };
+        Ok(Self {
+            src,
+            dst,
+            color,
+            opacity,
+        })
+    }
+}
+
 type SharedPass = std::sync::Arc<std::sync::Mutex<Option<wgpu::RenderPass<'static>>>>;
 type SharedComputePass = std::sync::Arc<std::sync::Mutex<Option<wgpu::ComputePass<'static>>>>;
 type SharedEncoder = std::sync::Arc<std::sync::Mutex<Option<wgpu::CommandEncoder>>>;
@@ -2293,37 +2348,30 @@ impl Ctx {
         })
     }
 
-    /// Build a vertex buffer for one textured quad mapping the whole of
-    /// `texture` onto `dst` (target pixels), tinted with `color` at
-    /// `opacity`. Six vertices.
+    /// Convenience helper for the existing render-pass API: allocate six
+    /// sprite-layout vertices, then bind/draw the returned buffer as usual.
+    /// `options` requires `dst`; `src` defaults to the whole texture,
+    /// `color` to white, and `opacity` to 1.0. Rectangles are y-up pixels.
     #[rune::function]
     fn create_sprite_vertices(
         &mut self,
         texture: &ScriptTexture,
-        dst: &Rect,
-        color: &crate::gfx::color::Rgba8,
-        opacity: f64,
+        options: &rune::runtime::Object,
     ) -> Option<ScriptBuffer> {
-        let src = Rect {
-            x1: 0.0,
-            y1: 0.0,
-            x2: texture.width as f64,
-            y2: texture.height as f64,
+        let options = match SpriteOptions::parse(options, texture.width, texture.height) {
+            Ok(options) => options,
+            Err(error) => {
+                self.error(format!("create_sprite_vertices: {}", error));
+                return None;
+            }
         };
-        self.sprite_vertices(texture, &src, dst, color, opacity)
-    }
-
-    /// Like `create_sprite_vertices`, but maps only the `src` rect of
-    /// the texture (in texture pixels) onto `dst` — white, full
-    /// a composited sheet.
-    #[rune::function]
-    fn create_sprite_vertices_src(
-        &mut self,
-        texture: &ScriptTexture,
-        src: &Rect,
-        dst: &Rect,
-    ) -> Option<ScriptBuffer> {
-        self.sprite_vertices(texture, src, dst, &crate::gfx::color::Rgba8::WHITE, 1.0)
+        self.sprite_vertices(
+            texture,
+            &options.src,
+            &options.dst,
+            &options.color,
+            options.opacity,
+        )
     }
 
     /// Export a function for other plugins to call via
@@ -2612,7 +2660,6 @@ fn module() -> Result<rune::Module, rune::ContextError> {
     m.function_meta(Ctx::create_transform_params_bind_group)?;
     m.function_meta(Ctx::create_texture_bind_group)?;
     m.function_meta(Ctx::create_sprite_vertices)?;
-    m.function_meta(Ctx::create_sprite_vertices_src)?;
     m.function_meta(rgb)?;
     m.function_meta(rgba)?;
     m.function_meta(rect)?;
@@ -3471,9 +3518,14 @@ impl PluginHost {
                         state, ctx, id
                     ))
                 }
-                _ => dispatch!(plugins, commands, gfx, session, "view_removed", |state, ctx| (
-                    state, ctx, id
-                )),
+                _ => dispatch!(
+                    plugins,
+                    commands,
+                    gfx,
+                    session,
+                    "view_removed",
+                    |state, ctx| (state, ctx, id)
+                ),
             }
         }
     }
@@ -3566,6 +3618,90 @@ impl ReloadWatcher {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn sprite_descriptor_defaults_validation_and_reuse() {
+        let engine = ScriptEngine::new().unwrap();
+        let descriptor = |expression: &str| {
+            engine
+                .compile_str("descriptor", &format!("pub fn make() {{ {} }}", expression))
+                .unwrap()
+                .call("make", ())
+                .unwrap()
+        };
+        let value = descriptor("#{ dst: rx::rect(1.0, 2.0, 5.0, 6.0) }");
+        let object = value.borrow_ref::<rune::runtime::Object>().unwrap();
+        let options = SpriteOptions::parse(&object, 16, 8).unwrap();
+        assert_eq!(
+            (
+                options.src.x1,
+                options.src.y1,
+                options.src.x2,
+                options.src.y2
+            ),
+            (0.0, 0.0, 16.0, 8.0)
+        );
+        assert_eq!(options.color, crate::gfx::color::Rgba8::WHITE);
+        assert_eq!(options.opacity, 1.0);
+        assert_eq!(
+            (
+                options.dst.x1,
+                options.dst.y1,
+                options.dst.x2,
+                options.dst.y2
+            ),
+            (1.0, 2.0, 5.0, 6.0)
+        );
+
+        let value = descriptor("#{ dst: rx::rect(1.0, 2.0, 5.0, 6.0), src: rx::rect(2.0, 3.0, 4.0, 5.0), color: rx::rgba(10, 20, 30, 40), opacity: 0.5 }");
+        let object = value.borrow_ref::<rune::runtime::Object>().unwrap();
+        for _ in 0..2 {
+            let options = SpriteOptions::parse(&object, 16, 8).unwrap();
+            assert_eq!(
+                (
+                    options.src.x1,
+                    options.src.y1,
+                    options.src.x2,
+                    options.src.y2
+                ),
+                (2.0, 3.0, 4.0, 5.0)
+            );
+            assert_eq!(
+                options.color,
+                crate::gfx::color::Rgba8 {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 40
+                }
+            );
+            assert_eq!(options.opacity, 0.5);
+        }
+        for (expression, message) in [
+            ("#{}", "missing required option `dst`"),
+            ("#{ dst: 1 }", "`dst` must be a Rect"),
+            (
+                "#{ dst: rx::rect(0.0, 0.0, 1.0, 1.0), src: false }",
+                "`src` must be a Rect",
+            ),
+            (
+                "#{ dst: rx::rect(0.0, 0.0, 1.0, 1.0), color: 1 }",
+                "`color` must be an Rgba8",
+            ),
+            (
+                "#{ dst: rx::rect(0.0, 0.0, 1.0, 1.0), opacity: false }",
+                "`opacity` must be a float",
+            ),
+            (
+                "#{ dst: rx::rect(0.0, 0.0, 1.0, 1.0), opactiy: 0.5 }",
+                "unknown option `opactiy`",
+            ),
+        ] {
+            let value = descriptor(expression);
+            let object = value.borrow_ref::<rune::runtime::Object>().unwrap();
+            assert_eq!(SpriteOptions::parse(&object, 16, 8).err().unwrap(), message);
+        }
+    }
 
     #[test]
     fn compile_and_call() {
@@ -5095,12 +5231,9 @@ mod test {
                 let target = rx.create_texture(4, 4).unwrap();
                 let tbg = rx.create_transform_bind_group(4, 4, rx::mat4_identity()).unwrap();
                 let sbg = rx.create_texture_bind_group(source).unwrap();
-                let verts = rx.create_sprite_vertices(
-                    source,
-                    rx::rect(0.0, 0.0, 4.0, 4.0),
-                    rx::rgb(255, 255, 255),
-                    1.0,
-                ).unwrap();
+                let verts = rx.create_sprite_vertices(source, #{
+                    dst: rx::rect(0.0, 0.0, 4.0, 4.0),
+                }).unwrap();
                 #{ pipeline, target, tbg, sbg, verts }
             }
             pub fn shade(state, rx, encoder) {
@@ -5308,12 +5441,7 @@ mod test {
                 // Ortho normalizes, so 4x4 transforms and a (0,0,4,4)
                 // quad cover the full target whatever its pixel size.
                 let tbg = rx.create_transform_bind_group(4, 4, rx::mat4_identity()).unwrap();
-                let verts = rx.create_sprite_vertices(
-                    brush,
-                    rx::rect(0.0, 0.0, 4.0, 4.0),
-                    rx::rgb(255, 255, 255),
-                    1.0,
-                ).unwrap();
+                let verts = rx.create_sprite_vertices(brush, #{ dst: rx::rect(0.0, 0.0, 4.0, 4.0) }).unwrap();
                 #{ pipeline, brush, out, tbg, verts, frame: 0 }
             }
             pub fn shade(state, rx, encoder) {
@@ -5528,12 +5656,9 @@ mod test {
                     4, 4, rx::mat4_identity(),
                     [0.0, 1.0, 0.0, 1.0, 1.0],
                 ).unwrap();
-                let verts = rx.create_sprite_vertices(
-                    source,
-                    rx::rect(0.0, 0.0, 4.0, 4.0),
-                    rx::rgb(255, 255, 255),
-                    1.0,
-                ).unwrap();
+                let verts = rx.create_sprite_vertices(source, #{
+                    dst: rx::rect(0.0, 0.0, 4.0, 4.0),
+                }).unwrap();
                 #{ pipeline, target, tbg, verts }
             }
             pub fn shade(state, rx, encoder) {
@@ -5685,12 +5810,9 @@ mod test {
                 source.fill(rx::rgb(0, 0, 255));
                 let tbg = rx.create_transform_bind_group(4, 4, rx::mat4_identity()).unwrap();
                 let sbg = rx.create_texture_bind_group(source).unwrap();
-                let verts = rx.create_sprite_vertices(
-                    source,
-                    rx::rect(0.0, 0.0, 4.0, 4.0),
-                    rx::rgb(255, 255, 255),
-                    1.0,
-                ).unwrap();
+                let verts = rx.create_sprite_vertices(source, #{
+                    dst: rx::rect(0.0, 0.0, 4.0, 4.0),
+                }).unwrap();
                 #{ pipeline, tbg, sbg, verts, kept: None }
             }
             pub fn render(state, rx, pass) {
@@ -5800,12 +5922,9 @@ mod test {
                 source.fill(rx::rgb(0, 0, 255));
                 let tbg = rx.create_transform_bind_group(4, 4, rx::mat4_identity()).unwrap();
                 let sbg = rx.create_texture_bind_group(source).unwrap();
-                let verts = rx.create_sprite_vertices(
-                    source,
-                    rx::rect(0.0, 0.0, 4.0, 4.0),
-                    rx::rgb(255, 255, 255),
-                    1.0,
-                ).unwrap();
+                let verts = rx.create_sprite_vertices(source, #{
+                    dst: rx::rect(0.0, 0.0, 4.0, 4.0),
+                }).unwrap();
                 #{ pipeline, tbg, sbg, verts }
             }
             pub fn render(state, rx, pass) {
@@ -5932,7 +6051,8 @@ mod test {
         host.attach_gfx(gfx.device.clone(), gfx.queue.clone());
         host.load(&mut session);
         assert!(
-            host.plugins().any(|p| p.name == "selection-outline" && p.enabled),
+            host.plugins()
+                .any(|p| p.name == "selection-outline" && p.enabled),
             "plugin must load: {}",
             session.message
         );
@@ -6016,7 +6136,8 @@ mod test {
         host.attach_gfx(gfx.device.clone(), gfx.queue.clone());
         host.load(&mut session);
         assert!(
-            host.plugins().any(|p| p.name == "selection-outline" && p.enabled),
+            host.plugins()
+                .any(|p| p.name == "selection-outline" && p.enabled),
             "plugin must load: {}",
             session.message
         );
@@ -6691,8 +6812,7 @@ mod test {
             std::fs::write(sub.join(name).with_extension("rune"), format!(
                 "{}\npub fn run(state, rx, args) {{ probe(state, rx, args); }}\n", body)).unwrap();
             let mut full = String::from(body);
-            full.push_str(&format!(
-                "\npub fn init2() {{}}\n"));
+            full.push_str(&format!("\npub fn init2() {{}}\n"));
             let mut session = test_session().with_blank(crate::view::FileStatus::NoFile, 32, 32);
             let mut host = PluginHost::new(Some(sub.clone())).unwrap();
             host.load(&mut session);

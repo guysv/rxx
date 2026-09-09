@@ -990,6 +990,15 @@ impl Session {
                         },
                         DigestMode::Ignore => {}
                     }
+                    if exec.capture_replay() {
+                        match exec.finish_replay_capture() {
+                            Ok(()) => {
+                                info!("replaying: capture saved");
+                                self.quit(ExitReason::Normal);
+                            }
+                            Err(e) => self.quit(ExitReason::Error(e.to_string())),
+                        }
+                    }
                     *exec = Execution::Normal;
                 }
             }

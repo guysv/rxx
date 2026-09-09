@@ -23,6 +23,8 @@ OPTIONS
 
     --record <dir>       Record user input to a directory
     --replay <dir>       Replay user input from a directory
+    --record-gif         Capture recording/replay as GIF (replay runs at 60 fps)
+    --isolated-plugins  Load only explicit --plugin-dir paths
     --width <width>      Set the window width
     --height <height>    Set the window height
     --plugin-dir <dir>   Add <dir> to the plugin search path (repeatable)
@@ -66,19 +68,21 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
     while let Some(dir) = args.opt_value_from_str::<_, PathBuf>("--plugin-dir")? {
         push_unique(&mut plugin_dirs, dir);
     }
-    if let Some(path) = std::env::var_os("RXX_PLUGIN_PATH") {
-        for dir in std::env::split_paths(&path).filter(|p| !p.as_os_str().is_empty()) {
+    if !args.contains("--isolated-plugins") {
+        if let Some(path) = std::env::var_os("RXX_PLUGIN_PATH") {
+            for dir in std::env::split_paths(&path).filter(|p| !p.as_os_str().is_empty()) {
+                push_unique(&mut plugin_dirs, dir);
+            }
+        }
+        let local_plugins = std::env::current_dir()?.join("plugins");
+        if local_plugins.is_dir() {
+            push_unique(&mut plugin_dirs, local_plugins);
+        }
+        if let Some(dir) = directories::ProjectDirs::from("io", "cloudhead", "rx")
+            .map(|d| d.config_dir().join("plugins"))
+        {
             push_unique(&mut plugin_dirs, dir);
         }
-    }
-    let local_plugins = std::env::current_dir()?.join("plugins");
-    if local_plugins.is_dir() {
-        push_unique(&mut plugin_dirs, local_plugins);
-    }
-    if let Some(dir) = directories::ProjectDirs::from("io", "cloudhead", "rx")
-        .map(|d| d.config_dir().join("plugins"))
-    {
-        push_unique(&mut plugin_dirs, dir);
     }
     let replay = args.opt_value_from_str::<_, PathBuf>("--replay")?;
     let record = args.opt_value_from_str::<_, PathBuf>("--record")?;
@@ -104,6 +108,9 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
         GifMode::Ignore
     };
 
+    if record_gif && verify_digests {
+        return Err("GIF capture cannot be combined with digest verification".into());
+    }
     if record_gif && record.is_none() && replay.is_none() {
         return Err("'--record-gif' has no effect without '--record' or '--replay'".into());
     }
@@ -124,7 +131,7 @@ fn execute(mut args: pico_args::Arguments) -> Result<(), Box<dyn std::error::Err
     let height = height.unwrap_or(default.height);
 
     let exec = if let Some(path) = replay {
-        ExecutionMode::Replay(path, digest_mode)
+        ExecutionMode::Replay(path, digest_mode, gif_mode)
     } else if let Some(path) = record {
         ExecutionMode::Record(path, digest_mode, gif_mode)
     } else {

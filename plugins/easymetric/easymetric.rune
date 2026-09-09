@@ -515,12 +515,9 @@ pub fn shade(state, rx, encoder) {
         state.yaw, state.pitch, shade as f64, dither as f64,
     ];
     let tbg = rx.create_transform_params_bind_group(PANE, PANE, rx::mat4_identity(), params).unwrap();
-    let v = rx.create_sprite_vertices(
-        state.pane,
-        rx::rect(0.0, 0.0, PANE as f64, PANE as f64),
-        rx::rgb(255, 255, 255),
-        1.0,
-    ).unwrap();
+    let v = rx.create_sprite_vertices(state.pane, #{
+        dst: rx::rect(0.0, 0.0, PANE as f64, PANE as f64),
+    }).unwrap();
     let pass = encoder.begin_render_pass("em-raycast", state.pane, "clear").unwrap();
     pass.set_pipeline(state.raycast).unwrap();
     pass.set_bind_group(0, tbg).unwrap();
@@ -537,12 +534,9 @@ pub fn shade(state, rx, encoder) {
     let ostyle = if ostyle is String { outline_style(ostyle) } else { 0 };
     let oparams = [ostyle as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     let otbg = rx.create_transform_params_bind_group(PANE, PANE, rx::mat4_identity(), oparams).unwrap();
-    let ov = rx.create_sprite_vertices(
-        state.pane_b,
-        rx::rect(0.0, 0.0, PANE as f64, PANE as f64),
-        rx::rgb(255, 255, 255),
-        1.0,
-    ).unwrap();
+    let ov = rx.create_sprite_vertices(state.pane_b, #{
+        dst: rx::rect(0.0, 0.0, PANE as f64, PANE as f64),
+    }).unwrap();
     let opass = encoder.begin_render_pass("em-outline", state.pane_b, "clear").unwrap();
     opass.set_pipeline(state.outline).unwrap();
     opass.set_bind_group(0, otbg).unwrap();
@@ -564,11 +558,10 @@ pub fn shade(state, rx, encoder) {
             let x0 = state.bake_frame * fw;
             let btbg = rx.create_transform_bind_group(outv.width, outv.frame_height, rx::mat4_identity()).unwrap();
             let bsbg = rx.create_texture_bind_group(state.pane_b).unwrap();
-            let bv = rx.create_sprite_vertices_src(
-                state.pane_b,
-                rx::rect(0.0, PANE as f64, PANE as f64, 0.0),
-                rx::rect(x0 as f64, 0.0, (x0 + PANE) as f64, PANE as f64),
-            ).unwrap();
+            let bv = rx.create_sprite_vertices(state.pane_b, #{
+                src: rx::rect(0.0, PANE as f64, PANE as f64, 0.0),
+                dst: rx::rect(x0 as f64, 0.0, (x0 + PANE) as f64, PANE as f64),
+            }).unwrap();
             let bpass = encoder.begin_view_pass("em-bake", state.bake_view, "load").unwrap();
             bpass.set_pipeline(state.show).unwrap();
             bpass.set_bind_group(0, btbg).unwrap();
@@ -601,12 +594,9 @@ pub fn render(state, rx, pass) {
     let t = rx::mat4_mul(rx::mat4_translation(x, y), rx::mat4_scale(z, z));
     let tbg = rx.create_transform_bind_group(sw, sh, t).unwrap();
     let sbg = rx.create_texture_bind_group(state.pane_b).unwrap();
-    let v = rx.create_sprite_vertices(
-        state.pane_b,
-        rx::rect(0.0, 0.0, PANE as f64, PANE as f64),
-        rx::rgb(255, 255, 255),
-        1.0,
-    ).unwrap();
+    let v = rx.create_sprite_vertices(state.pane_b, #{
+        dst: rx::rect(0.0, 0.0, PANE as f64, PANE as f64),
+    }).unwrap();
     pass.set_pipeline(state.show).unwrap();
     pass.set_bind_group(0, tbg).unwrap();
     pass.set_bind_group(1, sbg).unwrap();
