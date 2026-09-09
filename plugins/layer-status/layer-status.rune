@@ -30,7 +30,7 @@ pub fn init(rx) {
     // On/off gate, parallel to the builtin `ui/*` toggles.
     rx.declare_setting("layer-status/show", true);
 
-    // `mx`/`my` track the cursor (window-logical) from `cursor_moved`, so
+    // `mx`/`my` track the cursor (session coordinates) from `cursor_moved`, so
     // `mouse_input` — which carries no coords — can hit-test the icons.
     #{ show, icons, mx: 0.0, my: 0.0 }
 }
@@ -102,10 +102,11 @@ pub fn render(state, rx, pass) {
     }
 }
 
-// Track the cursor (window-logical) so `mouse_input` can hit-test.
+// Track the cursor in session coordinates so `mouse_input` can hit-test.
 pub fn cursor_moved(state, rx, x, y) {
-    state.mx = x;
-    state.my = y;
+    let (sx, sy) = rx.session_coords(x, y);
+    state.mx = sx;
+    state.my = sy;
 }
 
 // Click an eye to toggle that layer's visibility. The overlay sits off-view
@@ -127,8 +128,8 @@ pub fn mouse_input(state, rx, button, input) {
     let (x, y0, row_h) = layout(sw as f64, sh as f64, n);
 
     for row in 0..n {
-        // Drawing uses y-up coordinates; pointer events use y-down.
-        if hit(icon_rect(x, y0, row_h, row), state.mx, (sh as f64) - state.my) {
+        // Drawing and pointer coordinates both increase downward.
+        if hit(icon_rect(x, y0, row_h, row), state.mx, state.my) {
             let cmd = if vis[row] { "hide" } else { "show" };
             rx.run_builtin(`layer/${cmd} ${row}`);
             return; // one toggle per click
@@ -156,7 +157,7 @@ fn draw_frame(rx, x0, top, x1, bottom, color, draw_bottom) {
 
 // The index column + per-row frames (UI tier): every layer's row is boxed
 // — grey when it's not the active layer, pink when it is — and labelled
-// with its one-based layer number (1 = bottom strip), matching visibility
+// with its one-based layer number (1 = bottom compositing layer), matching visibility
 // messages; internal indices remain zero-based so the brush's target layer and
 // the stack order both read at a glance.
 pub fn draw(state, rx) {

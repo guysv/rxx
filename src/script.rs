@@ -1315,7 +1315,7 @@ impl Ctx {
     }
 
     /// Convert session coordinates to the active view's coordinates
-    /// (unrounded).
+    /// (floored to integer pixels).
     #[rune::function]
     fn active_view_coords(&self, x: f64, y: f64) -> (f64, f64) {
         let s = self.session();
@@ -1381,7 +1381,8 @@ impl Ctx {
             .push(Effect::ViewDamaged(ViewId::from(id as u16), None));
     }
 
-    /// Read a view's pixels in the given rect (rgba8 bytes, row-major).
+    /// Read a view's recorded pixels in a y-down rect (RGBA8, top-first rows).
+    /// Buffer row zero is the top row of the clamped rectangle.
     /// The rect is clamped to the view; `None` if the view doesn't
     /// exist or the rect is empty.
     #[rune::function]
@@ -1411,8 +1412,8 @@ impl Ctx {
 
     /// Read one *layer strip's* pixels in the given rect (rgba8 bytes,
     /// row-major, row 0 = top). `rect` is display-space — a single frame,
-    /// `y` in `0..fh`, y-up — and `layer` is the strip index (`0` = bottom
-    /// strip). Unlike `view_pixels`, which reaches only the bottom strip
+    /// `y` in `0..fh`, y-down — and `layer` is the strip index (`0` = first
+    /// strip). Unlike `view_pixels`, which reaches only the first strip
     /// (display-space / active-routed writes), this addresses any strip:
     /// the per-layer read a plugin needs to introspect a non-active layer
     /// on the CPU (EasyMetric's carve/scan probes). `None` if the view or
@@ -1434,7 +1435,7 @@ impl Ctx {
         }
         // Clamp the request to one frame strip (display bounds), then lift
         // it into the layer's rows of the sheet (strip n = sheet-space
-        // y-up rows `n*fh .. (n+1)*fh`).
+        // y-down rows `n*fh .. (n+1)*fh`).
         let r = GfxRect::new(
             rect.x1.min(rect.x2) as i32,
             rect.y1.min(rect.y2) as i32,
@@ -1557,7 +1558,7 @@ impl Ctx {
         true
     }
 
-    /// Per-layer visibility for a view, bottom strip first (index `0`).
+    /// Per-layer visibility for a view, bottom compositing layer first (index `0`).
     /// `nlayers` long; an empty vec if the view doesn't exist.
     #[rune::function]
     fn layer_visibility(&self, id: i64) -> Vec<bool> {
@@ -2063,10 +2064,8 @@ impl Ctx {
             self.error(format!("invalid target size {}x{}", w, h));
             return None;
         }
-        // Same Y flip as the renderer's `ortho_wgpu`.
-        let mut ortho = Matrix4::ortho(w as u32, h as u32, Origin::TopLeft);
-        ortho.y.y = -ortho.y.y;
-        ortho.w.y = -ortho.w.y;
+        // Match the renderer: application coordinates and texture rows are y-down.
+        let ortho = Matrix4::ortho(w as u32, h as u32, Origin::TopLeft);
 
         let uniforms = ScriptUniforms {
             ortho: ortho.into(),
@@ -2351,7 +2350,7 @@ impl Ctx {
     /// Convenience helper for the existing render-pass API: allocate six
     /// sprite-layout vertices, then bind/draw the returned buffer as usual.
     /// `options` requires `dst`; `src` defaults to the whole texture,
-    /// `color` to white, and `opacity` to 1.0. Rectangles are y-up pixels.
+    /// `color` to white, and `opacity` to 1.0. Rectangles are y-down pixels.
     #[rune::function]
     fn create_sprite_vertices(
         &mut self,
@@ -2600,7 +2599,7 @@ pub struct ViewInfo {
     /// Number of layers (1 for a flat view).
     #[rune(get)]
     pub nlayers: i64,
-    /// Index of the active layer (`0` is the bottom strip).
+    /// Index of the active layer (`0` is the bottom compositing layer).
     #[rune(get)]
     pub active_layer: i64,
 }
@@ -5417,6 +5416,97 @@ mod test {
     }
 
     #[test]
+    fn snapshot_crop_upload_and_render_share_pixel_coordinates() {
+        let Some(gfx) = test_gfx() else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.wgsl"), TEST_WGSL).unwrap();
+        write_plugin(
+            dir.path(),
+            "coords",
+            r#"
+            pub fn init(rx) {
+                let shader = rx.create_shader(rx.read_file("test.wgsl").unwrap()).unwrap();
+                let pipeline = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+                let pixels = rx.view_pixels(rx.active_view_id(), rx::rect(1.0, 0.0, 3.0, 2.0)).unwrap();
+                let source = rx.create_texture(2, 2).unwrap();
+                source.upload(pixels);
+                let target = rx.create_texture(6, 5).unwrap();
+                let tbg = rx.create_transform_bind_group(6, 5, rx::mat4_identity()).unwrap();
+                let sbg = rx.create_texture_bind_group(source).unwrap();
+                let verts = rx.create_sprite_vertices(source, #{ dst: rx::rect(1.0, 1.0, 3.0, 3.0) }).unwrap();
+                #{ pipeline, target, tbg, sbg, verts }
+            }
+            pub fn shade(state, rx, encoder) {
+                let pass = encoder.begin_render_pass("coordinates", state.target, "clear").unwrap();
+                pass.set_pipeline(state.pipeline).unwrap();
+                pass.set_bind_group(0, state.tbg).unwrap();
+                pass.set_bind_group(1, state.sbg).unwrap();
+                pass.set_vertex_buffer(0, state.verts).unwrap();
+                pass.draw(state.verts.count(), 1).unwrap();
+                pass.end();
+            }
+            pub fn output(state) { state.target }
+        "#,
+        );
+        let mut session = test_session().with_blank(crate::view::FileStatus::NoFile, 4, 3);
+        use crate::gfx::Rgba8;
+        // Four distinct crop corners, offset from the full image origin.
+        let mut source = vec![Rgba8::TRANSPARENT; 12];
+        source[1] = Rgba8::new(255, 0, 0, 255);
+        source[2] = Rgba8::new(0, 255, 0, 255);
+        source[5] = Rgba8::new(0, 0, 255, 255);
+        source[6] = Rgba8::new(255, 255, 0, 255);
+        session
+            .active_view_mut()
+            .resource
+            .record_view_painted(source);
+        let mut host = PluginHost::new(Some(dir.path().to_path_buf())).unwrap();
+        host.attach_gfx(gfx.device.clone(), gfx.queue.clone());
+        host.load(&mut session);
+        assert_eq!(
+            host.plugins().filter(|p| p.enabled).count(),
+            1,
+            "{}",
+            session.message
+        );
+        let encoder = gfx.device.create_command_encoder(&Default::default());
+        let encoder = host.dispatch_shade(&mut session, encoder, ViewTargets::new());
+        gfx.queue.submit(std::iter::once(encoder.finish()));
+        assert_eq!(
+            host.plugins().filter(|p| p.enabled).count(),
+            1,
+            "{}",
+            session.message
+        );
+        let plugin = host.plugins().next().unwrap();
+        let target = plugin
+            .script
+            .call("output", (plugin.state.clone(),))
+            .unwrap();
+        let target = target.borrow_ref::<ScriptTexture>().unwrap();
+        let pixels = target.pixels(&gfx.device);
+        for y in 0..5 {
+            for x in 0..6 {
+                let expected = match (x, y) {
+                    (1, 1) => [255, 0, 0, 255],
+                    (2, 1) => [0, 255, 0, 255],
+                    (1, 2) => [0, 0, 255, 255],
+                    (2, 2) => [255, 255, 0, 255],
+                    _ => [0, 0, 0, 0],
+                };
+                assert_eq!(
+                    &pixels[(y * 6 + x) * 4..][..4],
+                    &expected,
+                    "pixel ({x},{y})"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn view_bind_group_samples_live_layer() {
         let Some(gfx) = test_gfx() else {
             eprintln!("skipping: no GPU adapter");
@@ -6632,6 +6722,60 @@ mod test {
     }
 
     #[test]
+    fn help_columns_share_the_glyph_top_margin() {
+        use crate::{draw, font::TextBatch, gfx::shape2d};
+        let mut session = test_session();
+        session.key_bindings.add(crate::session::KeyBinding {
+            input: crate::session::Input::Key(crate::platform::Key::A),
+            command: crate::cmd::Command::Noop,
+            is_toggle: false,
+            display: Some("Test binding".into()),
+            modifiers: Default::default(),
+            state: crate::platform::InputState::Pressed,
+            tier: crate::session::BindingTier::General,
+        });
+        let mut text = TextBatch::new(96, 208, draw::GLYPH_WIDTH, draw::GLYPH_HEIGHT);
+        draw::draw_help(&session, &mut text, &mut shape2d::Batch::new());
+        let vertices = text.vertices();
+        // The header occupies the first 40px. Both body columns start at y=58.
+        for right_column in [false, true] {
+            let top = vertices.iter()
+                .filter(|v| v.position.y > 40. && (v.position.x >= 400.) == right_column)
+                .map(|v| v.position.y)
+                .fold(f32::INFINITY, f32::min);
+            assert_eq!(top, 58., "help column must keep its top margin");
+        }
+    }
+
+    #[test]
+    fn mode_indicator_keeps_bottom_margin_when_resized() {
+        use crate::{draw, font::TextBatch, gfx::{shape2d, sprite2d}, sprite};
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/mode-vis");
+        std::os::unix::fs::symlink(plugin, dir.path().join("mode-vis")).unwrap();
+        let mut session = test_session();
+        let mut host = PluginHost::new(Some(dir.path().to_path_buf())).unwrap();
+        host.load(&mut session);
+        for height in [480., 718.] {
+            session.height = height;
+            let mut ctx = draw::Context {
+                ui_batch: shape2d::Batch::new(),
+                text_batch: TextBatch::new(96, 208, draw::GLYPH_WIDTH, draw::GLYPH_HEIGHT),
+                overlay_batch: TextBatch::new(96, 208, draw::GLYPH_WIDTH, draw::GLYPH_HEIGHT),
+                cursor_sprite: sprite::Sprite::new(96, 96),
+                tool_batch: sprite2d::Batch::new(96, 96),
+                paste_batch: sprite2d::Batch::new(8, 8),
+                checker_batch: sprite2d::Batch::new(2, 2),
+            };
+            host.dispatch_draw(&mut session, &mut ctx);
+            let vertices = ctx.text_batch.vertices();
+            assert!(!vertices.is_empty(), "indicator must render: {}", session.message);
+            let bottom = vertices.iter().map(|v| v.position.y).fold(f32::NEG_INFINITY, f32::max);
+            assert_eq!(height - bottom, 46., "indicator must stay above the bottom status rows");
+        }
+    }
+
+    #[test]
     fn rotate_scale_flow_smoke() {
         use crate::gfx::Rgba8;
         use crate::session::Mode;
@@ -6776,7 +6920,8 @@ mod test {
             ("b", r#"
                 pub fn init(rx) { #{ deg: 12.5 } }
                 pub fn probe(state, rx, args) {
-                    rx.draw_text(`Angle: ${state.deg}`, 10.0, 66.0, rx::rgb(1, 2, 3));
+                    let (_, height) = rx.screen_size();
+                    rx.draw_text(`Angle: ${state.deg}`, 10.0, (height as f64) - 66.0 - 14.0, rx::rgb(1, 2, 3));
                     rx.message("ok text");
                 }
             "#),

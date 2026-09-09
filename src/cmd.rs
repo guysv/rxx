@@ -221,8 +221,8 @@ impl fmt::Display for Command {
             Self::PaletteSort => write!(f, "Sort palette colors"),
             Self::Pan(x, 0) if *x > 0 => write!(f, "Pan workspace right"),
             Self::Pan(x, 0) if *x < 0 => write!(f, "Pan workspace left"),
-            Self::Pan(0, y) if *y > 0 => write!(f, "Pan workspace up"),
-            Self::Pan(0, y) if *y < 0 => write!(f, "Pan workspace down"),
+            Self::Pan(0, y) if *y < 0 => write!(f, "Pan workspace up"),
+            Self::Pan(0, y) if *y > 0 => write!(f, "Pan workspace down"),
             Self::Pan(x, y) => write!(f, "Pan workspace by {},{}", x, y),
             Self::Quit => write!(f, "Quit active view"),
             Self::QuitAll => write!(f, "Quit all views"),
@@ -260,8 +260,8 @@ impl fmt::Display for Command {
             Self::SelectionOffset(x, y) => write!(f, "Offset selection by {:2},{:2}", x, y),
             Self::SelectionMove(x, 0) if *x > 0 => write!(f, "Move selection right"),
             Self::SelectionMove(x, 0) if *x < 0 => write!(f, "Move selection left"),
-            Self::SelectionMove(0, y) if *y > 0 => write!(f, "Move selection up"),
-            Self::SelectionMove(0, y) if *y < 0 => write!(f, "Move selection down"),
+            Self::SelectionMove(0, y) if *y < 0 => write!(f, "Move selection up"),
+            Self::SelectionMove(0, y) if *y > 0 => write!(f, "Move selection down"),
             Self::SelectionJump(Direction::Forward) => {
                 write!(f, "Move selection forward by one frame")
             }

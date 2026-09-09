@@ -1044,7 +1044,7 @@ impl Session {
                 Stroke::NONE,
                 Fill::Solid(brush.color.into()),
                 1.0,
-                Align::BottomLeft,
+                Align::TopLeft,
             );
             if !output.is_empty() {
                 match brush.state {
@@ -1189,7 +1189,7 @@ impl Session {
                 if self.help_offset.x > 0. {
                     self.help_offset.x = 0.;
                 }
-                if self.help_offset.y < 0. {
+                if self.help_offset.y > 0. {
                     self.help_offset.y = 0.;
                 }
             }
@@ -1427,7 +1427,7 @@ impl Session {
         let scale: f64 = self.settings["scale"].to_f64();
         SessionCoords::new(
             (x / scale).floor() as f32,
-            self.height - (y / scale).floor() as f32 - 1.,
+            (y / scale).floor() as f32,
         )
     }
 

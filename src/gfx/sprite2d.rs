@@ -172,12 +172,12 @@ impl Batch {
 
             // TODO: Use an index buffer
             buf.extend_from_slice(&[
-                Vertex::new(dst.x1, dst.y1, *z, rx1 * re.x, ry2 * re.y, c, *alpha),
-                Vertex::new(dst.x2, dst.y1, *z, rx2 * re.x, ry2 * re.y, c, *alpha),
-                Vertex::new(dst.x2, dst.y2, *z, rx2 * re.x, ry1 * re.y, c, *alpha),
-                Vertex::new(dst.x1, dst.y1, *z, rx1 * re.x, ry2 * re.y, c, *alpha),
-                Vertex::new(dst.x1, dst.y2, *z, rx1 * re.x, ry1 * re.y, c, *alpha),
-                Vertex::new(dst.x2, dst.y2, *z, rx2 * re.x, ry1 * re.y, c, *alpha),
+                Vertex::new(dst.x1, dst.y1, *z, rx1 * re.x, ry1 * re.y, c, *alpha),
+                Vertex::new(dst.x2, dst.y1, *z, rx2 * re.x, ry1 * re.y, c, *alpha),
+                Vertex::new(dst.x2, dst.y2, *z, rx2 * re.x, ry2 * re.y, c, *alpha),
+                Vertex::new(dst.x1, dst.y1, *z, rx1 * re.x, ry1 * re.y, c, *alpha),
+                Vertex::new(dst.x1, dst.y2, *z, rx1 * re.x, ry2 * re.y, c, *alpha),
+                Vertex::new(dst.x2, dst.y2, *z, rx2 * re.x, ry2 * re.y, c, *alpha),
             ]);
         }
         buf

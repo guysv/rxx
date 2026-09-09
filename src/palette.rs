@@ -88,11 +88,7 @@ impl Palette {
         let index = y + x * (height / cellsize);
 
         self.hover = if index < size {
-            // We index from the back because the palette is reversed
-            // before it is displayed, due to the Y axis pointing up,
-            // where as the palette is created starting at the top
-            // and going down.
-            Some(self.colors[self.size() - index as usize - 1])
+            Some(self.colors[index as usize])
         } else {
             None
         };

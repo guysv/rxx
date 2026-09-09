@@ -1,7 +1,7 @@
 use crate::gfx::math;
 use crate::gfx::math::{Point2, Vector2};
 
-/// A generic rectangle with bottom left and top right coordinates.
+/// A generic rectangle with top left and bottom right coordinates.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub struct Rect<T> {
     pub x1: T,

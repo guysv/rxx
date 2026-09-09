@@ -1,3 +1,7 @@
+> Historical milestone notes: coordinate conventions here are superseded by
+> [the top-left core migration](coordinate-migration.md). Current coordinates and
+> pixel rows are y-down; layer n begins at sheet row n*fh.
+
 # Layers in core: plan for phases 35+
 
 **layer support in the editor core**, with the script API tier on top. It

@@ -1,3 +1,7 @@
+> Historical milestone notes: coordinate conventions here are superseded by
+> [the top-left core migration](coordinate-migration.md). Current coordinates and
+> pixel rows are y-down; layer n begins at sheet row n*fh.
+
 # Easymetric as a plugin (v2): plan for phases 40+
 
 This document covers the work after `docs/layers-plan.md` (P35–P39, layers

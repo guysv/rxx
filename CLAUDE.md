@@ -70,9 +70,10 @@ line and a `<return>` press/release.
 
 ## Pitfalls that cost us digests
 
-- Session coords are y-up relative to the screen: a down-screen drag
-  produces a y-reversed selection rect (`y1 > y2`). Reversed rects are
-  normal; normalize before using one as a draw target.
+- Session/view/drawing coordinates and pixel rows are y-down from the
+  top-left. Layer n starts at sheet row n*fh; layer order is independent
+  of row direction. Reversed drags can still reverse selection corners;
+  normalize before using a selection as a draw target.
 - The `update` hook fires every frame — message booleans/edges from
   it, never counters, or every frame becomes a unique digest line.
 - `switch_mode` fires on edges, including an initial `normal` edge and

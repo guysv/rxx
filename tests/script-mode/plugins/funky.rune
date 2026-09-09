@@ -12,6 +12,8 @@ pub fn funky(state, rx, args) {
 
 pub fn draw(state, rx) {
     if rx.mode() == "funky" {
-        rx.draw_text("-- FUNKY --", 10.0, 46.0, rx::rgb(0, 255, 0));
+        let (_, height) = rx.screen_size();
+        let text_y = (height as f64) - 46.0 - 14.0;
+        rx.draw_text("-- FUNKY --", 10.0, text_y, rx::rgb(0, 255, 0));
     }
 }

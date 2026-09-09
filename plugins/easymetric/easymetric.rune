@@ -7,14 +7,14 @@
 // quadrants whose sizes *are* the bounding box X*Y*Z:
 //
 //   +--------+------+
-//   |  TOP   |      |   top   = X x Y   (cols 0..X,   rows Z..Z+Y)
-//   | (X x Y)|unused|
-//   +--------+------+
 //   | FRONT  | SIDE |   front = X x Z   (cols 0..X,   rows 0..Z)
 //   | (X x Z)|(Y x Z)   side  = Y x Z   (cols X..X+Y, rows 0..Z)
 //   +--------+------+
+//   |  TOP   |      |   top   = X x Y   (cols 0..X,   rows Z..Z+Y)
+//   | (X x Y)|unused|
+//   +--------+------+
 //
-// (view coords, y-up). `em/box X Y Z` moves the splits. The artist paints
+// (view coords, y-down). `em/box X Y Z` moves the splits. The artist paints
 // the silhouettes with the ordinary normal brush — EasyMetric is an
 // ambient toggle (`em/on` / `em/off`), not a capturing mode: while on,
 // the `shade` hook carves the live sheet into a preview texture and the
@@ -123,11 +123,11 @@ fn canvas_view(state, rx) {
     view_by_id(rx, state.canvas)
 }
 
-// Opacity of the active layer at view coord (vx, vy) — y-up — given a
+// Opacity of the active layer at view coord (vx, vy) — y-down — given a
 // row-major rgba buffer `px` covering a `w`-wide, `h`-tall rect anchored
-// at the view origin. Rows are y-down, so view y maps to row h-1-vy.
+// at the view origin. View y is the buffer row.
 fn opaque(px, w, h, vx, vy) {
-    let row = h - 1 - vy;
+    let row = vy;
     let i = (row * w + vx) * 4;
     if i < 0 || i + 3 >= px.len() {
         return false;
@@ -548,8 +548,7 @@ pub fn shade(state, rx, encoder) {
     // A queued bake: blit the just-rendered pane into the output view's
     // frame (load = compose over existing pixels), then touch_view (done
     // at command time) records the single undoable edit. The pane is a
-    // render target (row 0 = top); a reversed src rect un-flips it into
-    // the view's y-up dst.
+    // render target with the same top-left origin as the view.
     if state.bake_frame >= 0 {
         let outv = view_by_id(rx, state.bake_view);
         if !outv.is_none() {
@@ -559,7 +558,7 @@ pub fn shade(state, rx, encoder) {
             let btbg = rx.create_transform_bind_group(outv.width, outv.frame_height, rx::mat4_identity()).unwrap();
             let bsbg = rx.create_texture_bind_group(state.pane_b).unwrap();
             let bv = rx.create_sprite_vertices(state.pane_b, #{
-                src: rx::rect(0.0, PANE as f64, PANE as f64, 0.0),
+                src: rx::rect(0.0, 0.0, PANE as f64, PANE as f64),
                 dst: rx::rect(x0 as f64, 0.0, (x0 + PANE) as f64, PANE as f64),
             }).unwrap();
             let bpass = encoder.begin_view_pass("em-bake", state.bake_view, "load").unwrap();
@@ -590,7 +589,8 @@ pub fn render(state, rx, pass) {
     let (ox, oy) = rx.offset();
     let z = view.zoom;
     let x = ox + view.offset_x + (view.width as f64) * z + 8.0;
-    let y = oy + view.offset_y;
+    // Keep the preview bottom-aligned with its canvas when their heights differ.
+    let y = oy + view.offset_y + ((view.height - PANE) as f64) * z;
     let t = rx::mat4_mul(rx::mat4_translation(x, y), rx::mat4_scale(z, z));
     let tbg = rx.create_transform_bind_group(sw, sh, t).unwrap();
     let sbg = rx.create_texture_bind_group(state.pane_b).unwrap();
@@ -610,11 +610,14 @@ pub fn draw(state, rx) {
     if !state.on {
         return;
     }
+    let (_, height) = rx.screen_size();
+    // Bottom status margin plus the 14px glyph height.
+    let text_y = (height as f64) - 26.0 - 14.0;
     let pink = rx::rgb(0xff, 0x33, 0x66);
     if state.hasbox {
-        rx.draw_text(`easymetric ${state.bx}x${state.by}x${state.bz}`, 10.0, 26.0, pink);
+        rx.draw_text(`easymetric ${state.bx}x${state.by}x${state.bz}`, 10.0, text_y, pink);
     } else {
-        rx.draw_text("easymetric: set a box with em/box", 10.0, 26.0, pink);
+        rx.draw_text("easymetric: set a box with em/box", 10.0, text_y, pink);
         return;
     }
 
@@ -627,19 +630,18 @@ pub fn draw(state, rx) {
     let z = view.zoom;
     let vx = ox + view.offset_x;
     let vy = oy + view.offset_y;
-    let vh = view.height as f64;
     let bx = state.bx as f64;
     let by = state.by as f64;
     let bz = state.bz as f64;
 
     // Used canvas region: view x in [0, X+Y], y in [0, Z+Y]. Screen y is
-    // y-down, so view y maps to vy + (vh - view_y) * z.
+    // y-down, so view y maps to vy + view_y * z.
     let left = vx;
     let right = vx + (bx + by) * z;
-    let top = vy + (vh - (bz + by)) * z;
-    let bottom = vy + vh * z;
+    let top = vy;
+    let bottom = vy + (bz + by) * z;
     let split_x = vx + bx * z;        // vertical split at column X
-    let split_y = vy + (vh - bz) * z; // horizontal split at row Z
+    let split_y = vy + bz * z; // horizontal split at row Z
 
     let grey = rx::rgb(0x66, 0x66, 0x66);
     // Border of the used region.

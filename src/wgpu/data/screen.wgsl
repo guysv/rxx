@@ -39,6 +39,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Flip V because wgpu renders with Y-down but texture origin is at top-left
+    // NDC Y increases up; texture V increases down.
     return textureSample(framebuffer_tex, tex_sampler, vec2<f32>(in.uv.x, 1.0 - in.uv.y));
 }

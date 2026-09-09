@@ -57,16 +57,15 @@ impl FloodFiller {
 
         // The fill operates on the active layer's strip alone: the seed
         // is display-space, and the fill must not bleed across strips.
-        // Byte row 0 is the sheet top, so layer n sits nlayers - 1 - n
-        // strips down. The output shapes are display-space too — the
+        // Layer n starts at row n * fh. The output shapes are display-space — the
         // final-pass transform routes them back to the strip.
         let n = view.active_layer.min(extent.nlayers - 1);
-        let offset = (extent.nlayers - 1 - n) * fh * w;
+        let offset = n * fh * w;
         let grid = Grid::new(pixels[offset..offset + fh * w].to_vec(), w, fh);
 
         let starting_point = Point2::new(
             starting_point.x as usize,
-            grid.height - starting_point.y as usize - 1,
+            starting_point.y as usize,
         );
 
         let target_color = *grid.get(starting_point.x, starting_point.y)?;
@@ -84,9 +83,9 @@ impl FloodFiller {
         self.rects.push((
             Rect::new(
                 x as f32,
-                (self.grid.height - y - 1) as f32,
+                y as f32,
                 (x + w) as f32,
-                (self.grid.height - y - 1 + h) as f32,
+                (y + h) as f32,
             ),
             color,
         ));

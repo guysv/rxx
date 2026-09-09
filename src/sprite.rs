@@ -31,12 +31,12 @@ impl Sprite {
         let ry2: f32 = src.y2 / self.h as f32;
 
         self.buf.extend_from_slice(&[
-            Vertex(Vector3::new(dst.x1, dst.y1, z), Vector2::new(rx1, ry2)),
-            Vertex(Vector3::new(dst.x2, dst.y1, z), Vector2::new(rx2, ry2)),
-            Vertex(Vector3::new(dst.x2, dst.y2, z), Vector2::new(rx2, ry1)),
-            Vertex(Vector3::new(dst.x1, dst.y1, z), Vector2::new(rx1, ry2)),
-            Vertex(Vector3::new(dst.x1, dst.y2, z), Vector2::new(rx1, ry1)),
-            Vertex(Vector3::new(dst.x2, dst.y2, z), Vector2::new(rx2, ry1)),
+            Vertex(Vector3::new(dst.x1, dst.y1, z), Vector2::new(rx1, ry1)),
+            Vertex(Vector3::new(dst.x2, dst.y1, z), Vector2::new(rx2, ry1)),
+            Vertex(Vector3::new(dst.x2, dst.y2, z), Vector2::new(rx2, ry2)),
+            Vertex(Vector3::new(dst.x1, dst.y1, z), Vector2::new(rx1, ry1)),
+            Vertex(Vector3::new(dst.x1, dst.y2, z), Vector2::new(rx1, ry2)),
+            Vertex(Vector3::new(dst.x2, dst.y2, z), Vector2::new(rx2, ry2)),
         ]);
     }
 

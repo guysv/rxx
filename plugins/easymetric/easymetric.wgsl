@@ -65,17 +65,17 @@ fn opaque_at(px: vec2<i32>) -> bool {
     return textureLoad(sheet_tex, px, 0).a > 0.5;
 }
 
-// The texel rows of strip `s` for voxel `v` (view coords are y-up;
-// texel_row = sheetH-1 - strip_base - view_y):
+// The texel rows of strip `s` for voxel `v` (view coords are y-down;
+// texel_row = strip_base + view_y):
 //   front[x,z]: view (x, z)   side[y,z]: view (X+y, z)   top[x,y]: (x, Z+y)
 fn front_texel(v: vec3<i32>, base: i32, sheetH: i32) -> vec2<i32> {
-    return vec2<i32>(v.x, sheetH - 1 - base - v.z);
+    return vec2<i32>(v.x, base + v.z);
 }
 fn side_texel(v: vec3<i32>, bx: i32, base: i32, sheetH: i32) -> vec2<i32> {
-    return vec2<i32>(bx + v.y, sheetH - 1 - base - v.z);
+    return vec2<i32>(bx + v.y, base + v.z);
 }
 fn top_texel(v: vec3<i32>, bz: i32, base: i32, sheetH: i32) -> vec2<i32> {
-    return vec2<i32>(v.x, sheetH - 1 - base - bz - v.y);
+    return vec2<i32>(v.x, base + bz + v.y);
 }
 
 // The *topmost* strip whose three silhouettes all cover the voxel, or -1

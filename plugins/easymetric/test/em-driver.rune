@@ -3,7 +3,7 @@
 // fragility.
 //
 // t/fill <x1> <y1> <x2> <y2> <color> — fill a rect of the active view
-// (y-up dst coords, like a selection). Fills queue on the command and run
+// (y-down dst coords, like a selection). Fills queue on the command and run
 // in the next shade; touch_view at command time re-records the view so
 // view_pixels (and the carve's snapshot probes) see them a frame later.
 pub fn init(rx) {

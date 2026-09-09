@@ -14,8 +14,8 @@ map         v             :mode visual                              --  Switch t
 map         .             :zoom +                                   --  Zoom in active view
 map         ,             :zoom -                                   --  Zoom out active view
 map         /             :zoom 1.0                                 --  Reset active view zoom
-map/normal  j             :v/prev                                   --  Go to previous view
-map/normal  k             :v/next                                   --  Go to next view
+map/normal  j             :v/next                                   --  Go to next view
+map/normal  k             :v/prev                                   --  Go to previous view
 map         <tab>         :v/prev                                   --  Go to previous view (all modes)
 map         z             :v/center                                 --  Center active view
 map         u             :undo                                     --  Undo active view edit
@@ -30,13 +30,13 @@ map/normal  ]             :brush/size +                             --  Increase
 map/normal  [             :brush/size -                             --  Decrease brush size
 map/normal  <ctrl>        :tool sampler {:tool/prev}                --  Sample color (hold)
 map/help    <space>       :tool pan {:tool/prev}                    --  Pan help (hold)
-map/help    <up>          :pan  0  1                                --  Pan view up
-map/help    <down>        :pan  0 -1                                --  Pan view down
+map/help    <up>          :pan  0 -1                                --  Pan view up
+map/help    <down>        :pan  0  1                                --  Pan view down
 map/help    <left>        :pan -1  0                                --  Pan view left
 map/help    <right>       :pan  1  0                                --  Pan view right
 map         <space>       :tool pan {:tool/prev}                    --  Pan workspace (hold)
-map         <up>          :pan  0  1                                --  Pan view up
-map         <down>        :pan  0 -1                                --  Pan view down
+map         <up>          :pan  0 -1                                --  Pan view up
+map         <down>        :pan  0  1                                --  Pan view down
 map         <left>        :pan -1  0                                --  Pan view left
 map         <right>       :pan  1  0                                --  Pan view right
 map         <return>      :f/add                                    --  Add a frame to the view
@@ -44,8 +44,8 @@ map         <backspace>   :f/remove                                 --  Remove a
 map/normal  h             :f/prev                                   --  Navigate to previous frame
 map/normal  l             :f/next                                   --  Navigate to next frame
 
-map/visual  j             :selection/move    0 -1
-map/visual  k             :selection/move    0  1
+map/visual  j             :selection/move    0  1
+map/visual  k             :selection/move    0 -1
 map/visual  h             :selection/move   -1  0
 map/visual  l             :selection/move    1  0
 map/visual  ]             :selection/offset  1  1

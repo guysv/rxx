@@ -33,7 +33,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.uv = in.uv;
     out.scale = uniforms.scale;
 
-    // ortho_wgpu already handles Y-flip, so use position directly
+    // Project y-down pixel coordinates to NDC.
     out.clip_position = uniforms.ortho * vec4<f32>(in.position, 1.0);
     return out;
 }
@@ -45,7 +45,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let fb_texel = textureSample(
         framebuffer_tex,
         tex_sampler,
-        vec2<f32>(fb_coord.x, 1.0 - fb_coord.y)
+        fb_coord
     );
 
     let texel = textureSample(cursor_tex, tex_sampler, in.uv);

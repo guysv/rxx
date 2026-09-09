@@ -262,6 +262,45 @@ pub struct LayerResource {
     pixels: Vec<Rgba8>,
 }
 
+#[cfg(test)]
+mod coordinate_tests {
+    use super::*;
+
+    #[test]
+    fn coordinates_crops_and_layer_rows_share_top_left_origin() {
+        // Two 3x2 layers with a distinct value at every position.
+        let extent = ViewExtent::layered(3, 2, 1, 2);
+        let pixels: Vec<_> = (0..12).map(|n| Rgba8::new(n, 0, 0, 255)).collect();
+        let layer = LayerResource::new(pixels.clone(), extent);
+        let (snapshot, _) = layer.current_snapshot();
+        for y in 0..4 {
+            for x in 0..3 {
+                let index = snapshot.coord_to_index(ViewCoords::new(x, y)).unwrap();
+                assert_eq!(index, (y * 3 + x) as usize);
+                let (_, one) = layer
+                    .get_snapshot_rect(&Rect::new(x as i32, y as i32, x as i32 + 1, y as i32 + 1))
+                    .unwrap();
+                assert_eq!(one, vec![pixels[index]]);
+            }
+        }
+        assert_eq!(snapshot.coord_to_index(ViewCoords::new(3, 0)), None);
+        assert_eq!(snapshot.coord_to_index(ViewCoords::new(0, 4)), None);
+        let (_, crop) = layer.get_snapshot_rect(&Rect::new(1, 1, 3, 3)).unwrap();
+        assert_eq!(
+            crop.iter().map(|p| p.r).collect::<Vec<_>>(),
+            vec![4, 5, 7, 8]
+        );
+        let (_, second) = layer
+            .get_snapshot_rect(&extent.layer(1).map(|n| n as i32))
+            .unwrap();
+        assert_eq!(second, pixels[6..]);
+        let (_, whole) = layer
+            .get_snapshot_rect(&extent.rect().map(|n| n as i32))
+            .unwrap();
+        assert_eq!(whole, pixels);
+    }
+}
+
 impl LayerResource {
     fn new(pixels: Vec<Rgba8>, extent: ViewExtent) -> Self {
         Self {
@@ -313,8 +352,7 @@ impl LayerResource {
 
         let mut buffer: Vec<Rgba8> = Vec::with_capacity(w * h);
 
-        for y in (rect.y1 as usize..rect.y2 as usize).rev() {
-            let y = total_h - y - 1;
+        for y in rect.y1 as usize..rect.y2 as usize {
             let offset = y * total_w + rect.x1 as usize;
             let row = &pixels[offset..offset + w];
 
@@ -413,10 +451,11 @@ impl Snapshot {
     }
 
     pub fn coord_to_index(&self, p: ViewCoords<u32>) -> Option<usize> {
-        self.height()
-            .checked_sub(p.y)
-            .and_then(|x| x.checked_sub(1))
-            .map(|y| (y * self.width() + p.x) as usize)
+        if p.x < self.width() && p.y < self.height() {
+            Some(p.y as usize * self.width() as usize + p.x as usize)
+        } else {
+            None
+        }
     }
 
     /// Snapshot (sheet) width.

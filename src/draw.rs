@@ -63,7 +63,7 @@ pub mod cursors {
         }
     }
 
-    const SAMPLER: Cursor = Cursor::new(Rect::new(0., 0., 16., 16.), 1., 1., false);
+    const SAMPLER: Cursor = Cursor::new(Rect::new(0., 0., 16., 16.), 1., -17., false);
     const CROSSHAIR: Cursor = Cursor::new(Rect::new(16., 0., 32., 16.), -8., -8., true);
     const OMNI: Cursor = Cursor::new(Rect::new(32., 0., 48., 16.), -8., -8., false);
     const PAN: Cursor = Cursor::new(Rect::new(48., 0., 64., 16.), -8., -8., false);
@@ -261,7 +261,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
             text.add(
                 &format!("{}x{}x{}", v.fw, v.fh, v.animation.len()),
                 offset.x,
-                offset.y - self::LINE_HEIGHT,
+                offset.y + v.height() as f32 * v.zoom + self::LINE_HEIGHT - self::GLYPH_HEIGHT,
                 self::TEXT_LAYER,
                 color::GREY,
                 TextAlign::Left,
@@ -273,7 +273,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
         text.add(
             &view.status(),
             MARGIN,
-            MARGIN + self::LINE_HEIGHT,
+            session.height - MARGIN - self::LINE_HEIGHT - self::GLYPH_HEIGHT,
             self::TEXT_LAYER,
             Rgba8::WHITE,
             TextAlign::Left,
@@ -283,7 +283,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
         text.add(
             &format!("{:>5}%", (view.zoom * 100.) as u32),
             session.width - MARGIN,
-            MARGIN + self::LINE_HEIGHT,
+            session.height - MARGIN - self::LINE_HEIGHT - self::GLYPH_HEIGHT,
             self::TEXT_LAYER,
             Rgba8::WHITE,
             TextAlign::Right,
@@ -295,7 +295,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
             text.add(
                 &format!("L{}/{}", view.active_layer + 1, view.nlayers),
                 session.width - MARGIN - 64.,
-                MARGIN + self::LINE_HEIGHT,
+                session.height - MARGIN - self::LINE_HEIGHT - self::GLYPH_HEIGHT,
                 self::TEXT_LAYER,
                 Rgba8::WHITE,
                 TextAlign::Right,
@@ -310,7 +310,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
             text.add(
                 &format!("{:>4},{:<4} {}", cursor.x, cursor.y, hover_color),
                 (session.width * 0.5).floor(),
-                MARGIN + self::LINE_HEIGHT,
+                session.height - MARGIN - self::LINE_HEIGHT - self::GLYPH_HEIGHT,
                 self::TEXT_LAYER,
                 Rgba8::WHITE,
                 TextAlign::Left,
@@ -324,7 +324,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
             canvas.add(Shape::Rectangle(
                 Rect::origin(11., 11.).with_origin(
                     (session.width * 0.4).floor(),
-                    self::LINE_HEIGHT + self::MARGIN + 2.,
+                    session.height - self::LINE_HEIGHT - self::MARGIN - 13.,
                 ),
                 self::UI_LAYER,
                 Rotation::ZERO,
@@ -335,7 +335,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
             canvas.add(Shape::Rectangle(
                 Rect::origin(11., 11.).with_origin(
                     (session.width * 0.4).floor() + 25.,
-                    self::LINE_HEIGHT + self::MARGIN + 2.,
+                    session.height - self::LINE_HEIGHT - self::MARGIN - 13.,
                 ),
                 self::UI_LAYER,
                 Rotation::ZERO,
@@ -351,7 +351,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
         text.add(
             &s,
             MARGIN,
-            MARGIN,
+            session.height - MARGIN - self::GLYPH_HEIGHT,
             self::TEXT_LAYER,
             Rgba8::WHITE,
             TextAlign::Left,
@@ -360,7 +360,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
             text.glyph(
                 96,
                 MARGIN + session.cmdline.cursor as f32 * self::GLYPH_WIDTH,
-                MARGIN,
+                session.height - MARGIN - self::GLYPH_HEIGHT,
                 self::TEXT_LAYER,
                 Rgba8::RED,
             );
@@ -373,7 +373,7 @@ fn draw_ui(session: &Session, canvas: &mut shape2d::Batch, text: &mut TextBatch)
         text.add(
             &s,
             MARGIN,
-            MARGIN,
+            session.height - MARGIN - self::GLYPH_HEIGHT,
             self::TEXT_LAYER,
             session.message.color(),
             TextAlign::Left,
@@ -415,7 +415,7 @@ fn draw_overlay(
             text.add(
                 &format!("* recording: {} (<End> to stop)", path.display()),
                 MARGIN * 2.,
-                session.height - self::LINE_HEIGHT - MARGIN,
+                self::LINE_HEIGHT + MARGIN - self::GLYPH_HEIGHT,
                 ZDepth::ZERO,
                 color::RED,
                 TextAlign::Left,
@@ -430,7 +430,7 @@ fn draw_overlay(
                         String::from(event.clone()),
                     ),
                     MARGIN * 2.,
-                    session.height - self::LINE_HEIGHT - MARGIN,
+                    self::LINE_HEIGHT + MARGIN - self::GLYPH_HEIGHT,
                     ZDepth::ZERO,
                     color::LIGHT_GREEN,
                     TextAlign::Left,
@@ -455,7 +455,7 @@ fn draw_overlay(
         text.add(
             txt,
             session.width - MARGIN,
-            session.height - MARGIN - self::LINE_HEIGHT,
+            MARGIN + self::LINE_HEIGHT - self::GLYPH_HEIGHT,
             ZDepth::ZERO,
             Rgba8::WHITE,
             TextAlign::Right,
@@ -466,7 +466,7 @@ fn draw_overlay(
         text.add(
             &format!("{}", session.message),
             MARGIN,
-            MARGIN,
+            session.height - MARGIN - self::GLYPH_HEIGHT,
             ZDepth::ZERO,
             session.message.color(),
             TextAlign::Left,
@@ -481,7 +481,7 @@ fn draw_palette(session: &Session, batch: &mut shape2d::Batch) {
 
     let p = &session.palette;
     let height = p.height;
-    for (i, color) in p.colors.iter().rev().cloned().enumerate() {
+    for (i, color) in p.colors.iter().cloned().enumerate() {
         let x = if i >= height {
             (i / height) as f32 * p.cellsize
         } else {
@@ -675,7 +675,7 @@ fn draw_brush(session: &Session, brush: &Brush, shapes: &mut shape2d::Batch) {
                             stroke,
                             fill,
                             v.zoom,
-                            Align::BottomLeft,
+                            Align::TopLeft,
                         ));
                     }
 
@@ -745,15 +745,14 @@ pub fn draw_view_animation<R>(session: &Session, v: &View<R>) -> sprite2d::Batch
 
     // Composite the current frame's strip from every layer, bottom
     // first, honoring visibility and opacity (but not `layers/dim` —
-    // the preview shows the true composite). Batch src rects are
-    // y-down texture coordinates: layer n (y-up) covers rows
-    // `sheet_h - (n+1)*fh .. sheet_h - n*fh`.
+    // the preview shows the true composite). In texture coordinates,
+    // strip n covers rows `n*fh .. (n+1)*fh`.
     for n in 0..v.nlayers as u32 {
         let attrs = v.layer_attrs[n as usize];
         if !attrs.visible {
             continue;
         }
-        let y2 = (sheet_h - n * v.fh) as f32;
+        let y2 = ((n + 1) * v.fh) as f32;
         batch.add(
             Rect::new(frame.x1, y2 - v.fh as f32, frame.x2, y2),
             dst,
@@ -772,7 +771,7 @@ pub fn draw_view_composites<R>(session: &Session, v: &View<R>) -> sprite2d::Batc
     for frame in v.animation.frames.iter() {
         batch.add(
             *frame,
-            (*frame - Vector2::new(0., v.fh as f32)) * v.zoom + (session.offset + v.offset),
+            (*frame + Vector2::new(0., v.fh as f32)) * v.zoom + (session.offset + v.offset),
             self::VIEW_LAYER,
             Rgba::TRANSPARENT,
             1.,
@@ -809,7 +808,7 @@ pub fn draw_help(session: &Session, text: &mut TextBatch, shape: &mut shape2d::B
             platform::Key::Escape,
         ),
         left_margin,
-        session.height - self::MARGIN - self::LINE_HEIGHT,
+        self::MARGIN + self::LINE_HEIGHT - self::GLYPH_HEIGHT,
         self::HELP_LAYER,
         color::LIGHT_GREY,
         TextAlign::Left,
@@ -824,8 +823,10 @@ pub fn draw_help(session: &Session, text: &mut TextBatch, shape: &mut shape2d::B
         .filter_map(|kb| kb.display.as_ref().map(|d| (d, kb)))
         .partition(|(_, kb)| kb.mode_matches(Mode::Normal));
 
-    let mut line = (0..(session.height as usize - self::LINE_HEIGHT as usize * 4))
-        .rev()
+    // Text positions are glyph tops; keep the body at its original top margin.
+    let body_top = self::LINE_HEIGHT * 4. - self::GLYPH_HEIGHT;
+    let body_end = (session.height - self::GLYPH_HEIGHT).max(body_top);
+    let mut line = (body_top as usize..=body_end as usize)
         .step_by(self::LINE_HEIGHT as usize);
 
     for (display, kb) in normal_kbs.iter() {
@@ -932,7 +933,7 @@ pub fn draw_help(session: &Session, text: &mut TextBatch, shape: &mut shape2d::B
     }
 
     for (i, l) in session.help().iter().enumerate() {
-        let y = session.height - (i + 4) as f32 * self::LINE_HEIGHT;
+        let y = body_top + i as f32 * self::LINE_HEIGHT;
 
         text.add(
             l,

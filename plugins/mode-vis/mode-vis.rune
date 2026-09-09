@@ -1,24 +1,28 @@
 // mode-vis: current mode indicator (Rune port of mode-vis.rxx).
 
 const TEXT_X = 10.0;
-const TEXT_Y = 46.0;
+// Keep the indicator above the bottom status rows (glyphs are 14px tall).
+const BOTTOM_MARGIN = 46.0;
+const GLYPH_HEIGHT = 14.0;
 
 pub fn init(rx) {
     #{}
 }
 
 pub fn draw(state, rx) {
+    let (_, height) = rx.screen_size();
+    let text_y = (height as f64) - BOTTOM_MARGIN - GLYPH_HEIGHT;
     let mode = rx.mode();
     let label = `-- ${mode.to_uppercase()} --`;
 
     if mode == "normal" {
-        rx.draw_text(label, TEXT_X, TEXT_Y, rx::rgb(255, 255, 255));
+        rx.draw_text(label, TEXT_X, text_y, rx::rgb(255, 255, 255));
     } else if mode.starts_with("visual") {
-        rx.draw_text(label, TEXT_X, TEXT_Y, rx::rgb(0xff, 0x33, 0x66));
+        rx.draw_text(label, TEXT_X, text_y, rx::rgb(0xff, 0x33, 0x66));
     } else if mode == "command" {
         // command mode is skipped
     } else {
         // script and other modes
-        rx.draw_text(label, TEXT_X, TEXT_Y, rx::rgb(0xff, 0x33, 0x66));
+        rx.draw_text(label, TEXT_X, text_y, rx::rgb(0xff, 0x33, 0x66));
     }
 }

@@ -14,8 +14,8 @@ map         .       :zoom +
 map         ,       :zoom -
 map/normal  j       :v/prev
 map/normal  k       :v/next
-map/visual  j       :selection/move    0 -1
-map/visual  k       :selection/move    0  1
+map/visual  j       :selection/move    0 1
+map/visual  k       :selection/move    0  -1
 map/visual  h       :selection/move   -1  0
 map/visual  l       :selection/move    1  0
 map/visual  ]       :selection/offset  1  1

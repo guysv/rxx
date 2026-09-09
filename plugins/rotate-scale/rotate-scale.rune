@@ -494,18 +494,22 @@ pub fn draw(state, rx) {
         sync_selection(state, rx);
     }
 
+    // Position the HUD above mode-vis, measured from the bottom edge.
+    let (_, height) = rx.screen_size();
+    let algorithm_y = (height as f64) - 86.0 - 14.0;
+    let value_y = (height as f64) - 66.0 - 14.0;
     let pink = rx::rgb(0xff, 0x33, 0x66);
     let algo = rx.setting("rotate-scale/algo");
     let algo = if algo is String { algo } else { "" };
     if algo == "" || algo == "nearest" {
-        rx.draw_text("Algorithm: nearest neighbor (default)", 10.0, 86.0, pink);
+        rx.draw_text("Algorithm: nearest neighbor (default)", 10.0, algorithm_y, pink);
     } else {
-        rx.draw_text(`Algorithm: ${algo}`, 10.0, 86.0, pink);
+        rx.draw_text(`Algorithm: ${algo}`, 10.0, algorithm_y, pink);
     }
     if mode == ROTATION_MODE {
-        rx.draw_text(`Angle: ${state.rotation_degrees}`, 10.0, 66.0, pink);
+        rx.draw_text(`Angle: ${state.rotation_degrees}`, 10.0, value_y, pink);
     } else {
-        rx.draw_text(`Scale: ${state.scale_x}, ${state.scale_y}`, 10.0, 66.0, pink);
+        rx.draw_text(`Scale: ${state.scale_x}, ${state.scale_y}`, 10.0, value_y, pink);
     }
 
     if !state.has_pivot {

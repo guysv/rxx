@@ -64,7 +64,7 @@ impl fmt::Display for BrushMode {
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub enum Align {
     Center,
-    BottomLeft,
+    TopLeft,
 }
 
 /// Brush context.
@@ -294,8 +294,8 @@ impl Brush {
     }
 
     /// Return the shape that should be painted when the brush is at the given
-    /// position with the given parameters. Takes an `Origin` which describes
-    /// whether to align the position to the bottom-left of the shape, or the
+    /// position with the given parameters. Takes an `Align` which describes
+    /// whether to align the position to the top-left of the shape, or the
     /// center.
     pub fn shape(
         &self,
@@ -313,7 +313,7 @@ impl Brush {
 
         let offset = match align {
             Align::Center => size * scale / 2.,
-            Align::BottomLeft => (self.size / 2) as f32 * scale,
+            Align::TopLeft => (self.size / 2) as f32 * scale,
         };
 
         Shape::Rectangle(

@@ -16,6 +16,11 @@ height=$(sed -n 's/^height *= *//p' "$toml")
 
 cargo build --no-default-features
 
+# Match the harness: this fixture creates /tmp/rx.png and must start clean.
+if [ "$dir" = tests/saving ]; then
+    rm -f /tmp/rx.png
+fi
+
 # Pick the plugin dir the way tests/main.rs does: a `[plugins] load`
 # list gets the listed sample plugins (top-level files only) staged
 # together with any *.rune driver scripts from the test dir; otherwise
@@ -39,7 +44,7 @@ fi
 
 # rx lingers in the main loop after the replay completes: wait for the
 # digest to be written, then kill it.
-RUST_LOG=rx=info target/debug/rx --replay "$dir" -u "$dir/$stem.rx" \
+RUST_LOG=rx=info target/debug/rx --isolated-plugins --replay "$dir" -u "$dir/$stem.rx" \
     ${plugins:+--plugin-dir "$plugins"} --headless --record-digests \
     --width "$width" --height "$height" >"$log" 2>&1 &
 pid=$!

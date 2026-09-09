@@ -28,14 +28,10 @@ use std::time;
 
 type M44 = [[f32; 4]; 4];
 
-/// Create an orthographic projection matrix corrected for wgpu's coordinate system.
-/// wgpu uses Y-down in clip space (Y=-1 at top, Y=+1 at bottom), opposite of OpenGL.
+/// Project pixel coordinates into WebGPU NDC. TopLeft maps pixel (0, 0)
+/// to NDC (-1, +1): framebuffer rows and application coordinates are y-down.
 fn ortho_wgpu(w: u32, h: u32, origin: Origin) -> Matrix4<f32> {
-    let mut m = Matrix4::ortho(w, h, origin);
-    // Flip Y axis to account for wgpu's inverted clip space
-    m.y.y = -m.y.y;
-    m.w.y = -m.w.y;
-    m
+    Matrix4::ortho(w, h, origin)
 }
 
 /// Vertex for sprite rendering (text, sprites, views).
@@ -345,11 +341,11 @@ fn sprite_vertex_buffer(
 /// One quad per layer strip, all mapped onto the display footprint,
 /// with per-strip opacity. The bottom layer comes first so upper layers
 /// alpha-blend over it. Batch src rects are y-down texture coordinates:
-/// strip n (y-up) covers rows `sheet_h - (n+1)*h .. sheet_h - n*h`.
+/// strip n covers rows `n*h .. (n+1)*h`.
 fn strip_batch(w: u32, h: u32, sheet_h: u32, alphas: &[f32]) -> sprite2d::Batch {
     let mut batch = sprite2d::Batch::new(w, sheet_h);
     for (n, alpha) in alphas.iter().enumerate() {
-        let y2 = (sheet_h - n as u32 * h) as f32;
+        let y2 = ((n as u32 + 1) * h) as f32;
         batch.add(
             Rect::new(0., y2 - h as f32, w as f32, y2),
             Rect::origin(w as f32, h as f32),
@@ -1532,11 +1528,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 mapped_at_creation: true,
             });
             // The final pass targets the sheet-sized layer texture, while
-            // shapes are display-space: under the sheet-tall ortho the
-            // display band lands in the *bottom* strip with no extra
-            // transform (the projection is y-up: view y = 0 is the
-            // texture's bottom row), so writes route to the active layer
-            // by translating up the sheet, one strip per index.
+            // shapes are display-space. Translate down by one strip per
+            // layer index to route writes into the active layer's rows.
             let final_ortho: M44 =
                 ortho_wgpu(v.width(), v.sheet_height(), Origin::TopLeft).into();
             let routed = Matrix4::from_translation(
@@ -2029,7 +2022,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 if let Some((buffer, count)) = overlay_vertices {
                     // TopLeft ortho, matching the screen pass and the
                     // cursor in this same present pass. The glyph quads'
-                    // baked-in dst/src Y flip (sprite::set) assumes this
+                    // sprite pixel coordinates use this
                     // origin; a BottomLeft projection (the old GL default)
                     // renders the text vertically flipped / mirrored.
                     let [overlay_w, overlay_h] = self.screen_texture.size;
@@ -2237,8 +2230,8 @@ impl Renderer {
                         .view_data
                         .get(&v.id)
                         .expect("views must have associated view data");
-                    let [tw, th] = view_data.layer.texture.size;
-                    let strip_y = th - (v.active_layer as u32 + 1) * v.fh;
+                    let [tw, _] = view_data.layer.texture.size;
+                    let strip_y = v.active_layer as u32 * v.fh;
                     let texels: Vec<u8> = [color.r, color.g, color.b, color.a]
                         .iter()
                         .cycle()
@@ -2259,14 +2252,10 @@ impl Renderer {
                             .get_mut(&v.id)
                             .expect("views must have associated view data");
                         let texels = util::align_u8(&pixels);
-                        // `dst` is a y-up sheet rect; the upload offset is
-                        // y-down texture rows. The texture size is used (not
-                        // the resource extent) because a same-frame `Resize`
-                        // op may already have grown it.
-                        let [_, th] = view_data.layer.texture.size;
+                        // Sheet coordinates are texture row coordinates.
                         view_data.layer.upload_part(
                             &self.queue,
-                            [dst.x1 as u32, th - dst.y2 as u32],
+                            [dst.x1 as u32, dst.y1 as u32],
                             [src.width() as u32, src.height() as u32],
                             texels,
                         );
@@ -2274,7 +2263,7 @@ impl Renderer {
                 }
                 ViewOp::Yank(src) => {
                     // `src` is a display-space rect; the snapshot read routes
-                    // to the active layer's strip (y-up sheet coords).
+                    // to the active layer's strip (y-down sheet coords).
                     let src = *src + Vector2::new(0, (v.active_layer as u32 * v.fh) as i32);
                     if let Some((_, pixels)) = v.resource.layer.get_snapshot_rect(&src) {
                         let (w, h) = (src.width() as u32, src.height() as u32);
@@ -2425,8 +2414,7 @@ impl Renderer {
                     let texels = &[rgba.r, rgba.g, rgba.b, rgba.a];
                     // `y` is a display-space row; offset it into the active
                     // layer's strip (no-op for single-layer views).
-                    let [_, th] = view_data.layer.texture.size;
-                    let strip = th - (v.active_layer as u32 + 1) * v.fh;
+                    let strip = v.active_layer as u32 * v.fh;
                     view_data.layer.upload_part(
                         &self.queue,
                         [*x as u32, strip + *y as u32],
@@ -2473,26 +2461,26 @@ impl Renderer {
         vw: u32,
         vh: u32,
     ) -> Result<(), RendererError> {
-        let (ew, eh) = {
-            let extent = view.resource.extent;
-            (extent.width(), extent.height())
-        };
+        let previous = view.resource.extent;
+        let copy_w = u32::min(previous.width(), vw);
+        let copy_h = u32::min(previous.fh, view.fh);
 
-        let tw = u32::min(ew, vw);
-        let th = u32::min(eh, vh);
-
-        // `vw`/`vh` are sheet dimensions (from `ViewOp::Resize` or a
-        // damaged extent); the staging texture stays display-sized.
+        // Each layer keeps its own top-left anchor when the frame height
+        // changes. Copying the sheet as one rectangle would leave later
+        // layers at their old row offsets, crossing the new strip boundaries.
         let view_data = ViewData::new(&self.device, &self.queue, vw, view.fh, vh, None);
-
-        if let Some((_, texels)) = view
-            .layer
-            .get_snapshot_rect(&Rect::origin(tw as i32, th as i32))
-        {
-            let texels = util::align_u8(&texels);
-            view_data
-                .layer
-                .upload_part(&self.queue, [0, vh - th], [tw, th], texels);
+        let layers = usize::min(previous.nlayers, (vh / view.fh) as usize);
+        for n in 0..layers as u32 {
+            let old_y = n * previous.fh;
+            let src = Rect::new(0, old_y as i32, copy_w as i32, (old_y + copy_h) as i32);
+            if let Some((_, texels)) = view.layer.get_snapshot_rect(&src) {
+                view_data.layer.upload_part(
+                    &self.queue,
+                    [0, n * view.fh],
+                    [copy_w, copy_h],
+                    util::align_u8(&texels),
+                );
+            }
         }
 
         self.view_data.insert(view.id, view_data);
@@ -2756,5 +2744,165 @@ impl Renderer {
         }
 
         pixels
+    }
+}
+
+#[cfg(all(test, not(feature = "glfw")))]
+mod coordinate_tests {
+    use super::*;
+    use crate::renderer::Renderer as _;
+    use crate::view::FileStatus;
+
+    fn frame(
+        renderer: &mut Renderer,
+        session: &mut Session,
+        plugins: &mut crate::script::PluginHost,
+    ) {
+        let mut execution = Execution::Normal;
+        let effects = session.update(
+            &mut vec![],
+            &mut execution,
+            time::Duration::ZERO,
+            time::Duration::ZERO,
+            plugins,
+        );
+        renderer
+            .frame(
+                session,
+                &mut execution,
+                effects,
+                &time::Duration::ZERO,
+                plugins,
+            )
+            .unwrap();
+        session.cleanup();
+    }
+
+    fn pixels(session: &Session) -> Vec<Rgba8> {
+        session
+            .active_view()
+            .resource
+            .layer
+            .current_snapshot()
+            .1
+            .to_vec()
+    }
+
+    #[test]
+    fn core_paint_layers_paste_undo_and_save_use_top_first_rows() {
+        let (mut window, _) =
+            platform::init("coordinates", 64, 64, &[], platform::GraphicsContext::None).unwrap();
+        let mut renderer = Renderer::new(
+            &mut window,
+            LogicalSize::new(64., 64.),
+            1.,
+            Assets::new(crate::data::GLYPHS),
+        )
+        .unwrap();
+        let dirs = directories::ProjectDirs::from("io", "cloudhead", "rx").unwrap();
+        let base = directories::BaseDirs::new().unwrap();
+        let mut session = Session::new(64, 64, std::env::temp_dir(), dirs, base).with_blank(
+            FileStatus::NoFile,
+            4,
+            3,
+        );
+        session.transition(session::State::Running);
+        let mut plugins = crate::script::PluginHost::new(None).unwrap();
+        let (device, queue) = renderer.gpu_handles();
+        plugins.attach_gfx(device, queue);
+        frame(&mut renderer, &mut session, &mut plugins);
+        let red = Rgba8::new(255, 0, 0, 255);
+        let green = Rgba8::new(0, 255, 0, 255);
+        let blue = Rgba8::new(0, 0, 255, 255);
+        let clear = Rgba8::TRANSPARENT;
+        {
+            let view = session.active_view_mut();
+            view.paint_color(red, 0, 0);
+            view.paint_color(blue, 3, 2);
+            view.touch();
+        }
+        frame(&mut renderer, &mut session, &mut plugins);
+        let mut bottom = vec![clear; 12];
+        bottom[0] = red;
+        bottom[11] = blue;
+        assert_eq!(pixels(&session), bottom);
+        assert_eq!(
+            *session
+                .active_view()
+                .color_at(crate::view::ViewCoords::new(0, 0))
+                .unwrap(),
+            red
+        );
+
+        session.active_view_mut().extend_layer();
+        frame(&mut renderer, &mut session, &mut plugins);
+        assert_eq!(pixels(&session), [bottom.clone(), vec![clear; 12]].concat());
+        session.active_view_mut().activate_layer(1);
+        session
+            .effects
+            .push(Effect::ViewPaintFinal(vec![shape2d::Shape::Rectangle(
+                Rect::new(1., 0., 2., 1.),
+                ZDepth::default(),
+                shape2d::Rotation::ZERO,
+                shape2d::Stroke::NONE,
+                shape2d::Fill::Solid(green.into()),
+            )]));
+        session.active_view_mut().touch();
+        frame(&mut renderer, &mut session, &mut plugins);
+        let mut top = vec![clear; 12];
+        top[1] = green;
+        assert_eq!(pixels(&session), [bottom.clone(), top.clone()].concat());
+        assert_eq!(
+            *session
+                .active_view()
+                .color_at(crate::view::ViewCoords::new(1, 0))
+                .unwrap(),
+            green
+        );
+
+        // Yank/paste addresses the active layer using the same local rows.
+        session.active_view_mut().yank(Rect::new(1, 0, 2, 1));
+        session.active_view_mut().paste(Rect::new(2, 2, 3, 3));
+        frame(&mut renderer, &mut session, &mut plugins);
+        top[10] = green;
+        assert_eq!(pixels(&session), [bottom.clone(), top.clone()].concat());
+
+        session
+            .active_view_mut()
+            .restore_snapshot(session::Direction::Backward);
+        frame(&mut renderer, &mut session, &mut plugins);
+        top[10] = clear;
+        assert_eq!(pixels(&session), [bottom.clone(), top.clone()].concat());
+        session
+            .active_view_mut()
+            .restore_snapshot(session::Direction::Forward);
+        frame(&mut renderer, &mut session, &mut plugins);
+        top[10] = green;
+        assert_eq!(pixels(&session), [bottom, top.clone()].concat());
+
+        let path = tempfile::tempdir().unwrap();
+        let file = path.path().join("layer.png");
+        session
+            .active_view()
+            .resource
+            .save(Rect::new(0, 3, 4, 6), &file)
+            .unwrap();
+        let (bytes, w, h) = crate::image::load(&file).unwrap();
+        assert_eq!((w, h), (4, 3));
+        assert_eq!(bytes, util::align_u8(&top));
+
+        // Changing frame height must move whole strips, preserving each
+        // layer's local rows rather than reinterpreting the old sheet.
+        let before_resize = pixels(&session);
+        session.active_view_mut().resize_frames(4, 4);
+        frame(&mut renderer, &mut session, &mut plugins);
+        let mut resized = before_resize[..12].to_vec();
+        resized.extend_from_slice(&[clear; 4]);
+        resized.extend_from_slice(&before_resize[12..]);
+        resized.extend_from_slice(&[clear; 4]);
+        assert_eq!(pixels(&session), resized);
+        session.active_view_mut().restore_snapshot(session::Direction::Backward);
+        frame(&mut renderer, &mut session, &mut plugins);
+        assert_eq!(pixels(&session), before_resize);
     }
 }

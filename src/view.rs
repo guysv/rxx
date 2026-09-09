@@ -42,7 +42,7 @@ impl fmt::Display for ViewId {
 
 /// View coordinates.
 ///
-/// These coordinates are relative to the bottom left corner of the view.
+/// Relative to the top-left corner of the view, increasing right and down.
 pub type ViewCoords<T> = Point<ViewExtent, T>;
 
 /// Maximum view sheet dimension, set by the GPU texture size limit.
@@ -88,12 +88,12 @@ fn over(top: Rgba8, opacity: f32, bottom: Rgba8) -> Rgba8 {
 }
 
 /// The byte-row index range of layer `n`'s strip within a sheet pixel
-/// buffer. Byte row 0 is the sheet top, so layer n sits
-/// `nlayers - 1 - n` strips down.
+/// buffer. Layer n starts at row `n * fh`; compositing order is independent
+/// of the top-to-bottom sheet layout.
 fn strip_range(extent: ViewExtent, n: usize) -> std::ops::Range<usize> {
     let w = extent.width() as usize;
     let rows = extent.fh as usize;
-    let start = (extent.nlayers - 1 - n) * rows * w;
+    let start = n * rows * w;
 
     start..start + rows * w
 }
@@ -200,7 +200,7 @@ impl ViewExtent {
         Rect::origin(self.width(), self.height())
     }
 
-    /// Rect containing a single frame, within the bottom layer strip.
+    /// Rect containing a single frame, within layer 0 (the first strip in storage).
     pub fn frame(&self, n: usize) -> Rect<u32> {
         let n = n as u32;
         Rect::new(self.fw * n, 0, self.fw * n + self.fw, self.fh)
@@ -498,8 +498,8 @@ impl<R> View<R> {
         ));
     }
 
-    /// Extend the view by one layer: a new transparent strip above the
-    /// existing ones. The sheet grows by one strip height; the display
+    /// Extend the view by one layer: a new transparent strip after the
+    /// existing ones in storage (above them in compositing order). The sheet grows by one strip height; the display
     /// footprint is unchanged.
     pub fn extend_layer(&mut self) {
         self.nlayers += 1;
@@ -507,7 +507,7 @@ impl<R> View<R> {
         self.resized();
     }
 
-    /// Shrink the view by one layer, removing the top strip.
+    /// Shrink the view by one layer, removing the last strip (the top compositing layer).
     pub fn shrink_layer(&mut self) {
         // Don't allow the view to have zero layers.
         if self.nlayers > 1 {
@@ -1178,11 +1178,11 @@ mod tests {
         assert_eq!(e.height(), 48);
         assert_eq!(e.rect(), Rect::origin(48, 48));
 
-        // Layer strips span all frames, stacked bottom-up.
+        // Layer strips span all frames, stored top-to-bottom.
         assert_eq!(e.layer(0), Rect::new(0, 0, 48, 12));
         assert_eq!(e.layer(3), Rect::new(0, 36, 48, 48));
 
-        // `frame` stays within the bottom strip.
+        // `frame` stays within layer 0.
         assert_eq!(e.frame(2), Rect::new(32, 0, 48, 12));
 
         // Sheet-space points map back to layer indices.
@@ -1227,7 +1227,7 @@ mod tests {
         assert!(matches!(v.ops.last(), Some(ViewOp::Resize(32, 24))));
 
         // Clone layer 0: the blit reads layer 0's strip and writes the
-        // new top strip (above the two existing ones), in y-up coords.
+        // new last strip, in y-down sheet coordinates.
         v.extend_clone_layer(0);
         assert_eq!(v.nlayers, 3);
         match v.ops.last() {
@@ -1253,7 +1253,7 @@ mod tests {
     #[test]
     fn test_strip_pixel_math() {
         // A 2x1 frame, 3 layers: sheet is 2 wide, 3 tall. Byte row 0 is
-        // the *top* layer's strip.
+        // layer 0's strip.
         let e = ViewExtent::layered(2, 1, 1, 3);
         let b = Rgba8 {
             r: 0,
@@ -1263,18 +1263,18 @@ mod tests {
         };
         #[rustfmt::skip]
         let sheet = vec![
-            b, T, // layer 2
-            T, R, // layer 1
             R, R, // layer 0
+            T, R, // layer 1
+            b, T, // layer 2
         ];
 
         // Merge layer 2 down onto layer 1: blue wins where opaque.
         let merged = merge_down(&sheet, e, 2, 1.);
-        assert_eq!(merged, vec![b, R, R, R]);
+        assert_eq!(merged, vec![R, R, b, R]);
 
         // Swap layers 0 and 2.
         let swapped = swap_layers(&sheet, e, 0, 2);
-        assert_eq!(swapped, vec![R, R, T, R, b, T]);
+        assert_eq!(swapped, vec![b, T, T, R, R, R]);
 
         // Flatten: top-most opaque pixel wins per column.
         let flat = flatten(&sheet, e, &[LayerAttrs::default(); 3]);
@@ -1293,7 +1293,7 @@ mod tests {
 
         // Opacity bakes: a half-opaque red over nothing.
         let half = merge_down(
-            &vec![R, R, T, T],
+            &vec![T, T, R, R],
             ViewExtent::layered(2, 1, 1, 2),
             1,
             0.5,
