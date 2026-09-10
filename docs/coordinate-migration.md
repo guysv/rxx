@@ -17,7 +17,7 @@ mode or script-only inversion.
 The migration updates core pixel indexing and cropping, mouse coordinates,
 flood fill, sprite UV mapping, renderer and script projections, layer routing,
 blits, resize, palette indexing, UI placement and directional key bindings.
-LUT sampler/paint operations, EasyMetric reads/baking/guides, and layer-status
+LUT sampler/paint operations and layer-status
 hit testing use the same coordinates. The website API documentation, replay
 fixtures, generated demo packages, videos and posters are migrated too.
 
@@ -62,7 +62,7 @@ this document.
 ## Layout regression follow-up
 
 The initial migration missed bottom-anchored plugin text. Mode-vis,
-rotate-scale, EasyMetric and LUT now place their HUDs relative to the
+rotate-scale and LUT now place their HUDs relative to the
 session height, including glyph height. LUT's canvas label stays below its
 view. The sampler sprite retains its hotspot, and j/k navigate down/up
 through the now downward-stacked views. These are layout anchors in the
@@ -72,8 +72,7 @@ A regression test dispatches the actual mode-vis plugin at two session
 heights and checks the emitted glyphs retain their bottom margin. Pixel
 coordinate tests and regenerated digests alone did not catch this omission.
 
-A second position audit restored EasyMetric's preview bottom alignment for
-unequal canvas/preview heights and the help body's glyph-top margin. The
+A second position audit restored the help body's glyph-top margin. The
 website mode-vis tutorial and test HUD snippets now use bottom anchors too.
 A help-layout test checks the first glyph row in both populated columns.
 Explicit-coordinate GPU fixtures remain explicit; LUT's documented one-pixel

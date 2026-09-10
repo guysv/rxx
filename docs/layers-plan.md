@@ -5,9 +5,7 @@
 # Layers in core: plan for phases 35+
 
 **layer support in the editor core**, with the script API tier on top. It
-takes the P35+ numbering; the easymetric plan (`docs/easymetric-plan.md`,
-revived at P40+) renumbered for the wait — and landed better for it, since
-its "per-layer geometry" maps onto the real layers built here.
+takes the P35+ numbering.
 
 **Out of scope: persistence.** Frames set the precedent — rx has no
 frame manifest either: a save writes the sheet PNG as-is and `:slice`
@@ -90,9 +88,8 @@ Findings and deviations, in phase order:
 - **P39 (script tier): read side landed incrementally as plugins
   needed it.** First the `layer-status` overlay plugin
   (`plugins/layer-status/`) drove `ViewInfo.nlayers`/`active_layer` and
-  `layer_visibility(id)` (per-layer `visible`, bottom strip first). Then
-  EasyMetric (`docs/easymetric-plan.md`, P42) drove the last specced read,
-  **`view_layer_pixels(id, layer, rect)`** — `view_pixels` lifted by
+  `layer_visibility(id)` (per-layer `visible`, bottom strip first). The
+  final planned read was **`view_layer_pixels(id, layer, rect)`** — `view_pixels` lifted by
   `layer*fh` into a chosen strip, since `view_pixels` reaches only the
   bottom strip and a plugin needed to introspect a non-active layer on the
   CPU. Current semantics: `view_pixels`/`clear_view_rect` stay

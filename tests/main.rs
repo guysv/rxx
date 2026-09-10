@@ -148,11 +148,6 @@ fn layer_status() {
 }
 
 #[test]
-fn easymetric() {
-    plugin_test("easymetric");
-}
-
-#[test]
 fn cmd_script() {
     test("cmd-script");
 }

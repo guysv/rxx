@@ -1416,7 +1416,7 @@ impl Ctx {
     /// strip). Unlike `view_pixels`, which reaches only the first strip
     /// (display-space / active-routed writes), this addresses any strip:
     /// the per-layer read a plugin needs to introspect a non-active layer
-    /// on the CPU (EasyMetric's carve/scan probes). `None` if the view or
+    /// on the CPU. `None` if the view or
     /// layer doesn't exist, or the rect misses the frame.
     #[rune::function]
     fn view_layer_pixels(
@@ -4180,10 +4180,8 @@ mod test {
     fn view_layer_pixels_reads_and_guards() {
         use crate::view::FileStatus;
 
-        // Single-layer view: strip 0 is the whole sheet. (The multi-strip
-        // offset math rides real snapshots, exercised by the easymetric
-        // replay; a bare unit-test session has no recorded snapshot at the
-        // grown extent after LayerAdd.)
+        // Single-layer view: strip 0 is the whole sheet. A bare unit-test
+        // session has no recorded snapshot at the grown extent after LayerAdd.
         let mut session = test_session().with_blank(FileStatus::NoFile, 8, 8);
 
         let engine = ScriptEngine::new().unwrap();
