@@ -7,7 +7,7 @@
 pub fn init(rx) {
     let wgsl = rx.read_file("gpu.wgsl").unwrap();
     let shader = rx.create_shader(wgsl).unwrap();
-    let render = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+    let render = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
     let compute = rx.create_compute_pipeline(shader, "cs_invert", 1).unwrap();
 
     // 8x8 source: fill() red, then upload() a red/green checker over it
@@ -56,7 +56,7 @@ pub fn check(state, rx, args) {
 
 fn quad(rx, pass, pipeline, texture, dst, w, h) {
     let tbg = rx.create_transform_bind_group(w, h, rx::mat4_identity()).unwrap();
-    let sbg = rx.create_texture_bind_group(texture).unwrap();
+    let sbg = rx.create_texture_bind_group(texture.view()).unwrap();
     let v = rx.create_sprite_vertices(texture, #{ dst }).unwrap();
     pass.set_pipeline(pipeline).unwrap();
     pass.set_bind_group(0, tbg).unwrap();
@@ -86,7 +86,7 @@ pub fn shade(state, rx, encoder) {
         cpass.end();
 
         // 2. Render pass to a texture target: copy out -> mid.
-        let p1 = encoder.begin_render_pass("to-mid", state.mid, "clear").unwrap();
+        let p1 = encoder.begin_render_pass(state.mid.view(), #{ label: "to-mid", load: "clear" }).unwrap();
         quad(rx, p1, state.render, state.out, rx::rect(0.0, 0.0, 8.0, 8.0), 8, 8);
         p1.end();
 

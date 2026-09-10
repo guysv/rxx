@@ -12,6 +12,7 @@
 use std::fmt;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +21,9 @@ use rune::runtime::{Function, RuntimeContext, VmError};
 use rune::{Context, Diagnostics, Source, Sources, Unit, Value, Vm};
 
 use crate::session::Session;
+
+mod gpu;
+use gpu::{PassOptions, PipelineOptions};
 
 ////////////////////////////////////////////////////////////////////////////
 // Errors
@@ -79,6 +83,7 @@ pub struct Gfx {
     /// bindings `0..n`, the storage output last at binding `n`.
     compute_bgls: [wgpu::BindGroupLayout; Self::MAX_COMPUTE_INPUTS],
     sampler: std::sync::Arc<wgpu::Sampler>,
+    frame: Arc<AtomicU64>,
 }
 
 impl Gfx {
@@ -195,6 +200,7 @@ impl Gfx {
             texture_bgl: std::sync::Arc::new(texture_bgl),
             compute_bgls,
             sampler: std::sync::Arc::new(sampler),
+            frame: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -229,11 +235,11 @@ pub struct ScriptTexture {
     texture: wgpu::Texture,
     /// sRGB view: render attachments and sampling (matches the
     /// renderer's view/screen formats).
-    view: wgpu::TextureView,
+    view: Arc<wgpu::TextureView>,
     /// Raw (unorm) view: compute storage and raw loads. Storage
     /// textures cannot be sRGB, so the base format is unorm and the
     /// sRGB conversion lives in `view`.
-    raw_view: wgpu::TextureView,
+    raw_view: Arc<wgpu::TextureView>,
     /// Cloned queue handle, so uploads need no further host access.
     queue: std::sync::Arc<wgpu::Queue>,
     width: u32,
@@ -267,16 +273,35 @@ impl ScriptTexture {
         let raw_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Self {
             texture,
-            view,
-            raw_view,
+            view: Arc::new(view),
+            raw_view: Arc::new(raw_view),
             queue: gfx.queue.clone(),
             width,
             height,
         }
     }
 
-    pub(crate) fn view(&self) -> &wgpu::TextureView {
+    #[cfg(test)]
+    fn wgpu_view(&self) -> &wgpu::TextureView {
         &self.view
+    }
+
+    /// A reusable sRGB texture view for rendering or sampling.
+    #[rune::function]
+    fn view(&self) -> ScriptTextureView {
+        ScriptTextureView {
+            source: TextureViewSource::Owned(self.view.clone()),
+            scope: None,
+        }
+    }
+
+    /// A linear rgba8unorm view over the same storage (no sRGB conversion).
+    #[rune::function]
+    fn raw_view(&self) -> ScriptTextureView {
+        ScriptTextureView {
+            source: TextureViewSource::Owned(self.raw_view.clone()),
+            scope: None,
+        }
     }
 
     pub(crate) fn wgpu_texture(&self) -> &wgpu::Texture {
@@ -437,11 +462,96 @@ pub struct ScriptComputePipeline {
     pipeline: wgpu::ComputePipeline,
 }
 
+/// A renderable/sampleable texture view. Editor targets are frame-scoped:
+/// retaining one cannot silently render into an obsolete resized texture.
+#[derive(rune::Any)]
+#[rune(item = ::rx)]
+pub struct ScriptTextureView {
+    source: TextureViewSource,
+    scope: Option<FrameScope>,
+}
+
+enum TextureViewSource {
+    Owned(Arc<wgpu::TextureView>),
+    Editor {
+        targets: Arc<ViewTargets>,
+        id: u16,
+        staging: bool,
+    },
+}
+
+#[derive(Clone)]
+struct FrameScope {
+    clock: std::sync::Weak<AtomicU64>,
+    generation: u64,
+}
+
+fn validate_scope(scope: &Option<FrameScope>) -> Result<(), String> {
+    if let Some(scope) = scope {
+        let clock = scope
+            .clock
+            .upgrade()
+            .ok_or("the texture view's frame has ended")?;
+        if clock.load(Ordering::Relaxed) != scope.generation {
+            return Err("the texture view's frame has ended".into());
+        }
+    }
+    Ok(())
+}
+
+impl ScriptTextureView {
+    fn get(&self) -> Result<&wgpu::TextureView, String> {
+        validate_scope(&self.scope)?;
+        Ok(match &self.source {
+            TextureViewSource::Owned(view) => view,
+            TextureViewSource::Editor {
+                targets,
+                id,
+                staging,
+            } => {
+                let target = &targets[id];
+                if *staging {
+                    &target.staging
+                } else {
+                    &target.layer
+                }
+            }
+        })
+    }
+}
+
 /// A bind group (transform uniforms, texture+sampler, or compute IO).
 #[derive(rune::Any)]
 #[rune(item = ::rx)]
 pub struct ScriptBindGroup {
     bind_group: wgpu::BindGroup,
+    scope: Option<FrameScope>,
+}
+
+fn texture_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    view: &ScriptTextureView,
+) -> Result<ScriptBindGroup, String> {
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("script_texture_bind_group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view.get()?),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    });
+    Ok(ScriptBindGroup {
+        bind_group,
+        scope: view.scope.clone(),
+    })
 }
 
 /// A vertex buffer plus its vertex count.
@@ -622,6 +732,7 @@ struct EncoderGfx {
     device: std::sync::Arc<wgpu::Device>,
     texture_bgl: std::sync::Arc<wgpu::BindGroupLayout>,
     sampler: std::sync::Arc<wgpu::Sampler>,
+    frame: Arc<AtomicU64>,
 }
 
 /// The command encoder handed to `shade` hooks. The host owns the
@@ -663,6 +774,15 @@ impl ScriptEncoder {
             "clear" => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             other => return Err(format!("unknown load op `{}`", other)),
         };
+        self.begin_with_load(label, target, load)
+    }
+
+    fn begin_with_load(
+        &self,
+        label: &str,
+        target: &wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
+    ) -> Result<ScriptPass, String> {
         self.end_open_passes();
         let mut guard = self.enc.lock().expect("encoder lock");
         let Some(encoder) = guard.as_mut() else {
@@ -692,32 +812,70 @@ impl ScriptEncoder {
         Ok(ScriptPass { pass: shared })
     }
 
-    /// Begin a render pass targeting a script texture. `load` is
-    /// `"load"` (keep contents) or `"clear"` (clear to transparent).
+    /// Begin a render pass on any texture view. The descriptor specifies
+    /// load/clear behavior, an optional linear clear color, and a label.
     #[rune::function]
     fn begin_render_pass(
         &self,
-        label: &str,
-        target: &ScriptTexture,
-        load: &str,
+        target: &ScriptTextureView,
+        options: &rune::runtime::Object,
     ) -> Result<ScriptPass, String> {
-        self.begin(label, target.view(), load)
+        let options = PassOptions::parse(options)?;
+        self.begin_with_load(&options.label, target.get()?, options.load)
     }
 
-    /// Begin a render pass targeting a view's layer texture. Painting
-    /// into a view this way should be followed by `rx.touch_view(id)`
-    /// so the edit is recorded.
+    fn editor_texture_view(
+        &self,
+        view_id: i64,
+        staging: bool,
+    ) -> Result<ScriptTextureView, String> {
+        if self.enc.lock().expect("encoder lock").is_none() {
+            return Err("the encoder is no longer valid".into());
+        }
+        let id = u16::try_from(view_id).map_err(|_| format!("invalid view id: {}", view_id))?;
+        if !self.view_targets.contains_key(&id) {
+            return Err(format!("no such view: {}", view_id));
+        }
+        let gfx = self.gfx.as_ref().ok_or("the GPU is not available")?;
+        let view = ScriptTextureView {
+            source: TextureViewSource::Editor {
+                targets: self.view_targets.clone(),
+                id,
+                staging,
+            },
+            scope: Some(FrameScope {
+                clock: Arc::downgrade(&gfx.frame),
+                generation: gfx.frame.load(Ordering::Relaxed),
+            }),
+        };
+        view.get()?;
+        Ok(view)
+    }
+
+    /// The live artwork texture view, valid for this frame.
+    /// Uses the same sheet extent as begin_view_pass/view_bind_group.
+    #[rune::function]
+    fn view_layer(&self, view_id: i64) -> Result<ScriptTextureView, String> {
+        self.editor_texture_view(view_id, false)
+    }
+
+    /// The preview overlay texture view, valid for this frame.
+    #[rune::function]
+    fn view_staging(&self, view_id: i64) -> Result<ScriptTextureView, String> {
+        self.editor_texture_view(view_id, true)
+    }
+
+    /// Paint the live artwork; touch_view still controls undo recording.
     #[rune::function]
     fn begin_view_pass(&self, label: &str, view_id: i64, load: &str) -> Result<ScriptPass, String> {
-        let Some(target) = self.view_targets.get(&(view_id as u16)) else {
-            return Err(format!("no such view: {}", view_id));
-        };
-        self.begin(label, &target.layer, load)
+        self.begin(
+            label,
+            self.editor_texture_view(view_id, false)?.get()?,
+            load,
+        )
     }
 
-    /// Begin a render pass targeting a view's *staging* texture: the
-    /// per-frame preview overlay composited above the view and cleared
-    /// every frame. The place for uncommitted previews.
+    /// Paint the per-frame preview overlay.
     #[rune::function]
     fn begin_staging_pass(
         &self,
@@ -725,42 +883,18 @@ impl ScriptEncoder {
         view_id: i64,
         load: &str,
     ) -> Result<ScriptPass, String> {
-        let Some(target) = self.view_targets.get(&(view_id as u16)) else {
-            return Err(format!("no such view: {}", view_id));
-        };
-        self.begin(label, &target.staging, load)
+        self.begin(label, self.editor_texture_view(view_id, true)?.get()?, load)
     }
 
-    /// Build a texture bind group over a view's *layer* texture: the
-    /// live GPU state, unrecorded paints included — unlike
-    /// `view_pixels`, which reads the recorded snapshot. Built fresh
-    /// from this frame's targets, so a view resize (which recreates
-    /// the layer texture) is picked up the next frame automatically.
-    /// Binding a view as input to a pass that also targets it is a
-    /// GPU validation error and disables the plugin.
+    /// Convenience binding for live artwork, with the same lifetime as view_layer.
     #[rune::function]
     fn view_bind_group(&self, view_id: i64) -> Result<ScriptBindGroup, String> {
-        let Some(target) = self.view_targets.get(&(view_id as u16)) else {
-            return Err(format!("no such view: {}", view_id));
-        };
-        let Some(gfx) = &self.gfx else {
-            return Err("the GPU is not available in this context".to_string());
-        };
-        let bind_group = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("script_view_bind_group"),
-            layout: &gfx.texture_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&target.layer),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&gfx.sampler),
-                },
-            ],
-        });
-        Ok(ScriptBindGroup { bind_group })
+        let target = self.editor_texture_view(view_id, false)?;
+        let gfx = self
+            .gfx
+            .as_ref()
+            .ok_or("the GPU is not available in this context")?;
+        texture_bind_group(&gfx.device, &gfx.texture_bgl, &gfx.sampler, &target)
     }
 
     /// Begin a compute pass.
@@ -811,6 +945,7 @@ impl ScriptComputePass {
     /// Bind a bind group at the given index.
     #[rune::function]
     fn set_bind_group(&self, index: i64, group: &ScriptBindGroup) -> Result<(), String> {
+        validate_scope(&group.scope)?;
         self.with(|p| p.set_bind_group(index as u32, &group.bind_group, &[]))
     }
 
@@ -852,6 +987,7 @@ impl ScriptPass {
     /// Bind a bind group at the given index.
     #[rune::function]
     fn set_bind_group(&self, index: i64, group: &ScriptBindGroup) -> Result<(), String> {
+        validate_scope(&group.scope)?;
         self.with(|p| p.set_bind_group(index as u32, &group.bind_group, &[]))
     }
 
@@ -1909,59 +2045,34 @@ impl Ctx {
         Some(ScriptShader { module })
     }
 
-    /// Create a render pipeline from a shader and its entry points.
-    /// Bind group 0 is the transform uniforms; groups `1..=textures`
-    /// (0–3) are each a texture + sampler, bound individually with
-    /// `set_bind_group(i, ...)` and `create_texture_bind_group`.
-    /// Vertices use the sprite layout (position, uv, color, opacity).
-    /// Targets are rgba8 textures with alpha blending.
+    /// Create a pipeline with explicit blending and independent topology/layout.
+    /// See docs/gpu-api.md for the descriptor and canonical binding layouts.
     #[rune::function]
     fn create_render_pipeline(
         &mut self,
         shader: &ScriptShader,
-        vs: &str,
-        fs: &str,
-        textures: i64,
+        options: &rune::runtime::Object,
     ) -> Option<ScriptPipeline> {
-        self.build_render_pipeline(shader, vs, fs, textures, false)
-    }
-
-    /// Create a point-list render pipeline: one point per vertex, no
-    /// vertex buffers — the vertex shader positions each point from
-    /// `@builtin(vertex_index)`, typically by `textureLoad`ing a bound
-    /// texture (scatter passes). Bind groups are laid out exactly like
-    /// `create_render_pipeline`, so the same bind groups serve both.
-    #[rune::function]
-    fn create_point_pipeline(
-        &mut self,
-        shader: &ScriptShader,
-        vs: &str,
-        fs: &str,
-        textures: i64,
-    ) -> Option<ScriptPipeline> {
-        self.build_render_pipeline(shader, vs, fs, textures, true)
+        let options = match PipelineOptions::parse(options) {
+            Ok(options) => options,
+            Err(error) => {
+                self.error(format!("pipeline: {}", error));
+                return None;
+            }
+        };
+        self.build_render_pipeline(shader, &options)
     }
 
     fn build_render_pipeline(
         &mut self,
         shader: &ScriptShader,
-        vs: &str,
-        fs: &str,
-        textures: i64,
-        points: bool,
+        options: &PipelineOptions,
     ) -> Option<ScriptPipeline> {
+        let textures = options.textures;
         let Some(gfx) = self.gfx() else {
             self.error("the GPU is not available in this context");
             return None;
         };
-        if !(0..=Gfx::MAX_TEXTURE_GROUPS).contains(&textures) {
-            self.error(format!(
-                "invalid texture group count {} (0..={})",
-                textures,
-                Gfx::MAX_TEXTURE_GROUPS
-            ));
-            return None;
-        }
         gfx.device.push_error_scope(wgpu::ErrorFilter::Validation);
 
         let mut layouts: Vec<&wgpu::BindGroupLayout> = vec![&gfx.transform_bgl];
@@ -2008,28 +2119,22 @@ impl Ctx {
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &shader.module,
-                    entry_point: Some(vs),
-                    buffers: if points { &[] } else { &sprite_layout },
+                    entry_point: Some(&options.vertex),
+                    buffers: if options.sprite { &sprite_layout } else { &[] },
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader.module,
-                    entry_point: Some(fs),
+                    entry_point: Some(&options.fragment),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: SCRIPT_TEXTURE_FORMAT,
-                        // Alpha blending degenerates to replace at
-                        // alpha 1, which is what scatters write.
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        format: options.format,
+                        blend: Some(options.blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),
                 }),
                 primitive: wgpu::PrimitiveState {
-                    topology: if points {
-                        wgpu::PrimitiveTopology::PointList
-                    } else {
-                        wgpu::PrimitiveTopology::TriangleList
-                    },
+                    topology: options.topology,
                     ..Default::default()
                 },
                 depth_stencil: None,
@@ -2109,7 +2214,10 @@ impl Ctx {
                 },
             ],
         });
-        Some(ScriptBindGroup { bind_group })
+        Some(ScriptBindGroup {
+            bind_group,
+            scope: None,
+        })
     }
 
     /// Create the group-0 uniforms bind group: an orthographic
@@ -2160,28 +2268,20 @@ impl Ctx {
         self.transform_bind_group(w, h, transform, &packed)
     }
 
-    /// Create the group-1 bind group: a texture and a nearest sampler.
+    /// Bind a texture view using the canonical texture + nearest sampler layout.
     #[rune::function]
-    fn create_texture_bind_group(&mut self, texture: &ScriptTexture) -> Option<ScriptBindGroup> {
+    fn create_texture_bind_group(&mut self, view: &ScriptTextureView) -> Option<ScriptBindGroup> {
         let Some(gfx) = self.gfx() else {
             self.error("the GPU is not available in this context");
             return None;
         };
-        let bind_group = gfx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("script_texture_bind_group"),
-            layout: &gfx.texture_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(texture.view()),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&gfx.sampler),
-                },
-            ],
-        });
-        Some(ScriptBindGroup { bind_group })
+        match texture_bind_group(&gfx.device, &gfx.texture_bgl, &gfx.sampler, view) {
+            Ok(group) => Some(group),
+            Err(error) => {
+                self.error(error);
+                None
+            }
+        }
     }
 
     /// Create a compute pipeline from a shader and its entry point.
@@ -2288,7 +2388,10 @@ impl Ctx {
             self.error(format!("compute bind group: {}", msg));
             return None;
         }
-        Some(ScriptBindGroup { bind_group })
+        Some(ScriptBindGroup {
+            bind_group,
+            scope: None,
+        })
     }
 
     /// Shared body of the sprite-vertex constructors: one textured quad
@@ -2654,7 +2757,6 @@ fn module() -> Result<rune::Module, rune::ContextError> {
     m.function_meta(Ctx::read_png)?;
     m.function_meta(Ctx::create_shader)?;
     m.function_meta(Ctx::create_render_pipeline)?;
-    m.function_meta(Ctx::create_point_pipeline)?;
     m.function_meta(Ctx::create_transform_bind_group)?;
     m.function_meta(Ctx::create_transform_params_bind_group)?;
     m.function_meta(Ctx::create_texture_bind_group)?;
@@ -2672,6 +2774,9 @@ fn module() -> Result<rune::Module, rune::ContextError> {
     m.ty::<ViewInfo>()?;
     m.ty::<crate::gfx::color::Rgba8>()?;
     m.ty::<ScriptTexture>()?;
+    m.ty::<ScriptTextureView>()?;
+    m.function_meta(ScriptTexture::view)?;
+    m.function_meta(ScriptTexture::raw_view)?;
     m.function_meta(ScriptTexture::width)?;
     m.function_meta(ScriptTexture::height)?;
     m.function_meta(ScriptTexture::upload)?;
@@ -2694,6 +2799,8 @@ fn module() -> Result<rune::Module, rune::ContextError> {
     m.ty::<ScriptEncoder>()?;
     m.function_meta(ScriptEncoder::begin_render_pass)?;
     m.function_meta(ScriptEncoder::begin_view_pass)?;
+    m.function_meta(ScriptEncoder::view_layer)?;
+    m.function_meta(ScriptEncoder::view_staging)?;
     m.function_meta(ScriptEncoder::begin_staging_pass)?;
     m.function_meta(ScriptEncoder::view_bind_group)?;
     m.function_meta(ScriptEncoder::begin_compute_pass)?;
@@ -3238,10 +3345,14 @@ impl PluginHost {
             gfx,
             ..
         } = self;
+        if let Some(gfx) = gfx.as_ref() {
+            gfx.frame.fetch_add(1, Ordering::Relaxed);
+        }
         let encoder_gfx = gfx.as_ref().map(|g| EncoderGfx {
             device: g.device.clone(),
             texture_bgl: g.texture_bgl.clone(),
             sampler: g.sampler.clone(),
+            frame: g.frame.clone(),
         });
 
         for i in 0..plugins.len() {
@@ -5178,6 +5289,201 @@ mod test {
     "#;
 
     #[test]
+    fn gpu_descriptors_validate_and_can_be_reused() {
+        let engine = ScriptEngine::new().unwrap();
+        let descriptor = |expression: &str| {
+            engine
+                .compile_str("options", &format!("pub fn make() {{ {expression} }}"))
+                .unwrap()
+                .call("make", ())
+                .unwrap()
+        };
+        let value = descriptor(
+            r##"#{ vertex: "v", fragment: "f", blend: "replace", topology: "point_list", vertex_layout: "sprite" }"##,
+        );
+        let object = value.borrow_ref::<rune::runtime::Object>().unwrap();
+        for _ in 0..2 {
+            let options = PipelineOptions::parse(&object).unwrap();
+            assert_eq!(options.blend, wgpu::BlendState::REPLACE);
+            assert_eq!(options.topology, wgpu::PrimitiveTopology::PointList);
+            assert!(options.sprite, "topology must not select the vertex layout");
+        }
+        let value = descriptor(
+            r##"#{ vertex: "v", fragment: "f", blend: #{ color: #{ src: "zero", dst: "one_minus_src_alpha", op: "add" }, alpha: #{ src: "zero", dst: "one_minus_src_alpha", op: "add" } } }"##,
+        );
+        let options =
+            PipelineOptions::parse(&value.borrow_ref::<rune::runtime::Object>().unwrap()).unwrap();
+        assert_eq!(options.blend.alpha.src_factor, wgpu::BlendFactor::Zero);
+        assert_eq!(
+            options.blend.alpha.dst_factor,
+            wgpu::BlendFactor::OneMinusSrcAlpha
+        );
+        for expression in [
+            r##"#{ vertex: "v", fragment: "f" }"##,
+            r##"#{ vertex: "v", fragment: "f", blend: "alhpa" }"##,
+            r##"#{ vertex: "v", fragment: "f", blend: "alpha", textures: -1 }"##,
+            r##"#{ vertex: "v", fragment: "f", blend: "alpha", texture: 1 }"##,
+            r##"#{ vertex: "v", fragment: "f", blend: #{ color: #{ src: "zero", dst: "one", op: "add" } } }"##,
+        ] {
+            let value = descriptor(expression);
+            assert!(
+                PipelineOptions::parse(&value.borrow_ref::<rune::runtime::Object>().unwrap())
+                    .is_err(),
+                "{expression}"
+            );
+        }
+        for expression in [
+            r##"#{ load: "load", clear: [0.0, 0.0, 0.0, 0.0] }"##,
+            r##"#{ load: "clear", clear: [0.0] }"##,
+            r##"#{ load: "keep" }"##,
+        ] {
+            let value = descriptor(expression);
+            assert!(
+                PassOptions::parse(&value.borrow_ref::<rune::runtime::Object>().unwrap()).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_replace_preserves_neighbors_order_and_texture_view_lifetimes() {
+        let Some(gfx) = test_gfx() else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.wgsl"), TEST_WGSL).unwrap();
+        write_plugin(
+            dir.path(),
+            "p",
+            r##"
+            pub fn init(rx) {
+                let shader = rx.create_shader(rx.read_file("test.wgsl").unwrap()).unwrap();
+                let replace = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "replace" }).unwrap();
+                let alpha = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
+                let brush = rx.create_texture(1, 1).unwrap();
+                brush.fill(rx::rgba(0, 0, 0, 0));
+                let blue = rx.create_texture(1, 1).unwrap();
+                blue.fill(rx::rgb(0, 0, 255));
+                let out = rx.create_texture(4, 1).unwrap();
+                #{ replace, alpha, brush, blue, out, persistent: out.view(), saved: None, binding: None }
+            }
+            fn draw(rx, pass, state, pipeline, texture, x) {
+                pass.set_pipeline(pipeline).unwrap();
+                pass.set_bind_group(0, rx.create_transform_bind_group(4, 1, rx::mat4_identity()).unwrap()).unwrap();
+                pass.set_bind_group(1, rx.create_texture_bind_group(texture.view()).unwrap()).unwrap();
+                let vertices = rx.create_sprite_vertices(texture, #{ dst: rx::rect(x, 0.0, x + 1.0, 1.0) }).unwrap();
+                pass.set_vertex_buffer(0, vertices).unwrap();
+                pass.draw(vertices.count(), 1).unwrap();
+            }
+            pub fn shade(state, rx, encoder) {
+                let id = rx.active_view_id();
+                if state.saved.is_some() {
+                    assert!(encoder.begin_render_pass(state.saved.unwrap(), #{ load: "load" }).is_err());
+                    let pass = encoder.begin_render_pass(state.persistent, #{ load: "load" }).unwrap();
+                    assert!(pass.set_bind_group(1, state.binding.unwrap()).is_err());
+                    pass.end();
+                    return;
+                }
+                assert!(encoder.view_layer(-1).is_err());
+                assert!(encoder.view_layer(65536 + id).is_err());
+                let target = encoder.view_layer(id).unwrap();
+                let pass = encoder.begin_render_pass(target, #{ load: "load" }).unwrap();
+                draw(rx, pass, state, state.replace, state.blue, 1.0);
+                draw(rx, pass, state, state.replace, state.blue, 2.0);
+                draw(rx, pass, state, state.replace, state.brush, 2.0);
+                draw(rx, pass, state, state.alpha, state.brush, 0.0);
+                pass.end();
+                let binding = rx.create_texture_bind_group(target).unwrap();
+                let pass = encoder.begin_render_pass(state.persistent, #{ load: "clear" }).unwrap();
+                pass.set_pipeline(state.replace).unwrap();
+                pass.set_bind_group(0, rx.create_transform_bind_group(4, 1, rx::mat4_identity()).unwrap()).unwrap();
+                pass.set_bind_group(1, binding).unwrap();
+                let vertices = rx.create_sprite_vertices(state.out, #{ dst: rx::rect(0.0, 0.0, 4.0, 1.0) }).unwrap();
+                pass.set_vertex_buffer(0, vertices).unwrap();
+                pass.draw(vertices.count(), 1).unwrap();
+                pass.end();
+                let staging = encoder.view_staging(id).unwrap();
+                encoder.begin_render_pass(staging, #{ load: "clear", clear: [0.0, 1.0, 0.0, 1.0] }).unwrap().end();
+                state.saved = Some(target);
+                state.binding = Some(binding);
+            }
+            pub fn out(state) { state.out }
+            pub fn saved(state) { state.saved.unwrap() }
+        "##,
+        );
+        let mut session = test_session().with_blank(crate::view::FileStatus::NoFile, 4, 1);
+        let mut host = PluginHost::new(Some(dir.path().to_path_buf())).unwrap();
+        host.attach_gfx(gfx.device.clone(), gfx.queue.clone());
+        host.load(&mut session);
+        assert_eq!(
+            host.plugins().filter(|p| p.enabled).count(),
+            1,
+            "{}",
+            session.message
+        );
+        let layer = ScriptTexture::create(&gfx, 4, 1);
+        layer.write(&[255, 0, 0, 128].repeat(4));
+        let staging = ScriptTexture::create(&gfx, 4, 1);
+        let srgb = |texture: &ScriptTexture| {
+            texture
+                .wgpu_texture()
+                .create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(SCRIPT_TEXTURE_FORMAT),
+                    ..Default::default()
+                })
+        };
+        for frame in 0..2 {
+            let mut targets = ViewTargets::new();
+            targets.insert(
+                u16::from(session.views.active_id),
+                ViewTarget {
+                    layer: srgb(&layer),
+                    staging: srgb(&staging),
+                    width: 4,
+                    height: 1,
+                },
+            );
+            let encoder = host.dispatch_shade(
+                &mut session,
+                gfx.device.create_command_encoder(&Default::default()),
+                targets,
+            );
+            gfx.queue.submit(Some(encoder.finish()));
+            let plugin = host.plugins().next().unwrap();
+            let saved = plugin
+                .script
+                .call("saved", (plugin.state.clone(),))
+                .unwrap();
+            assert_eq!(
+                saved
+                    .borrow_ref::<ScriptTextureView>()
+                    .unwrap()
+                    .get()
+                    .is_ok(),
+                frame == 0,
+                "editor views survive shade but expire at the next frame"
+            );
+            assert_eq!(
+                host.plugins().filter(|p| p.enabled).count(),
+                1,
+                "{}",
+                session.message
+            );
+        }
+        let expected = [255, 0, 0, 128, 0, 0, 255, 255, 0, 0, 0, 0, 255, 0, 0, 128];
+        assert_eq!(layer.pixels(&gfx.device), expected);
+        let plugin = host.plugins().next().unwrap();
+        let out = plugin.script.call("out", (plugin.state.clone(),)).unwrap();
+        assert_eq!(
+            out.borrow_ref::<ScriptTexture>()
+                .unwrap()
+                .pixels(&gfx.device),
+            expected
+        );
+        assert_eq!(staging.pixels(&gfx.device), [0, 255, 0, 255].repeat(4));
+    }
+
+    #[test]
     fn shader_compile_error_is_reported() {
         let Some(gfx) = test_gfx() else {
             eprintln!("skipping: no GPU adapter");
@@ -5222,19 +5528,19 @@ mod test {
             pub fn init(rx) {
                 let wgsl = rx.read_file("test.wgsl").unwrap();
                 let shader = rx.create_shader(wgsl).unwrap();
-                let pipeline = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+                let pipeline = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
                 let source = rx.create_texture(4, 4).unwrap();
                 source.fill(rx::rgb(0, 0, 255));
                 let target = rx.create_texture(4, 4).unwrap();
                 let tbg = rx.create_transform_bind_group(4, 4, rx::mat4_identity()).unwrap();
-                let sbg = rx.create_texture_bind_group(source).unwrap();
+                let sbg = rx.create_texture_bind_group(source.view()).unwrap();
                 let verts = rx.create_sprite_vertices(source, #{
                     dst: rx::rect(0.0, 0.0, 4.0, 4.0),
                 }).unwrap();
                 #{ pipeline, target, tbg, sbg, verts }
             }
             pub fn shade(state, rx, encoder) {
-                let pass = encoder.begin_render_pass("test", state.target, "clear").unwrap();
+                let pass = encoder.begin_render_pass(state.target.view(), #{ label: "test", load: "clear" }).unwrap();
                 pass.set_pipeline(state.pipeline).unwrap();
                 pass.set_bind_group(0, state.tbg).unwrap();
                 pass.set_bind_group(1, state.sbg).unwrap();
@@ -5353,16 +5659,16 @@ mod test {
             pub fn init(rx) {
                 let wgsl = rx.read_file("scatter.wgsl").unwrap();
                 let shader = rx.create_shader(wgsl).unwrap();
-                let pipeline = rx.create_point_pipeline(shader, "vs_scatter", "fs_scatter", 1).unwrap();
+                let pipeline = rx.create_render_pipeline(shader, #{ vertex: "vs_scatter", fragment: "fs_scatter", textures: 1, blend: "alpha", topology: "point_list", vertex_layout: "none" }).unwrap();
                 let src = rx.create_texture(2, 2).unwrap();
                 src.upload(keys());
                 let map = rx.create_texture(8, 8).unwrap();
                 let tbg = rx.create_transform_bind_group(8, 8, rx::mat4_identity()).unwrap();
-                let sbg = rx.create_texture_bind_group(src).unwrap();
+                let sbg = rx.create_texture_bind_group(src.view()).unwrap();
                 #{ pipeline, map, tbg, sbg }
             }
             pub fn shade(state, rx, encoder) {
-                let pass = encoder.begin_render_pass("scatter", state.map, "clear").unwrap();
+                let pass = encoder.begin_render_pass(state.map.view(), #{ label: "scatter", load: "clear" }).unwrap();
                 pass.set_pipeline(state.pipeline).unwrap();
                 pass.set_bind_group(0, state.tbg).unwrap();
                 pass.set_bind_group(1, state.sbg).unwrap();
@@ -5427,18 +5733,18 @@ mod test {
             r#"
             pub fn init(rx) {
                 let shader = rx.create_shader(rx.read_file("test.wgsl").unwrap()).unwrap();
-                let pipeline = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+                let pipeline = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
                 let pixels = rx.view_pixels(rx.active_view_id(), rx::rect(1.0, 0.0, 3.0, 2.0)).unwrap();
                 let source = rx.create_texture(2, 2).unwrap();
                 source.upload(pixels);
                 let target = rx.create_texture(6, 5).unwrap();
                 let tbg = rx.create_transform_bind_group(6, 5, rx::mat4_identity()).unwrap();
-                let sbg = rx.create_texture_bind_group(source).unwrap();
+                let sbg = rx.create_texture_bind_group(source.view()).unwrap();
                 let verts = rx.create_sprite_vertices(source, #{ dst: rx::rect(1.0, 1.0, 3.0, 3.0) }).unwrap();
                 #{ pipeline, target, tbg, sbg, verts }
             }
             pub fn shade(state, rx, encoder) {
-                let pass = encoder.begin_render_pass("coordinates", state.target, "clear").unwrap();
+                let pass = encoder.begin_render_pass(state.target.view(), #{ label: "coordinates", load: "clear" }).unwrap();
                 pass.set_pipeline(state.pipeline).unwrap();
                 pass.set_bind_group(0, state.tbg).unwrap();
                 pass.set_bind_group(1, state.sbg).unwrap();
@@ -5523,7 +5829,7 @@ mod test {
             pub fn init(rx) {
                 let wgsl = rx.read_file("test.wgsl").unwrap();
                 let shader = rx.create_shader(wgsl).unwrap();
-                let pipeline = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+                let pipeline = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
                 let brush = rx.create_texture(1, 1).unwrap();
                 let out = rx.create_texture(4, 4).unwrap();
                 // Ortho normalizes, so 4x4 transforms and a (0,0,4,4)
@@ -5538,7 +5844,7 @@ mod test {
                 state.brush.fill(color);
                 let id = rx.active_view_id();
 
-                let bbg = rx.create_texture_bind_group(state.brush).unwrap();
+                let bbg = rx.create_texture_bind_group(state.brush.view()).unwrap();
                 let pass = encoder.begin_view_pass("paint", id, "clear").unwrap();
                 pass.set_pipeline(state.pipeline).unwrap();
                 pass.set_bind_group(0, state.tbg).unwrap();
@@ -5548,7 +5854,7 @@ mod test {
                 pass.end();
 
                 let vbg = encoder.view_bind_group(id).unwrap();
-                let pass = encoder.begin_render_pass("sample", state.out, "clear").unwrap();
+                let pass = encoder.begin_render_pass(state.out.view(), #{ label: "sample", load: "clear" }).unwrap();
                 pass.set_pipeline(state.pipeline).unwrap();
                 pass.set_bind_group(0, state.tbg).unwrap();
                 pass.set_bind_group(1, vbg).unwrap();
@@ -5734,7 +6040,7 @@ mod test {
             pub fn init(rx) {
                 let wgsl = rx.read_file("tint.wgsl").unwrap();
                 let shader = rx.create_shader(wgsl).unwrap();
-                let pipeline = rx.create_render_pipeline(shader, "vs_main", "fs_main", 0).unwrap();
+                let pipeline = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 0, blend: "alpha" }).unwrap();
                 let target = rx.create_texture(4, 4).unwrap();
                 let source = rx.create_texture(4, 4).unwrap();
                 if rx.create_transform_params_bind_group(4, 4, rx::mat4_identity(), []).is_some() {
@@ -5750,7 +6056,7 @@ mod test {
                 #{ pipeline, target, tbg, verts }
             }
             pub fn shade(state, rx, encoder) {
-                let pass = encoder.begin_render_pass("tint", state.target, "clear").unwrap();
+                let pass = encoder.begin_render_pass(state.target.view(), #{ label: "tint", load: "clear" }).unwrap();
                 pass.set_pipeline(state.pipeline).unwrap();
                 pass.set_bind_group(0, state.tbg).unwrap();
                 pass.set_vertex_buffer(0, state.verts).unwrap();
@@ -5893,11 +6199,11 @@ mod test {
             pub fn init(rx) {
                 let wgsl = rx.read_file("test.wgsl").unwrap();
                 let shader = rx.create_shader(wgsl).unwrap();
-                let pipeline = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+                let pipeline = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
                 let source = rx.create_texture(4, 4).unwrap();
                 source.fill(rx::rgb(0, 0, 255));
                 let tbg = rx.create_transform_bind_group(4, 4, rx::mat4_identity()).unwrap();
-                let sbg = rx.create_texture_bind_group(source).unwrap();
+                let sbg = rx.create_texture_bind_group(source.view()).unwrap();
                 let verts = rx.create_sprite_vertices(source, #{
                     dst: rx::rect(0.0, 0.0, 4.0, 4.0),
                 }).unwrap();
@@ -5935,7 +6241,7 @@ mod test {
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("screen_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: screen.view(),
+                    view: screen.wgpu_view(),
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -5947,7 +6253,7 @@ mod test {
                 occlusion_query_set: None,
             })
             .forget_lifetime();
-        let encoder = host.dispatch_render(&mut session, encoder, pass, screen.view());
+        let encoder = host.dispatch_render(&mut session, encoder, pass, screen.wgpu_view());
         gfx.queue.submit(std::iter::once(encoder.finish()));
 
         assert_eq!(
@@ -6005,11 +6311,11 @@ mod test {
             pub fn init(rx) {
                 let wgsl = rx.read_file("test.wgsl").unwrap();
                 let shader = rx.create_shader(wgsl).unwrap();
-                let pipeline = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+                let pipeline = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
                 let source = rx.create_texture(4, 4).unwrap();
                 source.fill(rx::rgb(0, 0, 255));
                 let tbg = rx.create_transform_bind_group(4, 4, rx::mat4_identity()).unwrap();
-                let sbg = rx.create_texture_bind_group(source).unwrap();
+                let sbg = rx.create_texture_bind_group(source.view()).unwrap();
                 let verts = rx.create_sprite_vertices(source, #{
                     dst: rx::rect(0.0, 0.0, 4.0, 4.0),
                 }).unwrap();
@@ -6037,7 +6343,7 @@ mod test {
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("screen_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: screen.view(),
+                    view: screen.wgpu_view(),
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -6049,7 +6355,7 @@ mod test {
                 occlusion_query_set: None,
             })
             .forget_lifetime();
-        let encoder = host.dispatch_render(&mut session, encoder, pass, screen.view());
+        let encoder = host.dispatch_render(&mut session, encoder, pass, screen.wgpu_view());
         gfx.queue.submit(std::iter::once(encoder.finish()));
 
         let enabled: Vec<&str> = host
@@ -6089,7 +6395,7 @@ mod test {
                 match state.pass {
                     None => {
                         // Store the pass across frames (misuse).
-                        state.pass = Some(encoder.begin_render_pass("p", state.target, "clear").unwrap());
+                        state.pass = Some(encoder.begin_render_pass(state.target.view(), #{ label: "p", load: "clear" }).unwrap());
                     }
                     Some(pass) => {
                         // The host ended it when the previous hook

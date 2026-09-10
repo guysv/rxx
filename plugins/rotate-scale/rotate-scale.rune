@@ -21,14 +21,14 @@ const PIVOT_HALF = 6.0;
 
 pub fn init(rx) {
     let nearest_shader = rx.create_shader(rx.read_file("nearest.wgsl").unwrap()).unwrap();
-    let nearest = rx.create_render_pipeline(nearest_shader, "vs_main", "fs_main", 1).unwrap();
+    let nearest = rx.create_render_pipeline(nearest_shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
     let cleanedge_shader = rx.create_shader(rx.read_file("cleanedge.wgsl").unwrap()).unwrap();
-    let cleanedge = rx.create_render_pipeline(cleanedge_shader, "vs_main", "fs_main", 1).unwrap();
+    let cleanedge = rx.create_render_pipeline(cleanedge_shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
     let mmpx_shader = rx.create_shader(rx.read_file("mmpx.wgsl").unwrap()).unwrap();
-    let mmpx = rx.create_render_pipeline(mmpx_shader, "vs_main", "fs_mmpx", 1).unwrap();
+    let mmpx = rx.create_render_pipeline(mmpx_shader, #{ vertex: "vs_main", fragment: "fs_mmpx", textures: 1, blend: "alpha" }).unwrap();
     let rotsprite_shader = rx.create_shader(rx.read_file("rotsprite.wgsl").unwrap()).unwrap();
-    let rotsprite_epx = rx.create_render_pipeline(rotsprite_shader, "vs_main", "fs_epx", 1).unwrap();
-    let rotsprite_final = rx.create_render_pipeline(rotsprite_shader, "vs_main", "fs_final", 1).unwrap();
+    let rotsprite_epx = rx.create_render_pipeline(rotsprite_shader, #{ vertex: "vs_main", fragment: "fs_epx", textures: 1, blend: "alpha" }).unwrap();
+    let rotsprite_final = rx.create_render_pipeline(rotsprite_shader, #{ vertex: "vs_main", fragment: "fs_final", textures: 1, blend: "alpha" }).unwrap();
 
     rx.declare_setting("rotate-scale/algo", "");
     // Selects RotSprite's internal x2 pass. Empty means EPX; built-in
@@ -406,13 +406,13 @@ fn active_view(state, rx) {
 
 fn sprite_pass(rx, encoder, pipeline, label, transform, target, source, dst, ortho_w, ortho_h, clear) {
     let tbg = rx.create_transform_bind_group(ortho_w, ortho_h, transform).unwrap();
-    let sbg = rx.create_texture_bind_group(source).unwrap();
+    let sbg = rx.create_texture_bind_group(source.view()).unwrap();
     let verts = rx.create_sprite_vertices(source, #{ dst }).unwrap();
     let load = if clear { "clear" } else { "load" };
     let pass = if target is i64 {
         encoder.begin_view_pass(label, target, "load").unwrap()
     } else {
-        encoder.begin_render_pass(label, target, load).unwrap()
+        encoder.begin_render_pass(target.view(), #{ label: label, load: load }).unwrap()
     };
     pass.set_pipeline(pipeline).unwrap();
     pass.set_bind_group(0, tbg).unwrap();
@@ -563,7 +563,7 @@ pub fn shade(state, rx, encoder) {
                 state.preview_width = view.width;
                 state.preview_height = view.height;
             }
-            encoder.begin_render_pass("rotate-preview-clear", state.preview, "clear").unwrap().end();
+            encoder.begin_render_pass(state.preview.view(), #{ label: "rotate-preview-clear", load: "clear" }).unwrap().end();
             target = state.preview;
         }
         let args = [encoder, transform, target, state.clipboard, dst, view.width, view.height];
@@ -579,7 +579,7 @@ pub fn shade(state, rx, encoder) {
     }
 
     let tbg = rx.create_transform_bind_group(view.width, view.height, sprite_transform).unwrap();
-    let sbg = rx.create_texture_bind_group(source).unwrap();
+    let sbg = rx.create_texture_bind_group(source.view()).unwrap();
     let verts = rx.create_sprite_vertices(source, #{ dst: sprite_dst, opacity }).unwrap();
 
     let pass = if to_view {

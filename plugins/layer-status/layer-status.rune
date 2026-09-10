@@ -21,7 +21,7 @@ const EYE_CLOSED = 1.0; // cell 1
 
 pub fn init(rx) {
     let shader = rx.create_shader(rx.read_file("sprite.wgsl").unwrap()).unwrap();
-    let show = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+    let show = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
 
     let (w, h, px) = rx.read_png("layers.png").unwrap();
     let icons = rx.create_texture(w, h).unwrap();
@@ -85,7 +85,7 @@ pub fn render(state, rx, pass) {
     let (x, y0, row_h) = layout(sw as f64, sh as f64, n);
 
     let tbg = rx.create_transform_bind_group(sw, sh, rx::mat4_identity()).unwrap();
-    let sbg = rx.create_texture_bind_group(state.icons).unwrap();
+    let sbg = rx.create_texture_bind_group(state.icons.view()).unwrap();
     pass.set_pipeline(state.show).unwrap();
     pass.set_bind_group(0, tbg).unwrap();
     pass.set_bind_group(1, sbg).unwrap();

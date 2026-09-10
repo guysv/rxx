@@ -5,7 +5,7 @@
 pub fn init(rx) {
     let wgsl = rx.read_file("selection-outline.wgsl").unwrap();
     let shader = rx.create_shader(wgsl).unwrap();
-    let pipeline = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+    let pipeline = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
 
     rx.register_command("selection/outline", [], "Outline the selection", outline);
 
@@ -55,7 +55,7 @@ pub fn shade(state, rx, encoder) {
     let view = target.unwrap();
 
     let tbg = rx.create_transform_bind_group(view.width, view.height, rx::mat4_identity()).unwrap();
-    let sbg = rx.create_texture_bind_group(job.clipboard).unwrap();
+    let sbg = rx.create_texture_bind_group(job.clipboard.view()).unwrap();
     let verts = rx.create_sprite_vertices(job.clipboard, #{ dst: job.dst, color: rx.fg() }).unwrap();
 
     let pass = encoder.begin_view_pass("selection-outline", job.view_id, "load").unwrap();

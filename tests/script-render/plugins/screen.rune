@@ -9,7 +9,7 @@
 pub fn init(rx) {
     let wgsl = rx.read_file("screen.wgsl").unwrap();
     let shader = rx.create_shader(wgsl).unwrap();
-    let pipeline = rx.create_render_pipeline(shader, "vs_main", "fs_main", 1).unwrap();
+    let pipeline = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
 
     let tex = rx.create_texture(8, 8).unwrap();
     let data = Bytes::new();
@@ -27,7 +27,7 @@ pub fn init(rx) {
 
 fn quad(state, rx, pass, transform, w, h) {
     let tbg = rx.create_transform_bind_group(w, h, transform).unwrap();
-    let sbg = rx.create_texture_bind_group(state.tex).unwrap();
+    let sbg = rx.create_texture_bind_group(state.tex.view()).unwrap();
     let v = rx.create_sprite_vertices(state.tex, #{ dst: rx::rect(0.0, 0.0, 64.0, 64.0) }).unwrap();
     pass.set_pipeline(state.pipeline).unwrap();
     pass.set_bind_group(0, tbg).unwrap();
