@@ -1,0 +1,94 @@
+00000 0000000 char/received ':'
+00001 0000010 char/received 's'
+00002 0000020 char/received 'e'
+00003 0000030 char/received 't'
+00004 0000040 char/received ' '
+00005 0000050 char/received 'a'
+00006 0000060 char/received 'n'
+00007 0000070 char/received 'i'
+00008 0000080 char/received 'm'
+00009 0000090 char/received 'a'
+00010 0000100 char/received 't'
+00011 0000110 char/received 'i'
+00012 0000120 char/received 'o'
+00013 0000130 char/received 'n'
+00014 0000140 char/received ' '
+00015 0000150 char/received '='
+00016 0000160 char/received ' '
+00017 0000170 char/received 'o'
+00018 0000180 char/received 'n'
+00019 0000190 keyboard/input <return> pressed
+00020 0000200 keyboard/input <return> released
+00021 0000400 keyboard/input m pressed
+00022 0000410 keyboard/input m released
+00023 0000610 keyboard/input m pressed
+00024 0000620 keyboard/input m released
+00025 0000820 keyboard/input n pressed
+00026 0000830 keyboard/input n released
+00027 0001030 keyboard/input n pressed
+00028 0001040 keyboard/input n released
+00029 0001240 keyboard/input n pressed
+00030 0001250 keyboard/input n released
+00031 0002250 cursor/moved 0 0
+00032 0002260 char/received ':'
+00033 0002270 char/received 'e'
+00034 0002280 char/received 'c'
+00035 0002290 char/received 'h'
+00036 0002300 char/received 'o'
+00037 0002310 char/received ' '
+00038 0002320 char/received 'a'
+00039 0002330 char/received 'n'
+00040 0002340 char/received 'i'
+00041 0002350 char/received 'm'
+00042 0002360 char/received 'a'
+00043 0002370 char/received 't'
+00044 0002380 char/received 'i'
+00045 0002390 char/received 'o'
+00046 0002400 char/received 'n'
+00047 0002410 char/received '/'
+00048 0002420 char/received 'm'
+00049 0002430 char/received 'a'
+00050 0002440 char/received 'n'
+00051 0002450 char/received 'u'
+00052 0002460 char/received 'a'
+00053 0002470 char/received 'l'
+00054 0002480 keyboard/input <return> pressed
+00055 0002490 keyboard/input <return> released
+00056 0002500 char/received ':'
+00057 0002510 char/received 's'
+00058 0002520 char/received 'e'
+00059 0002530 char/received 't'
+00060 0002540 char/received ' '
+00061 0002550 char/received 'a'
+00062 0002560 char/received 'n'
+00063 0002570 char/received 'i'
+00064 0002580 char/received 'm'
+00065 0002590 char/received 'a'
+00066 0002600 char/received 't'
+00067 0002610 char/received 'i'
+00068 0002620 char/received 'o'
+00069 0002630 char/received 'n'
+00070 0002640 char/received '/'
+00071 0002650 char/received 'm'
+00072 0002660 char/received 'a'
+00073 0002670 char/received 'n'
+00074 0002680 char/received 'u'
+00075 0002690 char/received 'a'
+00076 0002700 char/received 'l'
+00077 0002710 char/received ' '
+00078 0002720 char/received '='
+00079 0002730 char/received ' '
+00080 0002740 char/received 'o'
+00081 0002750 char/received 'f'
+00082 0002760 char/received 'f'
+00083 0002770 keyboard/input <return> pressed
+00084 0002780 keyboard/input <return> released
+00085 0002940 cursor/moved 0 0
+00086 0003100 cursor/moved 0 0
+00087 0003260 cursor/moved 0 0
+00088 0003420 cursor/moved 0 0
+00089 0003580 cursor/moved 0 0
+00090 0003740 cursor/moved 0 0
+00091 0003750 keyboard/input n pressed
+00092 0003760 keyboard/input n released
+00093 0004760 cursor/moved 0 0

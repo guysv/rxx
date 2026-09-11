@@ -330,6 +330,16 @@ impl<T> Animation<T> {
         }
     }
 
+    pub fn step_back(&mut self) {
+        if self.sequence.is_empty() {
+            self.index = (self.index + self.len() - 1) % self.len();
+        } else {
+            self.sequence_index =
+                (self.sequence_index + self.sequence.len() - 1) % self.sequence.len();
+            self.index = self.sequence[self.sequence_index];
+        }
+    }
+
     pub fn val(&self) -> &T {
         &self.frames[self.index % self.len()]
     }
@@ -1125,6 +1135,35 @@ impl<R> ViewManager<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animation_steps_backward_preserving_sequence_position() {
+        for sequence in [vec![], vec![3, 2, 1, 0], vec![0, 1, 2, 3, 2, 1]] {
+            let mut animation = Animation::new(vec![0, 1, 2, 3]);
+            assert!(animation.set_sequence(sequence));
+            for _ in 0..12 {
+                let before = (animation.index, animation.sequence_index);
+                animation.step_back();
+                animation.step();
+                assert_eq!((animation.index, animation.sequence_index), before);
+                animation.step();
+            }
+            animation.set_frame(0);
+            animation.step_back();
+            assert_eq!(
+                animation.index,
+                if animation.sequence().is_empty() {
+                    3
+                } else {
+                    1
+                }
+            );
+        }
+        let mut still = Animation::new(vec![0]);
+        still.step_back();
+        still.step();
+        assert_eq!(still.index, 0);
+    }
 
     #[test]
     fn animation_custom_sequence_steps_and_seeks() {

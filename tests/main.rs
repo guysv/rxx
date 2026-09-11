@@ -97,6 +97,11 @@ fn frames() {
 }
 
 #[test]
+fn animation_manual() {
+    test("animation-manual");
+}
+
+#[test]
 fn animation_delay() {
     test("animation-delay");
 }

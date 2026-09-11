@@ -48,6 +48,7 @@ debug             on/off             Debug mode
 checker           on/off             Alpha checker toggle
 scale             1.0..4.0           UI scale
 animation         on/off             View animation toggle
+animation/manual  on/off             Pause automatic playback
 animation/delay   1..1000            View animation delay (ms)
 background        #000000..#ffffff   Set background appearance to <color>
 grid              on/off             Grid display
@@ -466,12 +467,19 @@ impl KeyBinding {
     ) -> bool {
         match (input, self.input) {
             (Input::Key(key), Input::Key(k)) => {
+                let mut modifiers = modifiers;
+                match key {
+                    platform::Key::Control => modifiers.ctrl = false,
+                    platform::Key::Alt => modifiers.alt = false,
+                    platform::Key::Shift => modifiers.shift = false,
+                    _ => {}
+                }
                 key == k
                     && self.state == state
                     && self.mode_matches(mode)
                     && (self.modifiers == modifiers
                         || state == InputState::Released
-                        || key.is_modifier())
+                        || (key.is_modifier() && self.modifiers == ModifiersState::default()))
             }
             (Input::Character(a), Input::Character(b)) => {
                 // Nb. We only check the <ctrl> modifier with characters,
@@ -521,9 +529,9 @@ impl KeyBindings {
 
     /// Find the best key binding for some input state, by tier priority.
     ///
-    /// When multiple bindings match, the highest tier wins. Among
-    /// script-tier bindings, the longest matching mode-name prefix wins.
-    /// Among equals, the last-added one wins (previous behavior).
+    /// An explicit shifted chord wins over a standalone modifier fallback.
+    /// Otherwise the highest tier wins, followed by the longest matching
+    /// script-mode prefix. Among equals, the last-added binding wins.
     pub fn find(
         &self,
         input: Input,
@@ -531,7 +539,7 @@ impl KeyBindings {
         state: InputState,
         mode: Mode,
     ) -> Option<KeyBinding> {
-        let mut best: Option<(u8, usize, usize)> = None; // (priority, script_len, index)
+        let mut best: Option<(bool, u8, usize, usize)> = None;
 
         for (i, kb) in self.elems.iter().enumerate() {
             if !kb.is_match(input, state, modifiers, mode) {
@@ -539,18 +547,13 @@ impl KeyBindings {
             }
             let prio = kb.tier.priority();
             let script_len = kb.script_mode_match_len();
-            let wins = match best {
-                Some((best_prio, best_slen, _)) => {
-                    prio > best_prio || (prio == best_prio && script_len >= best_slen)
-                }
-                None => true,
-            };
-            if wins {
-                best = Some((prio, script_len, i));
+            let candidate = (kb.modifiers.shift, prio, script_len, i);
+            if best.is_none_or(|best| candidate > best) {
+                best = Some(candidate);
             }
         }
 
-        best.map(|(_, _, i)| self.elems[i].clone())
+        best.map(|(_, _, _, i)| self.elems[i].clone())
     }
 
     /// Iterate over all key bindings.
@@ -613,6 +616,7 @@ impl Default for Settings {
                 "input/mouse" => Value::Bool(true),
                 "scale" => Value::F64(1.0),
                 "animation" => Value::Bool(true),
+                "animation/manual" => Value::Bool(false),
                 "animation/delay" => Value::U32(160),
                 "ui/palette" => Value::Bool(true),
                 "ui/status" => Value::Bool(true),
@@ -702,6 +706,8 @@ pub struct Session {
     ignore_received_characters: bool,
     /// The set of keys currently pressed.
     keys_pressed: HashSet<platform::Key>,
+    /// Release actions paired with the binding selected when each key was pressed.
+    key_releases: HashMap<platform::Key, Command>,
     /// The list of all active key bindings.
     pub key_bindings: KeyBindings,
 
@@ -826,6 +832,7 @@ impl Session {
             palette: Palette::new(Self::PALETTE_CELL_SIZE, Self::PALETTE_HEIGHT as usize),
             key_bindings: KeyBindings::default(),
             keys_pressed: HashSet::new(),
+            key_releases: HashMap::new(),
             ignore_received_characters: false,
             cmdline: CommandLine::new(cwd, history_path, path::SUPPORTED_READ_FORMATS),
             mode: Mode::Normal,
@@ -1155,7 +1162,10 @@ impl Session {
     pub fn animation_delay(&self) -> Option<time::Duration> {
         let animations = self.views.iter().any(|v| v.animation.len() > 1);
 
-        if self.settings["animation"].is_set() && animations {
+        if self.settings["animation"].is_set()
+            && !self.settings["animation/manual"].is_set()
+            && animations
+        {
             let delay = self.settings["animation/delay"].to_u64();
             Some(time::Duration::from_millis(delay))
         } else {
@@ -1259,6 +1269,7 @@ impl Session {
         self.settings_changed.insert(name.to_owned());
 
         match name {
+            "animation/manual" => self.accumulator = time::Duration::ZERO,
             "p/height" => {
                 self.palette.height = new.to_u64() as usize;
                 self.center_palette();
@@ -2275,6 +2286,14 @@ impl Session {
                 if !self.keys_pressed.remove(&key) {
                     return;
                 }
+                // Release the binding selected on press, even if modifiers changed.
+                if let Some(command) = self.key_releases.remove(&key) {
+                    match plugins {
+                        Some(p) => self.run_command(command, p),
+                        None => self.command(command),
+                    }
+                }
+                return;
             }
 
             // While the mouse is down, don't accept keyboard input —
@@ -2343,6 +2362,16 @@ impl Session {
                 .key_bindings
                 .find(Input::Key(key), modifiers, state, self.mode)
             {
+                if !repeat && kb.is_toggle {
+                    if let Some(release) = self.key_bindings.elems.iter().find(|release| {
+                        release.input == kb.input
+                            && release.modifiers == kb.modifiers
+                            && release.tier == kb.tier
+                            && release.state == InputState::Released
+                    }) {
+                        self.key_releases.insert(key, release.command.clone());
+                    }
+                }
                 // For toggle-like key bindings, we don't want to run the command
                 // on key repeats. For regular key bindings, we run the command
                 // depending on if it's supposed to repeat. Script commands
@@ -2692,6 +2721,16 @@ impl Session {
 
                 self.check_selection();
                 self.organize_views();
+            }
+            Command::AnimNext | Command::AnimPrev => {
+                self.command(Command::Set("animation/manual".into(), Value::Bool(true)));
+                for view in self.views.iter_mut() {
+                    if matches!(cmd, Command::AnimNext) {
+                        view.animation.step();
+                    } else {
+                        view.animation.step_back();
+                    }
+                }
             }
             Command::FramePrev => {
                 let v = self.active_view().extent();
@@ -3276,18 +3315,24 @@ impl Session {
             Command::Map(map) => {
                 let KeyMapping {
                     input,
+                    modifiers,
                     press,
                     release,
                     tier,
                 } = *map;
+                let display = if modifiers.shift {
+                    format!("<shift-{}>", input.to_string().trim_matches(['<', '>']))
+                } else {
+                    input.to_string()
+                };
 
                 self.key_bindings.add(KeyBinding {
                     input,
                     command: press,
                     state: InputState::Pressed,
-                    modifiers: platform::ModifiersState::default(),
+                    modifiers,
                     is_toggle: release.is_some(),
-                    display: Some(format!("{}", input)),
+                    display: Some(display),
                     tier: tier.clone(),
                 });
                 if let Some(cmd) = release {
@@ -3295,7 +3340,7 @@ impl Session {
                         input,
                         command: cmd,
                         state: InputState::Released,
-                        modifiers: platform::ModifiersState::default(),
+                        modifiers,
                         is_toggle: true,
                         display: None,
                         tier,
@@ -3597,6 +3642,257 @@ mod test {
             .unwrap();
 
         assert_eq!(session.message.to_string(), "sourced through plugin host");
+    }
+
+    fn animation_test_session() -> Session {
+        let dirs = directories::ProjectDirs::from("io", "cloudhead", "rx").unwrap();
+        let base = directories::BaseDirs::new().unwrap();
+        let mut session = Session::new(640, 480, std::env::temp_dir(), dirs, base);
+        session.reset().unwrap();
+        session.mode = Mode::Normal;
+        session
+    }
+
+    fn animation_key(session: &mut Session, key: platform::Key, state: InputState, shift: bool) {
+        session.handle_keyboard_input(
+            platform::KeyboardInput {
+                key: Some(key),
+                state,
+                modifiers: ModifiersState {
+                    shift,
+                    ..Default::default()
+                },
+            },
+            &mut Execution::Normal,
+            None,
+        );
+    }
+
+    #[test]
+    fn manual_animation_steps_all_views_and_resumes() {
+        let mut session = animation_test_session();
+        let mut ids = Vec::new();
+        for frames in [4, 3, 1] {
+            session.blank(
+                FileStatus::New(crate::view::FileStorage::Single(
+                    format!("animation-{}.png", frames).into(),
+                )),
+                16,
+                16,
+            );
+            for _ in 1..frames {
+                session.command(Command::FrameAdd);
+            }
+            ids.push(session.views.active_id);
+        }
+        session
+            .views
+            .get_mut(ids[0])
+            .unwrap()
+            .animation
+            .set_sequence(vec![0, 1, 2, 3, 2, 1]);
+        for _ in 0..4 {
+            session.views.get_mut(ids[0]).unwrap().animation.step();
+        }
+        session
+            .views
+            .get_mut(ids[1])
+            .unwrap()
+            .animation
+            .set_sequence(vec![2, 1, 0]);
+        assert!(session.animation_delay().is_some());
+        session.accumulator = time::Duration::from_millis(100);
+        animation_key(&mut session, platform::Key::M, InputState::Pressed, false);
+        assert!(session.settings["animation/manual"].is_set());
+        assert!(session.settings["animation"].is_set());
+        assert!(session.animation_delay().is_none());
+        assert_eq!(session.accumulator, time::Duration::ZERO);
+        assert_eq!(session.views.get(ids[0]).unwrap().animation.index, 1);
+        assert_eq!(session.views.get(ids[1]).unwrap().animation.index, 2);
+        assert_eq!(session.views.get(ids[2]).unwrap().animation.index, 0);
+        animation_key(&mut session, platform::Key::M, InputState::Repeated, false);
+        assert_eq!(session.views.get(ids[0]).unwrap().animation.index, 0);
+        animation_key(&mut session, platform::Key::M, InputState::Released, false);
+        animation_key(&mut session, platform::Key::N, InputState::Pressed, false);
+        assert_eq!(session.views.get(ids[0]).unwrap().animation.index, 1);
+        animation_key(&mut session, platform::Key::N, InputState::Released, false);
+
+        let mut host = crate::script::PluginHost::new(None).unwrap();
+        session.update(
+            &mut vec![],
+            &mut Execution::Normal,
+            time::Duration::from_secs(10),
+            time::Duration::ZERO,
+            &mut host,
+        );
+        assert_eq!(session.views.get(ids[0]).unwrap().animation.index, 1);
+        animation_key(
+            &mut session,
+            platform::Key::Return,
+            InputState::Pressed,
+            true,
+        );
+        animation_key(
+            &mut session,
+            platform::Key::Return,
+            InputState::Released,
+            false,
+        );
+        assert!(!session.settings["animation/manual"].is_set());
+        let delay = session.animation_delay().unwrap();
+        session.update(
+            &mut vec![],
+            &mut Execution::Normal,
+            delay / 2,
+            time::Duration::ZERO,
+            &mut host,
+        );
+        assert_eq!(session.views.get(ids[0]).unwrap().animation.index, 1);
+        session.update(
+            &mut vec![],
+            &mut Execution::Normal,
+            delay / 2,
+            time::Duration::ZERO,
+            &mut host,
+        );
+        assert_eq!(session.views.get(ids[0]).unwrap().animation.index, 0);
+
+        let mut empty = animation_test_session();
+        empty.command(Command::AnimPrev);
+        empty.command(Command::AnimNext);
+        assert!(empty.settings["animation/manual"].is_set());
+    }
+
+    #[test]
+    fn shifted_return_toggles_without_repeating_or_adding_frames() {
+        let mut session = animation_test_session();
+        session.blank(FileStatus::NoFile, 16, 16);
+        for manual in [true, false] {
+            animation_key(&mut session, platform::Key::Return, InputState::Pressed, true);
+            assert_eq!(session.settings["animation/manual"].is_set(), manual);
+            animation_key(&mut session, platform::Key::Return, InputState::Repeated, true);
+            assert_eq!(session.settings["animation/manual"].is_set(), manual);
+            animation_key(&mut session, platform::Key::Return, InputState::Released, false);
+            assert_eq!(session.active_view().animation.len(), 1);
+        }
+        animation_key(&mut session, platform::Key::Return, InputState::Pressed, false);
+        animation_key(&mut session, platform::Key::Return, InputState::Released, false);
+        assert_eq!(session.active_view().animation.len(), 2);
+    }
+
+    #[test]
+    fn shifted_space_does_not_release_plain_space_binding() {
+        let mut session = animation_test_session();
+        let (mapping, _) = crate::cmd::KeyMapping::parser(BindingTier::General)
+            .parse("<shift-space> :toggle animation/manual")
+            .unwrap();
+        session.command(Command::Map(Box::new(mapping)));
+        session.tool = Tool::Sampler;
+        session.prev_tool = Some(Tool::default());
+        session.command(Command::Set("animation/manual".into(), Value::Bool(true)));
+        animation_key(
+            &mut session,
+            platform::Key::Space,
+            InputState::Pressed,
+            true,
+        );
+        animation_key(
+            &mut session,
+            platform::Key::Space,
+            InputState::Released,
+            false,
+        );
+        assert!(matches!(session.tool, Tool::Sampler));
+        assert!(!session.settings["animation/manual"].is_set());
+        animation_key(&mut session, platform::Key::Space, InputState::Pressed, true);
+        assert!(session.settings["animation/manual"].is_set());
+        animation_key(&mut session, platform::Key::Space, InputState::Repeated, true);
+        assert!(session.settings["animation/manual"].is_set());
+        animation_key(&mut session, platform::Key::Space, InputState::Released, false);
+        assert!(matches!(session.tool, Tool::Sampler));
+        animation_key(
+            &mut session,
+            platform::Key::Space,
+            InputState::Pressed,
+            false,
+        );
+        assert!(matches!(session.tool, Tool::Pan(_)));
+        animation_key(
+            &mut session,
+            platform::Key::Space,
+            InputState::Released,
+            true,
+        );
+        assert!(matches!(session.tool, Tool::Sampler));
+
+        // A shifted hold binding must also release after Shift is released first.
+        let (mapping, _) = crate::cmd::KeyMapping::parser(BindingTier::General)
+            .parse("<shift-space> :set debug = on {:set debug = off}")
+            .unwrap();
+        session.command(Command::Map(Box::new(mapping)));
+        animation_key(
+            &mut session,
+            platform::Key::Space,
+            InputState::Pressed,
+            true,
+        );
+        assert!(session.settings["debug"].is_set());
+        animation_key(
+            &mut session,
+            platform::Key::Space,
+            InputState::Released,
+            false,
+        );
+        assert!(!session.settings["debug"].is_set());
+    }
+
+    #[test]
+    fn shifted_modifiers_override_standalone_modifier_bindings() {
+        for (name, key) in [
+            ("ctrl", platform::Key::Control),
+            ("alt", platform::Key::Alt),
+        ] {
+            let mut session = animation_test_session();
+            // Add the standalone binding last: the more specific chord still wins.
+            for source in [
+                format!("<shift-{}> :set debug = on {{:set debug = off}}", name),
+                format!("<{}> :set animation/manual = on", name),
+            ] {
+                let (mapping, _) = crate::cmd::KeyMapping::parser(BindingTier::General)
+                    .parse(&source)
+                    .unwrap();
+                session.command(Command::Map(Box::new(mapping)));
+            }
+            let modifiers = ModifiersState {
+                shift: true,
+                ctrl: key == platform::Key::Control,
+                alt: key == platform::Key::Alt,
+                ..Default::default()
+            };
+            let binding = session
+                .key_bindings
+                .find(
+                    Input::Key(key),
+                    modifiers,
+                    InputState::Pressed,
+                    Mode::Normal,
+                )
+                .unwrap();
+            assert_eq!(binding.display.unwrap(), format!("<shift-{}>", name));
+            session.handle_keyboard_input(
+                platform::KeyboardInput {
+                    key: Some(key),
+                    state: InputState::Pressed,
+                    modifiers,
+                },
+                &mut Execution::Normal,
+                None,
+            );
+            assert!(session.settings["debug"].is_set());
+            assert!(!session.settings["animation/manual"].is_set());
+            session.release_inputs();
+            assert!(!session.settings["debug"].is_set());
+        }
     }
 
     #[test]

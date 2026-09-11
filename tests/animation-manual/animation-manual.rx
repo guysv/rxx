@@ -1,0 +1,9 @@
+set ui/cursor = off
+set ui/palette = off
+f/resize 8 8
+v/fill #ff0000
+f/add
+paint/color #00ff00 8 0
+f/add
+paint/color #0000ff 16 0
+set animation/delay = 160

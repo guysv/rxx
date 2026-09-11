@@ -67,6 +67,8 @@ pub enum Command {
     FrameRemove,
     FramePrev,
     FrameNext,
+    AnimNext,
+    AnimPrev,
     FrameResize(u32, u32),
 
     // Layers
@@ -161,6 +163,8 @@ impl Command {
                 | Self::Redo
                 | Self::ViewNext
                 | Self::ViewPrev
+                | Self::AnimNext
+                | Self::AnimPrev
                 | Self::SelectionMove(_, _)
                 | Self::SelectionJump(_)
                 | Self::SelectionResize(_, _)
@@ -211,6 +215,8 @@ impl fmt::Display for Command {
             Self::LayerFlatten => write!(f, "Flatten all visible layers into one"),
             Self::FramePrev => write!(f, "Navigate to previous frame"),
             Self::FrameNext => write!(f, "Navigate to next frame"),
+            Self::AnimNext => write!(f, "Pause and advance all animations"),
+            Self::AnimPrev => write!(f, "Pause and step all animations backward"),
             Self::Noop => write!(f, "No-op"),
             Self::PaletteAdd(c) => write!(f, "Add {color} to palette", color = c),
             Self::PaletteClear => write!(f, "Clear palette"),
@@ -327,6 +333,8 @@ impl From<Command> for String {
             Command::Pan(x, y) => format!("pan {} {}", x, y),
             Command::Quit => format!("q"),
             Command::Redo => format!("redo"),
+            Command::AnimNext => format!("a/next"),
+            Command::AnimPrev => format!("a/prev"),
             Command::FrameResize(w, h) => format!("f/resize {} {}", w, h),
             Command::Set(s, v) => format!("set {} = {}", s, v),
             Command::Slice(Some(n)) => format!("slice {}", n),
@@ -356,6 +364,7 @@ impl From<Command> for String {
 #[derive(PartialEq, Debug, Clone)]
 pub struct KeyMapping {
     pub input: Input,
+    pub modifiers: platform::ModifiersState,
     pub press: Command,
     pub release: Option<Command>,
     pub tier: BindingTier,
@@ -388,21 +397,50 @@ impl KeyMapping {
         );
 
         let character = between('\'', '\'', character())
-            .map(Input::Character)
+            .map(|c| (Input::Character(c), platform::ModifiersState::default()))
             .skip(whitespace())
             .then(press.clone())
             .map(|(input, press)| ((input, press), None));
-        let key = param::<platform::Key>()
-            .map(Input::Key)
-            .skip(whitespace())
-            .then(press)
-            .skip(optional(whitespace()))
-            .then(optional(between('{', '}', release)));
+        let shifted = between('<', '>', string("shift-").then(any::<_, String>(letter()))).try_map(
+            |(_, name)| {
+                if name == "shift" {
+                    return Err("shift-shift is not a supported binding".to_string());
+                }
+                let token = format!("<{}>", name);
+                let (key, _) = platform::Key::parser()
+                    .parse(&token)
+                    .map_err(|(e, _)| e.to_string())?;
+                Ok((
+                    Input::Key(key),
+                    platform::ModifiersState {
+                        shift: true,
+                        ..Default::default()
+                    },
+                ))
+            },
+        );
+        let key = Parser::new(
+            move |input| {
+                if input.starts_with("<shift-") {
+                    shifted.parse(input)
+                } else {
+                    platform::Key::parser().parse(input).map(|(key, rest)| {
+                        ((Input::Key(key), platform::ModifiersState::default()), rest)
+                    })
+                }
+            },
+            "<key>",
+        )
+        .skip(whitespace())
+        .then(press)
+        .skip(optional(whitespace()))
+        .then(optional(between('{', '}', release)));
 
         character
             .or(key)
-            .map(move |((input, press), release)| KeyMapping {
+            .map(move |(((input, modifiers), press), release)| KeyMapping {
                 input,
+                modifiers,
                 press,
                 release,
                 tier: tier.clone(),
@@ -1118,6 +1156,12 @@ impl Default for Commands {
                 "Flatten all visible layers into one",
                 |p| p.value(Command::LayerFlatten),
             )
+            .command("a/next", "Pause and advance all animations", |p| {
+                p.value(Command::AnimNext)
+            })
+            .command("a/prev", "Pause and step all animations backward", |p| {
+                p.value(Command::AnimPrev)
+            })
             .command("f/prev", "Navigate to previous frame", |p| {
                 p.value(Command::FramePrev)
             })
@@ -1614,6 +1658,43 @@ mod test {
         let (err, rest) = p.parse(":mode fnord").unwrap_err();
         assert_eq!(rest, "fnord");
         assert_eq!(err.to_string(), "unknown mode: fnord");
+    }
+
+    #[test]
+    fn shifted_named_keys_and_animation_commands() {
+        let parser = KeyMapping::parser(BindingTier::General);
+        for name in [
+            "up",
+            "down",
+            "left",
+            "right",
+            "ctrl",
+            "alt",
+            "space",
+            "return",
+            "backspace",
+            "tab",
+            "end",
+            "esc",
+        ] {
+            let source = format!("<shift-{}> :a/prev {{:a/next}}", name);
+            let (mapping, rest) = parser.parse(&source).unwrap();
+            assert!(rest.is_empty());
+            assert!(mapping.modifiers.shift);
+            assert_eq!(mapping.press, Command::AnimPrev);
+            assert_eq!(mapping.release, Some(Command::AnimNext));
+            assert!(mapping.press.repeats());
+        }
+        for invalid in ["<shift-shift>", "<shift-nope>", "<shift-n>"] {
+            assert!(parser.parse(&format!("{} :a/next", invalid)).is_err());
+        }
+        for command in [Command::AnimNext, Command::AnimPrev] {
+            let source = format!(":{}", String::from(command.clone()));
+            assert_eq!(
+                Commands::default().line_parser().parse(&source).unwrap().0,
+                command
+            );
+        }
     }
 
     #[test]
