@@ -4,7 +4,7 @@
 // attribute; the active layer's row is boxed. Clicking an eye toggles that
 // layer's visibility (UX is WIP).
 //
-// create_texture -> create_sprite_vertices, drawn in the `render` hook
+// create_texture -> pass.draw_sprite, drawn in the `render` hook
 // `mouse_input` hook carries no coords) and toggles via `run_builtin`.
 //
 // The icon atlas (layers.png) is 64x16: four 16x16 cells — eye-open,
@@ -20,9 +20,6 @@ const EYE_OPEN = 0.0;   // cell 0
 const EYE_CLOSED = 1.0; // cell 1
 
 pub fn init(rx) {
-    let shader = rx.create_shader(rx.read_file("sprite.wgsl").unwrap()).unwrap();
-    let show = rx.create_render_pipeline(shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
-
     let (w, h, px) = rx.read_png("layers.png").unwrap();
     let icons = rx.create_texture(w, h).unwrap();
     icons.upload(px);
@@ -32,7 +29,7 @@ pub fn init(rx) {
 
     // `mx`/`my` track the cursor (session coordinates) from `cursor_moved`, so
     // `mouse_input` — which carries no coords — can hit-test the icons.
-    #{ show, icons, mx: 0.0, my: 0.0 }
+    #{ icons, mx: 0.0, my: 0.0 }
 }
 
 // The active view's ViewInfo, or `None` if there isn't one.
@@ -84,21 +81,13 @@ pub fn render(state, rx, pass) {
     let (sw, sh) = rx.screen_size();
     let (x, y0, row_h) = layout(sw as f64, sh as f64, n);
 
-    let tbg = rx.create_transform_bind_group(sw, sh, rx::mat4_identity()).unwrap();
-    let sbg = rx.create_texture_bind_group(state.icons.view()).unwrap();
-    pass.set_pipeline(state.show).unwrap();
-    pass.set_bind_group(0, tbg).unwrap();
-    pass.set_bind_group(1, sbg).unwrap();
-
     for row in 0..n {
         let layer = row;
         let cell = if vis[layer] { EYE_OPEN } else { EYE_CLOSED };
         let src = rx::rect(cell * ICON, 0.0, cell * ICON + ICON, ICON);
         let r = icon_rect(x, y0, row_h, row);
         let dst = rx::rect(r.0, r.1, r.2, r.3);
-        let v = rx.create_sprite_vertices(state.icons, #{ src, dst }).unwrap();
-        pass.set_vertex_buffer(0, v).unwrap();
-        pass.draw(v.count(), 1).unwrap();
+        pass.draw_sprite(state.icons, #{ src, dst }).unwrap();
     }
 }
 

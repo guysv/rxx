@@ -142,6 +142,11 @@ fn plugin_load() {
 }
 
 #[test]
+fn miniview() {
+    plugin_test("miniview");
+}
+
+#[test]
 fn mode_vis() {
     plugin_test("mode-vis");
 }

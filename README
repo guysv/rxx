@@ -77,6 +77,14 @@ PLUGINS
   `RXX_PLUGIN_PATH`, local `plugins/`, then the user configuration plugin
   directory. If names collide, the first plugin found wins.
 
+  Plugin GPU drawing is documented in docs/gpu-api.md. For ordinary sprites,
+  use pass.draw_sprite(texture, #{ dst: rx::rect(...) }); the host supplies
+  the shader, pipeline, texture binding, and geometry.
+
+  :miniview opens a draggable preview panel. Click a frame or animation
+  preview to attach it; use its Target button to choose another source.
+  See plugins/miniview/README.md for controls.
+
 TROUBLESHOOTING
 
   If something isn't working like it's supposed to, there are various things

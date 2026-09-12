@@ -1,0 +1,109 @@
+00000 0000010 cursor/moved 100 100
+00010 0000110 keyboard/input m pressed
+00020 0000210 keyboard/input m released
+00030 0000310 cursor/moved 320 280
+00040 0000410 mouse/input pressed
+00050 0000510 mouse/input released
+00060 0000610 cursor/moved 520 30
+00070 0000710 mouse/input pressed
+00080 0000810 cursor/moved 270 205
+00090 0000910 mouse/input released
+00100 0001010 cursor/moved 350 300
+00110 0001110 mouse/input pressed
+00120 0001210 mouse/input released
+00130 0001310 cursor/moved 529 425
+00140 0001410 mouse/input pressed
+00150 0001510 cursor/moved 580 450
+00160 0001610 mouse/input released
+00170 0001710 cursor/moved 520 205
+00180 0001810 mouse/input pressed
+00190 0001910 mouse/input released
+00200 0002010 cursor/moved 320 280
+00210 0002110 keyboard/input <esc> pressed
+00220 0002210 keyboard/input <esc> released
+00230 0002310 char/received ':'
+00232 0002330 char/received 's'
+00234 0002350 char/received 'e'
+00236 0002370 char/received 't'
+00238 0002390 char/received ' '
+00240 0002410 char/received 'a'
+00242 0002430 char/received 'n'
+00244 0002450 char/received 'i'
+00246 0002470 char/received 'm'
+00248 0002490 char/received 'a'
+00250 0002510 char/received 't'
+00252 0002530 char/received 'i'
+00254 0002550 char/received 'o'
+00256 0002570 char/received 'n'
+00258 0002590 char/received ' '
+00260 0002610 char/received '='
+00262 0002630 char/received ' '
+00264 0002650 char/received 'o'
+00266 0002670 char/received 'n'
+00268 0002690 keyboard/input <return> pressed
+00278 0002790 keyboard/input <return> released
+00288 0002890 char/received ':'
+00290 0002910 char/received 'm'
+00292 0002930 char/received 'i'
+00294 0002950 char/received 'n'
+00296 0002970 char/received 'i'
+00298 0002990 char/received 'v'
+00300 0003010 char/received 'i'
+00302 0003030 char/received 'e'
+00304 0003050 char/received 'w'
+00306 0003070 char/received '/'
+00308 0003090 char/received 's'
+00310 0003110 char/received 'e'
+00312 0003130 char/received 'l'
+00314 0003150 char/received 'e'
+00316 0003170 char/received 'c'
+00318 0003190 char/received 't'
+00320 0003210 keyboard/input <return> pressed
+00330 0003310 keyboard/input <return> released
+00340 0003410 cursor/moved 200 280
+00350 0003510 mouse/input pressed
+00360 0003610 mouse/input released
+00370 0003710 char/received ':'
+00372 0003730 char/received 'm'
+00374 0003750 char/received 'i'
+00376 0003770 char/received 'n'
+00378 0003790 char/received 'i'
+00380 0003810 char/received 'v'
+00382 0003830 char/received 'i'
+00384 0003850 char/received 'e'
+00386 0003870 char/received 'w'
+00388 0003890 char/received '/'
+00390 0003910 char/received 's'
+00392 0003930 char/received 'e'
+00394 0003950 char/received 'l'
+00396 0003970 char/received 'e'
+00398 0003990 char/received 'c'
+00400 0004010 char/received 't'
+00402 0004030 keyboard/input <return> pressed
+00412 0004130 keyboard/input <return> released
+00422 0004230 mouse/input right pressed
+00432 0004330 mouse/input right released
+00442 0004430 keyboard/input h pressed
+00452 0004530 keyboard/input h released
+00462 0004630 keyboard/input s pressed
+00472 0004730 keyboard/input s released
+00482 0004830 cursor/moved 700 500
+00492 0004930 char/received ':'
+00494 0004950 char/received 'a'
+00496 0004970 char/received '/'
+00498 0004990 char/received 'n'
+00500 0005010 char/received 'e'
+00502 0005030 char/received 'x'
+00504 0005050 char/received 't'
+00506 0005070 keyboard/input <return> pressed
+00516 0005170 keyboard/input <return> released
+00546 0005470 char/received ':'
+00548 0005490 char/received 'a'
+00550 0005510 char/received '/'
+00552 0005530 char/received 'n'
+00554 0005550 char/received 'e'
+00556 0005570 char/received 'x'
+00558 0005590 char/received 't'
+00560 0005610 keyboard/input <return> pressed
+00570 0005710 keyboard/input <return> released
+00600 0006010 cursor/moved 701 501

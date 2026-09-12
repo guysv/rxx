@@ -1,0 +1,7 @@
+[window]
+width = 800
+height = 600
+[assets]
+glyphs = "tests/assets/glyphs.png"
+[plugins]
+load = ["miniview"]

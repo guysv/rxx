@@ -53,3 +53,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         texel.a * in.opacity
     );
 }
+
+// Plugin sprite blits use multiplicative tint (white = unchanged).
+// The core renderer retains fs_main's color-replacement semantics.
+@fragment
+fn fs_blit(in: VertexOutput) -> @location(0) vec4<f32> {
+    let texel = textureSample(tex, tex_sampler, in.uv);
+    return vec4<f32>(texel.rgb * in.color.rgb, texel.a * in.color.a * in.opacity);
+}

@@ -23,6 +23,7 @@ use rune::{Context, Diagnostics, Source, Sources, Unit, Value, Vm};
 use crate::session::Session;
 
 mod gpu;
+mod sprite;
 use gpu::{PassOptions, PipelineOptions};
 
 ////////////////////////////////////////////////////////////////////////////
@@ -77,7 +78,8 @@ pub struct Gfx {
     /// groups. The texture layout and sampler are Arc'd so the shade
     /// encoder can hold them for `view_bind_group` (wgpu 23 resources
     /// don't implement `Clone` themselves).
-    transform_bgl: wgpu::BindGroupLayout,
+    transform_bgl: Arc<wgpu::BindGroupLayout>,
+    sprites: Arc<sprite::Blitter>,
     texture_bgl: std::sync::Arc<wgpu::BindGroupLayout>,
     /// Compute layouts per input count (index `n - 1`): inputs at
     /// bindings `0..n`, the storage output last at binding `n`.
@@ -193,13 +195,23 @@ impl Gfx {
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
+        let transform_bgl = Arc::new(transform_bgl);
+        let texture_bgl = Arc::new(texture_bgl);
+        let sampler = Arc::new(sampler);
+        let sprites = Arc::new(sprite::Blitter::new(
+            device.clone(),
+            transform_bgl.clone(),
+            texture_bgl.clone(),
+            sampler.clone(),
+        ));
         Self {
             device,
             queue,
             transform_bgl,
-            texture_bgl: std::sync::Arc::new(texture_bgl),
+            sprites,
+            texture_bgl,
             compute_bgls,
-            sampler: std::sync::Arc::new(sampler),
+            sampler,
             frame: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -289,7 +301,13 @@ impl ScriptTexture {
     /// A reusable sRGB texture view for rendering or sampling.
     #[rune::function]
     fn view(&self) -> ScriptTextureView {
+        self.sampled_view()
+    }
+
+    fn sampled_view(&self) -> ScriptTextureView {
         ScriptTextureView {
+            size: [self.width, self.height],
+            format: SCRIPT_TEXTURE_FORMAT,
             source: TextureViewSource::Owned(self.view.clone()),
             scope: None,
         }
@@ -299,6 +317,8 @@ impl ScriptTexture {
     #[rune::function]
     fn raw_view(&self) -> ScriptTextureView {
         ScriptTextureView {
+            size: [self.width, self.height],
+            format: wgpu::TextureFormat::Rgba8Unorm,
             source: TextureViewSource::Owned(self.raw_view.clone()),
             scope: None,
         }
@@ -467,6 +487,8 @@ pub struct ScriptComputePipeline {
 #[derive(rune::Any)]
 #[rune(item = ::rx)]
 pub struct ScriptTextureView {
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
     source: TextureViewSource,
     scope: Option<FrameScope>,
 }
@@ -661,8 +683,19 @@ struct SpriteOptions {
 
 impl SpriteOptions {
     fn parse(options: &rune::runtime::Object, width: u32, height: u32) -> Result<Self, String> {
+        Self::parse_with_fields(options, width, height, &[])
+    }
+
+    fn parse_with_fields(
+        options: &rune::runtime::Object,
+        width: u32,
+        height: u32,
+        extra: &[&str],
+    ) -> Result<Self, String> {
         for key in options.keys() {
-            if !matches!(key.as_str(), "src" | "dst" | "color" | "opacity") {
+            if !matches!(key.as_str(), "src" | "dst" | "color" | "opacity")
+                && !extra.contains(&key.as_str())
+            {
                 return Err(format!("unknown option `{}`", key));
             }
         }
@@ -717,6 +750,7 @@ type ComputePassList = std::sync::Arc<std::sync::Mutex<Vec<SharedComputePass>>>;
 pub struct ViewTarget {
     pub layer: wgpu::TextureView,
     pub staging: wgpu::TextureView,
+    pub staging_size: [u32; 2],
     pub width: u32,
     pub height: u32,
 }
@@ -729,6 +763,7 @@ pub type ViewTargets = std::collections::HashMap<u16, ViewTarget>;
 /// encoder is built (wgpu resources are Arc-backed).
 #[derive(Clone)]
 struct EncoderGfx {
+    sprites: Arc<sprite::Blitter>,
     device: std::sync::Arc<wgpu::Device>,
     texture_bgl: std::sync::Arc<wgpu::BindGroupLayout>,
     sampler: std::sync::Arc<wgpu::Sampler>,
@@ -766,7 +801,7 @@ impl ScriptEncoder {
     fn begin(
         &self,
         label: &str,
-        target: &wgpu::TextureView,
+        target: &ScriptTextureView,
         load: &str,
     ) -> Result<ScriptPass, String> {
         let load = match load {
@@ -780,7 +815,7 @@ impl ScriptEncoder {
     fn begin_with_load(
         &self,
         label: &str,
-        target: &wgpu::TextureView,
+        target: &ScriptTextureView,
         load: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<ScriptPass, String> {
         self.end_open_passes();
@@ -792,7 +827,7 @@ impl ScriptEncoder {
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view: target.get()?,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load,
@@ -809,7 +844,12 @@ impl ScriptEncoder {
             .lock()
             .expect("pass list lock")
             .push(shared.clone());
-        Ok(ScriptPass { pass: shared })
+        Ok(ScriptPass {
+            pass: shared,
+            size: target.size,
+            format: target.format,
+            sprites: self.gfx.as_ref().map(|g| g.sprites.clone()),
+        })
     }
 
     /// Begin a render pass on any texture view. The descriptor specifies
@@ -821,7 +861,7 @@ impl ScriptEncoder {
         options: &rune::runtime::Object,
     ) -> Result<ScriptPass, String> {
         let options = PassOptions::parse(options)?;
-        self.begin_with_load(&options.label, target.get()?, options.load)
+        self.begin_with_load(&options.label, target, options.load)
     }
 
     fn editor_texture_view(
@@ -837,7 +877,14 @@ impl ScriptEncoder {
             return Err(format!("no such view: {}", view_id));
         }
         let gfx = self.gfx.as_ref().ok_or("the GPU is not available")?;
+        let target = &self.view_targets[&id];
         let view = ScriptTextureView {
+            size: if staging {
+                target.staging_size
+            } else {
+                [target.width, target.height]
+            },
+            format: SCRIPT_TEXTURE_FORMAT,
             source: TextureViewSource::Editor {
                 targets: self.view_targets.clone(),
                 id,
@@ -868,11 +915,7 @@ impl ScriptEncoder {
     /// Paint the live artwork; touch_view still controls undo recording.
     #[rune::function]
     fn begin_view_pass(&self, label: &str, view_id: i64, load: &str) -> Result<ScriptPass, String> {
-        self.begin(
-            label,
-            self.editor_texture_view(view_id, false)?.get()?,
-            load,
-        )
+        self.begin(label, &self.editor_texture_view(view_id, false)?, load)
     }
 
     /// Paint the per-frame preview overlay.
@@ -883,7 +926,7 @@ impl ScriptEncoder {
         view_id: i64,
         load: &str,
     ) -> Result<ScriptPass, String> {
-        self.begin(label, self.editor_texture_view(view_id, true)?.get()?, load)
+        self.begin(label, &self.editor_texture_view(view_id, true)?, load)
     }
 
     /// Convenience binding for live artwork, with the same lifetime as view_layer.
@@ -967,10 +1010,32 @@ impl ScriptComputePass {
 #[derive(rune::Any)]
 #[rune(item = ::rx)]
 pub struct ScriptPass {
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
+    sprites: Option<Arc<sprite::Blitter>>,
     pass: SharedPass,
 }
 
 impl ScriptPass {
+    /// Draw a texture or texture view in target-pixel coordinates.
+    /// See docs/gpu-api.md for cropping, transforms, tint and blending.
+    #[rune::function]
+    fn draw_sprite(&self, source: Value, options: &rune::runtime::Object) -> Result<(), String> {
+        self.with(|_| ())?;
+        let sprites = self
+            .sprites
+            .as_ref()
+            .ok_or("the GPU is not available in this context")?;
+        if let Ok(texture) = source.borrow_ref::<ScriptTexture>() {
+            sprites.draw(self, &texture.sampled_view(), options)
+        } else {
+            let view = source
+                .borrow_ref::<ScriptTextureView>()
+                .map_err(|_| "source must be a Texture or TextureView")?;
+            sprites.draw(self, &view, options)
+        }
+    }
+
     fn with<T>(&self, f: impl FnOnce(&mut wgpu::RenderPass<'static>) -> T) -> Result<T, String> {
         match self.pass.lock().expect("pass lock").as_mut() {
             Some(pass) => Ok(f(pass)),
@@ -1611,6 +1676,7 @@ impl Ctx {
                 frame_height: v.fh as i64,
                 nlayers: v.nlayers as i64,
                 active_layer: v.active_layer as i64,
+                animation_preview_visible: v.animation_preview_visible,
             })
             .collect()
     }
@@ -1704,6 +1770,16 @@ impl Ctx {
             Some(v) => v.layer_attrs.iter().map(|a| a.visible).collect(),
             None => Vec::new(),
         }
+    }
+
+    /// Per-layer opacity, in the same bottom-to-top order as layer_visibility.
+    #[rune::function]
+    fn layer_opacity(&self, id: i64) -> Vec<f64> {
+        self.session()
+            .views
+            .get(crate::view::ViewId::from(id as u16))
+            .map(|v| v.layer_attrs.iter().map(|a| a.opacity as f64).collect())
+            .unwrap_or_default()
     }
 
     /// A setting's value: bool, integer, float, string or a tuple,
@@ -2705,6 +2781,9 @@ pub struct ViewInfo {
     /// Index of the active layer (`0` is the bottom compositing layer).
     #[rune(get)]
     pub active_layer: i64,
+    /// Whether the builtin animation preview is enabled for this view.
+    #[rune(get)]
+    pub animation_preview_visible: bool,
 }
 
 /// The native `rx` module installed into every plugin's context.
@@ -2736,6 +2815,7 @@ fn module() -> Result<rune::Module, rune::ContextError> {
     m.function_meta(Ctx::clear_animation_sequence)?;
     m.function_meta(Ctx::set_animation_preview_visible)?;
     m.function_meta(Ctx::layer_visibility)?;
+    m.function_meta(Ctx::layer_opacity)?;
     m.function_meta(Ctx::setting)?;
     m.function_meta(Ctx::set_setting)?;
     m.function_meta(Ctx::declare_setting)?;
@@ -2805,6 +2885,7 @@ fn module() -> Result<rune::Module, rune::ContextError> {
     m.function_meta(ScriptEncoder::view_bind_group)?;
     m.function_meta(ScriptEncoder::begin_compute_pass)?;
     m.ty::<ScriptPass>()?;
+    m.function_meta(ScriptPass::draw_sprite)?;
     m.function_meta(ScriptPass::set_pipeline)?;
     m.function_meta(ScriptPass::set_bind_group)?;
     m.function_meta(ScriptPass::set_vertex_buffer)?;
@@ -3208,6 +3289,51 @@ impl PluginHost {
         ));
     }
 
+    /// Front-to-back overlay mouse interception. Returning true consumes this
+    /// event before ordinary plugin mouse hooks and builtin painting/panning.
+    pub fn dispatch_capture_mouse(
+        &mut self,
+        session: &mut Session,
+        button: &str,
+        input: &str,
+    ) -> bool {
+        for i in (0..self.plugins.len()).rev() {
+            let plugin = &self.plugins[i];
+            if !plugin.enabled || !plugin.script.has_fn("capture_mouse") {
+                continue;
+            }
+            let state = plugin.state.clone();
+            let name = plugin.name.clone();
+            let root = plugin.root.clone();
+            let mut ctx = Ctx::new(session)
+                .with_commands(&mut self.commands, &name)
+                .with_gfx(self.gfx.as_ref())
+                .with_root(Some(root));
+            let result = self.plugins[i].script.call(
+                "capture_mouse",
+                (state, &mut ctx, button.to_string(), input.to_string()),
+            );
+            drop(ctx);
+            let result = result.map_err(|e| first_line(&e)).and_then(|v| {
+                rune::from_value::<bool>(v)
+                    .map_err(|_| "capture_mouse must return a bool".to_string())
+            });
+            match result {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(e) => {
+                    self.plugins[i].enabled = false;
+                    log::error!("plugin `{}` capture_mouse: {}", name, e);
+                    session.message(
+                        format!("Plugin `{}` disabled: {}", name, e),
+                        crate::session::MessageType::Error,
+                    );
+                }
+            }
+        }
+        false
+    }
+
     /// Mouse button input. Runs before builtin event handling.
     pub fn dispatch_mouse_input(&mut self, session: &mut Session, button: &str, input: &str) {
         let Self {
@@ -3349,6 +3475,7 @@ impl PluginHost {
             gfx.frame.fetch_add(1, Ordering::Relaxed);
         }
         let encoder_gfx = gfx.as_ref().map(|g| EncoderGfx {
+            sprites: g.sprites.clone(),
             device: g.device.clone(),
             texture_bgl: g.texture_bgl.clone(),
             sampler: g.sampler.clone(),
@@ -3485,77 +3612,80 @@ impl PluginHost {
                 .forget_lifetime()
         };
 
-        for i in 0..plugins.len() {
-            {
-                let plugin = &plugins[i];
-                if !plugin.enabled || !plugin.script.has_fn("render") {
-                    continue;
+        for hook in ["render", "overlay"] {
+            for i in 0..plugins.len() {
+                {
+                    let plugin = &plugins[i];
+                    if !plugin.enabled || !plugin.script.has_fn(hook) {
+                        continue;
+                    }
                 }
-            }
-            let state = plugins[i].state.clone();
-            let name = plugins[i].name.clone();
+                let state = plugins[i].state.clone();
+                let name = plugins[i].name.clone();
 
-            if let Some(g) = gfx.as_ref() {
-                g.device.push_error_scope(wgpu::ErrorFilter::Validation);
-            }
-            let live = match pass.take() {
-                Some(p) => p,
-                None => {
-                    begin_screen_pass(encoder.as_mut().expect("the host holds the encoder"))
-                }
-            };
-            let shared: SharedPass = std::sync::Arc::new(std::sync::Mutex::new(Some(live)));
-            let script_pass = ScriptPass {
-                pass: shared.clone(),
-            };
-            let mut ctx = Ctx::new(session)
-                .with_commands(&mut *commands, &name)
-                .with_gfx(gfx.as_ref())
-                .with_root(Some(plugins[i].root.clone()));
-            let result = plugins[i]
-                .script
-                .call("render", (state, &mut ctx, script_pass));
-            drop(ctx);
-
-            // End the pass while this hook's error scope is still
-            // pushed: recording errors validate at pass end, and they
-            // must land on the plugin that recorded them. The Arc is
-            // dead from here on — a kept handle errors cleanly.
-            shared.lock().expect("pass lock").take();
-            let gpu_error = gfx.as_ref().and_then(|g| g.pop_error());
-
-            if gpu_error.is_some() {
-                // The encoder is poisoned: swap in a fresh one. The
-                // next hook (or no one) begins a fresh screen pass.
                 if let Some(g) = gfx.as_ref() {
-                    encoder = Some(g.device.create_command_encoder(
-                        &wgpu::CommandEncoderDescriptor {
-                            label: Some("render_encoder"),
-                        },
-                    ));
+                    g.device.push_error_scope(wgpu::ErrorFilter::Validation);
                 }
-            }
+                let live = match pass.take() {
+                    Some(p) => p,
+                    None => begin_screen_pass(encoder.as_mut().expect("the host holds the encoder")),
+                };
+                let shared: SharedPass = std::sync::Arc::new(std::sync::Mutex::new(Some(live)));
+                let script_pass = ScriptPass {
+                    size: [session.width as u32, session.height as u32],
+                    format: SCRIPT_TEXTURE_FORMAT,
+                    sprites: gfx.as_ref().map(|g| g.sprites.clone()),
+                    pass: shared.clone(),
+                };
+                let mut ctx = Ctx::new(session)
+                    .with_commands(&mut *commands, &name)
+                    .with_gfx(gfx.as_ref())
+                    .with_root(Some(plugins[i].root.clone()));
+                let result = plugins[i].script.call(hook, (state, &mut ctx, script_pass));
+                drop(ctx);
 
-            let error = match (result, gpu_error) {
-                (Err(e), _) => Some(first_line(&e)),
-                (Ok(_), Some(e)) => Some(flatten_error(&e.to_string())),
-                (Ok(_), None) => None,
-            };
-            if let Some(e) = error {
-                let plugin = &mut plugins[i];
-                plugin.enabled = false;
-                log::error!("plugin `{}` render: {}", plugin.name, e);
-                let name = plugin.name.clone();
-                session.message(
-                    format!("Plugin `{}` disabled: {}", name, e),
-                    crate::session::MessageType::Error,
-                );
+                // End the pass while this hook's error scope is still
+                // pushed: recording errors validate at pass end, and they
+                // must land on the plugin that recorded them. The Arc is
+                // dead from here on — a kept handle errors cleanly.
+                shared.lock().expect("pass lock").take();
+                let gpu_error = gfx.as_ref().and_then(|g| g.pop_error());
+
+                if gpu_error.is_some() {
+                    // The encoder is poisoned: swap in a fresh one. The
+                    // next hook (or no one) begins a fresh screen pass.
+                    if let Some(g) = gfx.as_ref() {
+                        encoder = Some(g.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor {
+                                label: Some("render_encoder"),
+                            },
+                        ));
+                    }
+                }
+
+                let error = match (result, gpu_error) {
+                    (Err(e), _) => Some(first_line(&e)),
+                    (Ok(_), Some(e)) => Some(flatten_error(&e.to_string())),
+                    (Ok(_), None) => None,
+                };
+                if let Some(e) = error {
+                    let plugin = &mut plugins[i];
+                    plugin.enabled = false;
+                    log::error!("plugin `{}` {}: {}", plugin.name, hook, e);
+                    let name = plugin.name.clone();
+                    session.message(
+                        format!("Plugin `{}` disabled: {}", name, e),
+                        crate::session::MessageType::Error,
+                    );
+                }
             }
         }
 
         // End the host's pass if no hook consumed it.
         pass.take();
-        encoder.take().expect("the host always gets the frame encoder back")
+        encoder
+            .take()
+            .expect("the host always gets the frame encoder back")
     }
 
     /// Whether a registered script command repeats on key-hold.
@@ -5441,6 +5571,7 @@ mod test {
                     staging: srgb(&staging),
                     width: 4,
                     height: 1,
+                    staging_size: [4, 1],
                 },
             );
             let encoder = host.dispatch_shade(
@@ -5903,6 +6034,7 @@ mod test {
                 staging: srgb_view(&staging),
                 width: 4,
                 height: 4,
+                staging_size: [4, 4],
             },
         );
         let encoder = gfx.device.create_command_encoder(&Default::default());
@@ -5931,6 +6063,7 @@ mod test {
                 staging: srgb_view(&staging2),
                 width: 8,
                 height: 8,
+                staging_size: [8, 8],
             },
         );
         let encoder = gfx.device.create_command_encoder(&Default::default());
@@ -6182,6 +6315,239 @@ mod test {
             // 64+16, 0+8, 32+250 clamped, ff+ff clamped.
             assert_eq!(px, &[80, 8, 0xff, 0xff]);
         }
+    }
+
+    #[test]
+    fn miniview_picks_drags_and_renders_above_other_plugins() {
+        use crate::event::Event;
+        use crate::execution::Execution;
+        use crate::platform::{InputState, LogicalPosition, MouseButton};
+        let Some(gfx) = test_gfx() else { eprintln!("skipping: no GPU adapter"); return; };
+        let dir = tempfile::tempdir().unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/miniview");
+        for file in ["miniview.rune", "glyphs.png"] {
+            std::fs::copy(source.join(file), dir.path().join(file)).unwrap();
+        }
+        // This renders later in the ordinary stage. The panel still wins.
+        write_plugin(dir.path(), "z-background", r#"
+            pub fn init(rx) { let tex = rx.create_texture(1, 1).unwrap(); tex.fill(rx::rgb(255, 0, 255)); #{ tex } }
+            pub fn render(state, rx, pass) { pass.draw_sprite(state.tex, #{ dst: rx::rect(0.0, 0.0, 640.0, 480.0) }).unwrap(); }
+        "#);
+        let mut session = test_session().with_blank(crate::view::FileStatus::NoFile, 4, 4);
+        session.command(crate::cmd::Command::FrameAdd);
+        session.offset = crate::gfx::math::Vector2::new(0.0, 0.0);
+        session.active_view_mut().offset = crate::gfx::math::Vector2::new(100.0, 100.0);
+        session.active_view_mut().zoom = 10.0;
+        let id = u16::from(session.views.active_id);
+        let mut host = PluginHost::new(Some(dir.path().to_path_buf())).unwrap();
+        host.attach_gfx(gfx.device.clone(), gfx.queue.clone());
+        host.load(&mut session);
+        assert_eq!(host.plugins().filter(|p| p.enabled).count(), 2, "{}", session.message);
+        let mut exec = Execution::normal().unwrap();
+        let move_to = |x, y| Event::CursorMoved(LogicalPosition::new(x, y));
+        let press = || Event::MouseInput(MouseButton::Left, InputState::Pressed);
+        let release = || Event::MouseInput(MouseButton::Left, InputState::Released);
+        host.dispatch_command(&mut session, "miniview", "");
+        assert_eq!(session.mode.to_string(), "miniview target", "{}", session.message);
+        for event in [move_to(110.0, 110.0), press(), release()] { session.handle_event(event, &mut exec, &mut host); }
+        assert_eq!(session.mode.to_string(), "normal", "{}", session.message);
+        assert_eq!(session.brush.state, crate::brush::BrushState::NotDrawing);
+        // Drag the panel over the canvas; captured press/release never paints.
+        for event in [move_to(354.0, 26.0), press(), move_to(120.0, 80.0), release()] {
+            session.handle_event(event, &mut exec, &mut host);
+        }
+        assert_eq!(session.brush.state, crate::brush::BrushState::NotDrawing);
+        let layer = ScriptTexture::create(&gfx, 8, 4);
+        let row = [[255, 0, 0, 255].repeat(4), [0, 255, 0, 255].repeat(4)].concat();
+        layer.write(&row.repeat(4));
+        let staging = ScriptTexture::create(&gfx, 8, 4);
+        let screen = ScriptTexture::create(&gfx, 640, 480);
+        let render = |host: &mut PluginHost, session: &mut Session| {
+            let srgb = |t: &ScriptTexture| t.wgpu_texture().create_view(&wgpu::TextureViewDescriptor { format: Some(SCRIPT_TEXTURE_FORMAT), ..Default::default() });
+            let mut targets = ViewTargets::new();
+            targets.insert(id, ViewTarget { layer: srgb(&layer), staging: srgb(&staging), width: 8, height: 4, staging_size: [8, 4] });
+            let encoder = gfx.device.create_command_encoder(&Default::default());
+            let mut encoder = host.dispatch_shade(session, encoder, targets);
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("miniview-test"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: screen.wgpu_view(), resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            }).forget_lifetime();
+            let encoder = host.dispatch_render(session, encoder, pass, screen.wgpu_view());
+            gfx.queue.submit([encoder.finish()]);
+            assert!(host.plugins().all(|p| p.enabled), "{}", session.message);
+            screen.pixels(&gfx.device)
+        };
+        let pixel = |pixels: &[u8], x: usize, y: usize| pixels[(y * 640 + x) * 4..(y * 640 + x + 1) * 4].to_vec();
+        session.active_view_mut().animation.index = 1;
+        let pixels = render(&mut host, &mut session);
+        assert_eq!(pixel(&pixels, 200, 150), [255, 0, 0, 255], "fixed frame stays pinned as animation advances");
+        assert_eq!(pixel(&pixels, 20, 20), [255, 0, 255, 255], "ordinary render stage ran");
+        // Pick the builtin preview through the panel's Target button.
+        for event in [move_to(310.0, 80.0), press(), release(), move_to(70.0, 115.0), press(), release()] {
+            session.handle_event(event, &mut exec, &mut host);
+        }
+        assert_eq!(session.mode.to_string(), "normal", "{}", session.message);
+        let pixels = render(&mut host, &mut session);
+        assert_eq!(pixel(&pixels, 200, 150), [0, 255, 0, 255], "preview follows animation");
+        session.active_view_mut().animation.index = 0;
+        let pixels = render(&mut host, &mut session);
+        assert_eq!(pixel(&pixels, 200, 150), [255, 0, 0, 255]);
+        layer.write(&[0, 0, 255, 255].repeat(32));
+        let pixels = render(&mut host, &mut session);
+        assert_eq!(pixel(&pixels, 200, 150), [0, 0, 255, 255], "live edits reach the panel");
+        host.dispatch_command(&mut session, "miniview", "");
+        assert!(host.dispatch_capture_mouse(&mut session, "right", "pressed"));
+        assert_eq!(session.mode.to_string(), "normal");
+        host.dispatch_command(&mut session, "miniview/off", "");
+        let pixels = render(&mut host, &mut session);
+        assert_eq!(pixel(&pixels, 200, 150), [255, 0, 255, 255]);
+    }
+
+    #[test]
+    fn builtin_sprite_crops_transforms_blends_and_validates_handles() {
+        let Some(gfx) = test_gfx() else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin(
+            dir.path(),
+            "p",
+            r#"
+            pub fn init(rx) {
+                let source = rx.create_texture(2, 1).unwrap();
+                source.upload(b"\xff\x00\x00\xff\xff\xff\xff\xff");
+                let clear = rx.create_texture(1, 1).unwrap();
+                let out = rx.create_texture(8, 2).unwrap();
+                let raw = rx.create_texture(8, 2).unwrap();
+                #{ source, clear, out, raw, saved: None }
+            }
+            pub fn shade(state, rx, encoder) {
+                let pass = encoder.begin_render_pass(state.out.view(), #{ load: "clear" }).unwrap();
+                let dst = rx::rect(0.0, 0.0, 2.0, 1.0);
+                if state.saved.is_some() {
+                    assert!(pass.draw_sprite(state.saved.unwrap(), #{ dst }).is_err());
+                    pass.end();
+                    return;
+                }
+                assert!(pass.draw_sprite(state.source, #{ dst, typo: true }).is_err());
+                assert!(pass.draw_sprite(state.source, #{ dst, opacity: 2.0 }).is_err());
+                assert!(pass.draw_sprite(state.source, #{ dst, blend: "bogus" }).is_err());
+                assert!(pass.draw_sprite(state.source, #{ dst, transform: 0 }).is_err());
+                assert!(pass.draw_sprite(42, #{ dst }).is_err());
+                // Crop white, scale it two pixels, translate into the second row,
+                // tint green and halve alpha. Reuse the descriptor and source.
+                let options = #{ src: rx::rect(1.0, 0.0, 2.0, 1.0), dst,
+                    transform: rx::mat4_translation(2.0, 1.0),
+                    color: rx::rgb(0, 255, 0), opacity: 0.5, blend: "replace" };
+                pass.draw_sprite(state.source, options).unwrap();
+                pass.draw_sprite(state.source.view(), options).unwrap();
+                pass.draw_sprite(state.source, #{ dst }).unwrap();
+                pass.draw_sprite(state.clear, #{ dst: rx::rect(0.0, 0.0, 1.0, 1.0) }).unwrap();
+                pass.draw_sprite(state.clear, #{ dst: rx::rect(1.0, 0.0, 2.0, 1.0), blend: "replace" }).unwrap();
+                let editor = encoder.view_layer(rx.active_view_id()).unwrap();
+                pass.draw_sprite(editor, #{ dst: rx::rect(6.0, 0.0, 8.0, 1.0) }).unwrap();
+                pass.end();
+                assert!(pass.draw_sprite(state.source, #{ dst }).is_err());
+                state.saved = Some(editor);
+                let pass = encoder.begin_render_pass(state.raw.raw_view(), #{ load: "clear" }).unwrap();
+                pass.draw_sprite(state.out.raw_view(), #{ dst: rx::rect(0.0, 0.0, 8.0, 2.0), blend: "replace" }).unwrap();
+                pass.end();
+                let pass = encoder.begin_staging_pass("small-staging", rx.active_view_id(), "clear").unwrap();
+                pass.draw_sprite(state.source, #{ dst }).unwrap();
+            }
+            pub fn render(state, rx, pass) {
+                pass.draw_sprite(state.raw, #{ dst: rx::rect(0.0, 0.0, 8.0, 2.0), blend: "replace" }).unwrap();
+            }
+            pub fn out(state) { state.out }
+            pub fn raw(state) { state.raw }
+        "#,
+        );
+        let mut session = test_session().with_blank(crate::view::FileStatus::NoFile, 2, 1);
+        let mut host = PluginHost::new(Some(dir.path().to_path_buf())).unwrap();
+        host.attach_gfx(gfx.device.clone(), gfx.queue.clone());
+        host.load(&mut session);
+        assert!(host.plugins().all(|p| p.enabled), "{}", session.message);
+        let layer = ScriptTexture::create(&gfx, 2, 2);
+        layer.write(&[0, 0, 255, 255].repeat(4));
+        let staging = ScriptTexture::create(&gfx, 2, 1);
+        let targets = || {
+            let mut targets = ViewTargets::new();
+            let view = |t: &ScriptTexture| {
+                t.wgpu_texture().create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(SCRIPT_TEXTURE_FORMAT),
+                    ..Default::default()
+                })
+            };
+            targets.insert(
+                u16::from(session.views.active_id),
+                ViewTarget {
+                    layer: view(&layer),
+                    staging: view(&staging),
+                    width: 2,
+                    height: 2,
+                    staging_size: [2, 1],
+                },
+            );
+            targets
+        };
+        let first_targets = targets();
+        let second_targets = targets();
+        let encoder = gfx.device.create_command_encoder(&Default::default());
+        let encoder = host.dispatch_shade(&mut session, encoder, first_targets);
+        gfx.queue.submit([encoder.finish()]);
+        assert!(host.plugins().all(|p| p.enabled), "{}", session.message);
+        let mut expected = vec![0u8; 8 * 2 * 4];
+        expected[0..4].copy_from_slice(&[255, 0, 0, 255]);
+        expected[24..32].copy_from_slice(&[0, 0, 255, 255].repeat(2));
+        expected[40..48].copy_from_slice(&[0, 255, 0, 128].repeat(2));
+        let plugin = host.plugins().next().unwrap();
+        for name in ["out", "raw"] {
+            let value = plugin.script.call(name, (plugin.state.clone(),)).unwrap();
+            assert_eq!(
+                value
+                    .borrow_ref::<ScriptTexture>()
+                    .unwrap()
+                    .pixels(&gfx.device),
+                expected,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            staging.pixels(&gfx.device),
+            [255, 0, 0, 255, 255, 255, 255, 255]
+        );
+        session.width = 8.0;
+        session.height = 2.0;
+        let screen = ScriptTexture::create(&gfx, 8, 2);
+        let mut encoder = gfx.device.create_command_encoder(&Default::default());
+        let pass = encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sprite-screen-test"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: screen.wgpu_view(),
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            })
+            .forget_lifetime();
+        let encoder = host.dispatch_render(&mut session, encoder, pass, screen.wgpu_view());
+        gfx.queue.submit([encoder.finish()]);
+        assert!(host.plugins().all(|p| p.enabled), "{}", session.message);
+        assert_eq!(screen.pixels(&gfx.device), expected);
+
+        let encoder = gfx.device.create_command_encoder(&Default::default());
+        let encoder = host.dispatch_shade(&mut session, encoder, second_targets);
+        gfx.queue.submit([encoder.finish()]);
+        assert!(host.plugins().all(|p| p.enabled), "{}", session.message);
     }
 
     #[test]
@@ -6493,6 +6859,7 @@ mod test {
                 staging: srgb_view(&staging),
                 width: 128,
                 height: 128,
+                staging_size: [128, 128],
             },
         );
 
@@ -6580,6 +6947,7 @@ mod test {
                 staging: srgb_view(&staging),
                 width: 128,
                 height: 128,
+                staging_size: [128, 128],
             },
         );
 
@@ -6954,6 +7322,7 @@ mod test {
                         }),
                     width: 64,
                     height: 64,
+                    staging_size: [64, 64],
                 },
             );
             let encoder = gfx.device.create_command_encoder(&Default::default());
@@ -7132,6 +7501,7 @@ mod test {
                     staging: srgb(&staging),
                     width: 128,
                     height: 128,
+                    staging_size: [128, 128],
                 },
             );
             let encoder = host.dispatch_shade(session, encoder, targets);

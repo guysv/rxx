@@ -1,0 +1,27 @@
+// Two small transparent sprites with distinct colors, drawn once as artwork.
+pub fn init(rx) {
+    let bytes = Bytes::new();
+    for y in 0..16 {
+        for x in 0..32 {
+            let px = x % 16;
+            if px >= 3 && px < 13 && y >= 3 && y < 13 {
+                if y == 6 && (px == 5 || px == 10) { bytes.extend(b"\x15\x20\x30\xff"); }
+                else if y == 10 && px >= 6 && px <= 9 { bytes.extend(b"\xff\xee\xcc\xff"); }
+                else if x < 16 { bytes.extend(b"\xee\x88\x44\xff"); }
+                else { bytes.extend(b"\x44\xbb\xdd\xff"); }
+            } else { bytes.extend(b"\x00\x00\x00\x00"); }
+        }
+    }
+    let texture = rx.create_texture(32, 16).unwrap();
+    texture.upload(bytes);
+    #{ texture, done: false }
+}
+pub fn shade(state, rx, encoder) {
+    if state.done { return; }
+    let id = rx.active_view_id();
+    rx.touch_view(id);
+    let pass = encoder.begin_view_pass("fixture", id, "clear").unwrap();
+    pass.draw_sprite(state.texture, #{ dst: rx::rect(0.0, 0.0, 32.0, 16.0), blend: "replace" }).unwrap();
+    pass.end();
+    state.done = true;
+}

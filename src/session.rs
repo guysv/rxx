@@ -1965,8 +1965,10 @@ impl Session {
                         InputState::Released => "released",
                         InputState::Repeated => "repeated",
                     };
-                    plugins.dispatch_mouse_input(self, button, input);
-                    self.handle_mouse_input(btn, st);
+                    if !plugins.dispatch_capture_mouse(self, button, input) {
+                        plugins.dispatch_mouse_input(self, button, input);
+                        self.handle_mouse_input(btn, st);
+                    }
                 }
             }
             Event::MouseWheel(delta) => {
@@ -3702,7 +3704,7 @@ mod test {
             .set_sequence(vec![2, 1, 0]);
         assert!(session.animation_delay().is_some());
         session.accumulator = time::Duration::from_millis(100);
-        animation_key(&mut session, platform::Key::M, InputState::Pressed, false);
+        animation_key(&mut session, platform::Key::Right, InputState::Pressed, true);
         assert!(session.settings["animation/manual"].is_set());
         assert!(session.settings["animation"].is_set());
         assert!(session.animation_delay().is_none());
@@ -3710,12 +3712,12 @@ mod test {
         assert_eq!(session.views.get(ids[0]).unwrap().animation.index, 1);
         assert_eq!(session.views.get(ids[1]).unwrap().animation.index, 2);
         assert_eq!(session.views.get(ids[2]).unwrap().animation.index, 0);
-        animation_key(&mut session, platform::Key::M, InputState::Repeated, false);
+        animation_key(&mut session, platform::Key::Right, InputState::Repeated, true);
         assert_eq!(session.views.get(ids[0]).unwrap().animation.index, 0);
-        animation_key(&mut session, platform::Key::M, InputState::Released, false);
-        animation_key(&mut session, platform::Key::N, InputState::Pressed, false);
+        animation_key(&mut session, platform::Key::Right, InputState::Released, true);
+        animation_key(&mut session, platform::Key::Left, InputState::Pressed, true);
         assert_eq!(session.views.get(ids[0]).unwrap().animation.index, 1);
-        animation_key(&mut session, platform::Key::N, InputState::Released, false);
+        animation_key(&mut session, platform::Key::Left, InputState::Released, true);
 
         let mut host = crate::script::PluginHost::new(None).unwrap();
         session.update(

@@ -20,8 +20,6 @@ const SCALE_MODE = "visual (scale)";
 const PIVOT_HALF = 6.0;
 
 pub fn init(rx) {
-    let nearest_shader = rx.create_shader(rx.read_file("nearest.wgsl").unwrap()).unwrap();
-    let nearest = rx.create_render_pipeline(nearest_shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
     let cleanedge_shader = rx.create_shader(rx.read_file("cleanedge.wgsl").unwrap()).unwrap();
     let cleanedge = rx.create_render_pipeline(cleanedge_shader, #{ vertex: "vs_main", fragment: "fs_main", textures: 1, blend: "alpha" }).unwrap();
     let mmpx_shader = rx.create_shader(rx.read_file("mmpx.wgsl").unwrap()).unwrap();
@@ -64,7 +62,6 @@ pub fn init(rx) {
     rx.bind(SCALE_MODE, "'r' :selection/rotate");
 
     #{
-        nearest,
         cleanedge,
         mmpx,
         rotsprite_epx,
@@ -440,8 +437,13 @@ fn rotsprite_x2(state, rx, encoder, source, target, dst_w, dst_h, algo) {
     } else {
         // Empty and `rotsprite` retain the historical internal EPX pass;
         // `nearest` provides an explicit plain x2 option.
-        let pipeline = if algo == "nearest" { state.nearest } else { state.rotsprite_epx };
-        sprite_pass(rx, encoder, pipeline, "rotsprite-x2", rx::mat4_identity(), target, source, dst, dst_w, dst_h, true);
+        if algo == "nearest" {
+            let pass = encoder.begin_render_pass(target.view(), #{ label: "rotsprite-x2", load: "clear" }).unwrap();
+            pass.draw_sprite(source, #{ dst }).unwrap();
+            pass.end();
+        } else {
+            sprite_pass(rx, encoder, state.rotsprite_epx, "rotsprite-x2", rx::mat4_identity(), target, source, dst, dst_w, dst_h, true);
+        }
     }
 }
 
@@ -578,18 +580,10 @@ pub fn shade(state, rx, encoder) {
         sprite_dst = rx::rect(0.0, 0.0, view.width as f64, view.height as f64);
     }
 
-    let tbg = rx.create_transform_bind_group(view.width, view.height, sprite_transform).unwrap();
-    let sbg = rx.create_texture_bind_group(source.view()).unwrap();
-    let verts = rx.create_sprite_vertices(source, #{ dst: sprite_dst, opacity }).unwrap();
-
     let pass = if to_view {
         encoder.begin_view_pass("rotate-scale", state.active_view_id, "load").unwrap()
     } else {
         encoder.begin_staging_pass("rotate-scale", state.active_view_id, "load").unwrap()
     };
-    pass.set_pipeline(state.nearest).unwrap();
-    pass.set_bind_group(0, tbg).unwrap();
-    pass.set_bind_group(1, sbg).unwrap();
-    pass.set_vertex_buffer(0, verts).unwrap();
-    pass.draw(verts.count(), 1).unwrap();
+    pass.draw_sprite(source, #{ dst: sprite_dst, transform: sprite_transform, opacity }).unwrap();
 }

@@ -1623,6 +1623,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                 crate::script::ViewTarget {
                     layer: tex.texture.create_view(&Default::default()),
                     staging: vd.staging_texture.texture.create_view(&Default::default()),
+                    staging_size: vd.staging_texture.size,
                     width: tex.size[0],
                     height: tex.size[1],
                 },
@@ -1798,39 +1799,8 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                         // Only render animations for views with more than one frame
                         if view.animation.len() > 1 && view_data.anim_vertex_count > 0 {
                             if let Some(ref anim_buffer) = view_data.anim_vertex_buffer {
-                                // Create animation transform with translation
-                                let anim_transform = Matrix4::from_translation(
-                                    Vector2::new(0., view.zoom).extend(0.),
-                                );
-                                let anim_uniforms = TransformUniforms {
-                                    ortho,
-                                    transform: anim_transform.into(),
-                                };
-
-                                let anim_uniform_buffer =
-                                    self.device.create_buffer(&wgpu::BufferDescriptor {
-                                        label: Some("anim_uniform_buffer"),
-                                        size: std::mem::size_of::<TransformUniforms>() as u64,
-                                        usage: wgpu::BufferUsages::UNIFORM
-                                            | wgpu::BufferUsages::COPY_DST,
-                                        mapped_at_creation: true,
-                                    });
-                                anim_uniform_buffer
-                                    .slice(..)
-                                    .get_mapped_range_mut()
-                                    .copy_from_slice(bytemuck::bytes_of(&anim_uniforms));
-                                anim_uniform_buffer.unmap();
-
-                                let anim_bind_group =
-                                    self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                        label: Some("anim_transform_bind_group"),
-                                        layout: &self.transform_bind_group_layout,
-                                        entries: &[wgpu::BindGroupEntry {
-                                            binding: 0,
-                                            resource: anim_uniform_buffer.as_entire_binding(),
-                                        }],
-                                    });
-
+                                // Animation vertices already include zoom and workspace offsets.
+                                // Use the screen transform without an extra one-pixel translation.
                                 // Bind layer texture for animation
                                 let layer_bind_group =
                                     self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1853,7 +1823,7 @@ impl<'a> renderer::Renderer<'a> for Renderer {
                                     });
 
                                 pass.set_pipeline(&self.sprite_pipeline);
-                                pass.set_bind_group(0, &anim_bind_group, &[]);
+                                pass.set_bind_group(0, &transform_bind_group, &[]);
                                 pass.set_bind_group(1, &layer_bind_group, &[]);
                                 pass.set_vertex_buffer(0, anim_buffer.slice(..));
                                 pass.draw(0..view_data.anim_vertex_count, 0..1);
@@ -2786,6 +2756,84 @@ mod coordinate_tests {
             .current_snapshot()
             .1
             .to_vec()
+    }
+
+    #[test]
+    fn animation_preview_aligns_with_sheet_at_every_zoom() {
+        let (mut window, _) = platform::init(
+            "preview alignment",
+            128,
+            128,
+            &[],
+            platform::GraphicsContext::None,
+        )
+        .unwrap();
+        let mut renderer = Renderer::new(
+            &mut window,
+            LogicalSize::new(128., 128.),
+            1.,
+            Assets::new(crate::data::GLYPHS),
+        )
+        .unwrap();
+        let dirs = directories::ProjectDirs::from("io", "cloudhead", "rx").unwrap();
+        let base = directories::BaseDirs::new().unwrap();
+        let mut session = Session::new(128, 128, std::env::temp_dir(), dirs, base).with_blank(
+            FileStatus::NoFile,
+            4,
+            4,
+        );
+        session.transition(session::State::Running);
+        session.command(crate::cmd::Command::FrameAdd);
+        for (name, enabled) in [
+            ("animation", true),
+            ("animation/manual", true),
+            ("ui/palette", false),
+            ("ui/status", false),
+            ("ui/view-info", false),
+            ("ui/switcher", false),
+            ("ui/cursor", false),
+        ] {
+            session.command(crate::cmd::Command::Set(
+                name.into(),
+                crate::cmd::Value::Bool(enabled),
+            ));
+        }
+        let mut plugins = crate::script::PluginHost::new(None).unwrap();
+        let (device, queue) = renderer.gpu_handles();
+        plugins.attach_gfx(device, queue);
+        frame(&mut renderer, &mut session, &mut plugins);
+        let red = Rgba8::new(255, 0, 0, 255);
+        let blue = Rgba8::new(0, 0, 255, 255);
+        {
+            let view = session.active_view_mut();
+            view.paint_color(red, 1, 0);
+            view.paint_color(blue, 1, 3);
+            view.animation.index = 0;
+            view.touch();
+        }
+        for zoom in [1, 2, 4, 8] {
+            session.offset = Vector2::new(3., 5.);
+            let view = session.active_view_mut();
+            view.offset = Vector2::new(61., 43.);
+            view.zoom = zoom as f32;
+            frame(&mut renderer, &mut session, &mut plugins);
+            let pixels = renderer.read_screen_pixels(128, 128);
+            let sheet_x = 64 + zoom;
+            let preview_x = sheet_x - 4 * zoom;
+            for (y, color) in [(48, red), (48 + 3 * zoom, blue)] {
+                assert_eq!(pixels[y * 128 + sheet_x], color, "sheet at zoom {zoom}");
+                assert_eq!(
+                    pixels[y * 128 + preview_x],
+                    color,
+                    "preview and sheet must align at zoom {zoom}, row {y}"
+                );
+            }
+            assert_ne!(
+                pixels[(48 + 4 * zoom) * 128 + preview_x],
+                blue,
+                "preview must not extend below the sheet at zoom {zoom}"
+            );
+        }
     }
 
     #[test]

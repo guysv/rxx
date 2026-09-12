@@ -1,0 +1,13 @@
+set ui/palette = off
+set ui/status = off
+set ui/switcher = off
+set animation = off
+set animation/manual = on
+map m :miniview
+map h :miniview/off
+map s :miniview/show
+f/resize 16 16
+v/fill #dc6848
+f/clone 0
+zoom 8
+v/center

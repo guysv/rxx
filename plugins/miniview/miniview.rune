@@ -1,0 +1,276 @@
+// A floating preview panel. All drawing uses the host sprite API.
+const PICK = "miniview target";
+const HEADER = 20.0;
+const PAD = 4.0;
+
+pub fn init(rx) {
+    let white = rx.create_texture(1, 1).unwrap();
+    white.fill(rx::rgb(255, 255, 255));
+    let (w, h, bytes) = rx.read_png("glyphs.png").unwrap();
+    // The editor font uses alpha as its glyph mask; normalize RGB for
+    // draw_sprite's multiplicative tint instead of the core replacement tint.
+    let i = 0;
+    while i < bytes.len() {
+        bytes[i] = 255;
+        bytes[i + 1] = 255;
+        bytes[i + 2] = 255;
+        i += 4;
+    }
+    let font = rx.create_texture(w, h).unwrap();
+    font.upload(bytes);
+    rx.register_command("miniview", [], "Show miniview and choose its target", choose_target);
+    rx.register_command("miniview/select", [], "Click a frame or preview to attach miniview", choose_target);
+    rx.register_command("miniview/show", [], "Show miniview with its existing target", show);
+    rx.register_command("miniview/off", [], "Hide miniview", hide);
+    rx.bind(PICK, "':' :mode command");
+    rx.declare_setting("miniview/width", 280);
+    rx.declare_setting("miniview/height", 240);
+    #{ white, font, shown: false, placed: false, x: 0.0, y: 0.0,
+       w: 280.0, h: 240.0, mx: 0.0, my: 0.0, dragging: false,
+       resizing: false, held: false, dx: 0.0, dy: 0.0,
+       return_mode: "normal", target: (), has_target: false,
+       source: (), has_source: false, label: "miniview" }
+}
+
+fn clamp(n, lo, hi) { if n < lo { lo } else if n > hi { hi } else { n } }
+fn inside(x, y, rx, ry, w, h) { x >= rx && y >= ry && x < rx + w && y < ry + h }
+fn panel(state) { inside(state.mx, state.my, state.x, state.y, state.w, state.h) }
+fn view(rx, id) {
+    for v in rx.views() { if v.id == id { return Some(v); } }
+    None
+}
+fn layout(state, rx) {
+    let (sw, sh) = rx.screen_size();
+    let sw = sw as f64;
+    let sh = sh as f64;
+    state.w = clamp(rx.setting("miniview/width") as f64, 220.0, sw.max(220.0));
+    state.h = clamp(rx.setting("miniview/height") as f64, 140.0, sh.max(140.0));
+    if !state.placed {
+        state.x = (sw - state.w - 16.0).max(0.0);
+        state.y = 16.0;
+        state.placed = true;
+    }
+    state.x = clamp(state.x, 0.0, (sw - state.w).max(0.0));
+    state.y = clamp(state.y, 0.0, (sh - state.h).max(0.0));
+
+}
+fn restore(state, rx) {
+    if rx.mode() == PICK { rx.switch_mode(state.return_mode.clone()); }
+}
+pub fn show(state, rx, args) { state.shown = true; layout(state, rx); }
+pub fn choose_target(state, rx, args) {
+    state.shown = true;
+    layout(state, rx);
+    if rx.mode() != PICK {
+        let mode = rx.mode();
+        let previous = if mode == "command" {
+            if let Some(previous) = rx.prev_mode() { previous } else { "normal" }
+        } else { mode };
+        if previous != PICK { state.return_mode = previous; }
+    }
+    rx.switch_mode(PICK);
+    rx.message("Miniview: click a frame or preview; Esc or right-click cancels");
+}
+pub fn hide(state, rx, args) {
+    restore(state, rx);
+    state.shown = false;
+    state.dragging = false;
+    state.resizing = false;
+}
+
+fn target_at(state, rx) {
+    if panel(state) { return None; }
+    let (ox, oy) = rx.offset();
+    let hits = [];
+    for v in rx.views() {
+        let fw = (v.frame_width as f64) * v.zoom;
+        let fh = (v.frame_height as f64) * v.zoom;
+        let x = ox + v.offset_x;
+        let y = oy + v.offset_y;
+        if inside(state.mx, state.my, x - 1.0, y - 1.0, (v.width as f64) * v.zoom + 2.0, fh + 2.0) {
+            let frame = clamp(((state.mx - x) / fw).floor(), 0.0, (v.frames - 1) as f64) as i64;
+            hits.push(#{ view: v.id, kind: "frame", frame, x: x + (frame as f64) * fw, y, w: fw, h: fh });
+        } else if rx.setting("animation") && v.frames > 1 && v.animation_preview_visible &&
+            inside(state.mx, state.my, x - fw, y, fw, fh) {
+            hits.push(#{ view: v.id, kind: "animation", frame: -1, x: x - fw, y, w: fw, h: fh });
+        }
+    }
+    for hit in hits { if hit.view == rx.active_view_id() { return Some(hit); } }
+    hits.pop()
+}
+
+pub fn cursor_moved(state, rx, x, y) {
+    let (x, y) = rx.session_coords(x, y);
+    state.mx = x;
+    state.my = y;
+    if state.dragging { state.x = (x - state.dx).floor(); state.y = (y - state.dy).floor(); }
+    if state.resizing {
+        rx.set_setting("miniview/width", (x - state.x + state.dx).max(220.0) as i64);
+        rx.set_setting("miniview/height", (y - state.y + state.dy).max(140.0) as i64);
+    }
+    if state.shown { layout(state, rx); }
+}
+
+// Capture the entire gesture, including its release outside the panel. A
+// release from a gesture that began on the canvas must still reach the editor.
+pub fn capture_mouse(state, rx, button, input) {
+    if button == "left" && input == "released" && state.held {
+        state.held = false;
+        state.dragging = false;
+        state.resizing = false;
+        return true;
+    }
+    if !state.shown { return false; }
+    if rx.mode() == PICK && button == "right" {
+        if input == "pressed" { restore(state, rx); }
+        return true;
+    }
+    if input != "pressed" { return false; }
+    if panel(state) {
+        if button != "left" { return true; }
+        state.held = true;
+        if inside(state.mx, state.my, state.x + state.w - 26.0, state.y, 26.0, HEADER) {
+            hide(state, rx, []);
+        } else if inside(state.mx, state.my, state.x + state.w - 98.0, state.y + 3.0, 68.0, HEADER - 6.0) {
+            choose_target(state, rx, []);
+        } else if state.my < state.y + HEADER {
+            state.dragging = true;
+            state.dx = state.mx - state.x;
+            state.dy = state.my - state.y;
+        } else if state.mx >= state.x + state.w - 16.0 && state.my >= state.y + state.h - 16.0 {
+            state.resizing = true;
+            state.dx = state.x + state.w - state.mx;
+            state.dy = state.y + state.h - state.my;
+        }
+        return true;
+    }
+    if rx.mode() == PICK {
+        if button == "left" {
+            state.held = true;
+            if let Some(target) = target_at(state, rx) {
+                state.target = target;
+                state.has_target = true;
+                restore(state, rx);
+                rx.message("Miniview attached");
+            }
+        }
+        return true;
+    }
+    false
+}
+
+pub fn unload(state, rx) { restore(state, rx); }
+
+pub fn update(state, rx) { if state.shown { layout(state, rx); } }
+pub fn view_removed(state, rx, id) {
+    if state.has_target && state.target.view == id {
+        state.has_target = false;
+        state.has_source = false;
+        state.label = "Target closed";
+    }
+}
+
+// Editor texture handles live for one frame. Reacquire during shade, then
+// draw them in overlay after all normal workspace/plugin rendering.
+pub fn shade(state, rx, encoder) {
+    state.has_source = false;
+    if !state.shown || !state.has_target { return; }
+    let target = state.target;
+    if let Some(v) = view(rx, target.view) {
+        if target.kind == "frame" || target.kind == "animation" {
+            let frame = if target.kind == "frame" { target.frame.min(v.frames - 1) } else { v.animation_frame };
+            let texture = encoder.view_layer(v.id).unwrap();
+            let visible = rx.layer_visibility(v.id);
+            let opacity = rx.layer_opacity(v.id);
+            let sprites = [];
+            let fw = v.frame_width as f64;
+            let fh = v.frame_height as f64;
+            for n in 0..v.nlayers {
+                if visible[n] {
+                    sprites.push(#{ texture, src: rx::rect((frame as f64) * fw, (n as f64) * fh,
+                        ((frame + 1) as f64) * fw, ((n + 1) as f64) * fh), opacity: opacity[n] });
+                }
+            }
+            state.source = #{ width: fw, height: fh, sprites };
+            state.has_source = true;
+            state.label = if target.kind == "frame" { `mini / ${frame + 1}` } else { "mini / live" };
+        }
+    } else {
+        state.has_target = false;
+        state.label = "Target closed";
+    }
+}
+
+fn fill(state, pass, x, y, w, h, color) {
+    pass.draw_sprite(state.white, #{ dst: rx::rect(x, y, x + w, y + h), color }).unwrap();
+}
+fn border(state, pass, x, y, w, h, color) {
+    fill(state, pass, x, y, w, 1.0, color);
+    fill(state, pass, x, y + h - 1.0, w, 1.0, color);
+    fill(state, pass, x, y, 1.0, h, color);
+    fill(state, pass, x + w - 1.0, y, 1.0, h, color);
+}
+fn text(state, pass, label, x, y, color) {
+    let pos = x;
+    let bytes = label.as_bytes();
+    for n in 0..bytes.len() {
+        let i = (bytes[n] as i64) - 32;
+        if i >= 0 && i < 128 {
+            let sx = ((i % 16) * 8) as f64;
+            let sy = ((i / 16) * 14) as f64;
+            pass.draw_sprite(state.font, #{ src: rx::rect(sx, sy, sx + 8.0, sy + 14.0),
+                dst: rx::rect(pos, y, pos + 8.0, y + 14.0), color }).unwrap();
+        }
+        pos += 8.0;
+    }
+}
+
+pub fn overlay(state, rx, pass) {
+    if !state.shown { return; }
+    let accent = rx::rgb(255, 51, 102);
+    let fg = rx::rgb(255, 255, 255);
+    let muted = rx::rgb(136, 136, 136);
+    if rx.mode() == PICK {
+        if let Some(hit) = target_at(state, rx) {
+            border(state, pass, hit.x - 2.0, hit.y - 2.0, hit.w + 4.0, hit.h + 4.0, accent);
+        }
+        // Script modes have no builtin cursor; draw a target crosshair.
+        fill(state, pass, state.mx - 6.0, state.my, 13.0, 1.0, accent);
+        fill(state, pass, state.mx, state.my - 6.0, 1.0, 13.0, accent);
+    }
+    let x = state.x;
+    let y = state.y;
+    let w = state.w;
+    let h = state.h;
+    // Opaque black keeps the floating view legible over the workspace.
+    fill(state, pass, x, y, w, h, rx::rgb(0, 0, 0));
+    border(state, pass, x, y, w, h, if panel(state) { fg } else { muted });
+    text(state, pass, state.label.clone(), x + PAD, y + 3.0, muted);
+    let choosing = rx.mode() == PICK;
+    let target_hover = inside(state.mx, state.my, x + w - 98.0, y + 3.0, 68.0, HEADER - 6.0);
+    text(state, pass, "target", x + w - 88.0, y + 3.0,
+        if choosing { accent } else if target_hover { fg } else { muted });
+    text(state, pass, "x", x + w - 18.0, y + 3.0,
+        if inside(state.mx, state.my, x + w - 26.0, y, 26.0, HEADER) { fg } else { muted });
+    let cx = x + PAD;
+    let cy = y + HEADER;
+    let cw = w - PAD * 2.0;
+    let ch = h - HEADER - PAD;
+    if state.has_source {
+        let source = state.source;
+        let scale = (cw / source.width).min(ch / source.height);
+        let scale = if scale >= 1.0 { scale.floor() } else { scale };
+        let dw = source.width * scale;
+        let dh = source.height * scale;
+        let px = (cx + (cw - dw) * 0.5).floor();
+        let py = (cy + (ch - dh) * 0.5).floor();
+        for sprite in source.sprites {
+            pass.draw_sprite(sprite.texture, #{ src: sprite.src, dst: rx::rect(px, py, px + (sprite.src.x2 - sprite.src.x1) * scale, py + (sprite.src.y2 - sprite.src.y1) * scale), opacity: sprite.opacity }).unwrap();
+        }
+    } else {
+        text(state, pass, if state.has_target { "Target unavailable" } else { "Choose a target" }, cx + 16.0, cy + ch * 0.5 - 7.0, fg);
+    }
+    // A small wire corner marks the existing resize hit area.
+    fill(state, pass, x + w - 8.0, y + h - 4.0, 5.0, 1.0, muted);
+    fill(state, pass, x + w - 4.0, y + h - 8.0, 1.0, 5.0, muted);
+}
